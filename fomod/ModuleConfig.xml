@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
+
+    <moduleName>Wearable Devices</moduleName>
+
+    <installSteps order="Explicit">
+
+        <installStep name="Wearable Devices">
+            <optionalFileGroups order="Explicit">
+                <group name="About" type="SelectAll">
+                    <plugins order="Explicit">
+                        <plugin name="Wearable Devices">
+                            <description>
+WD Team
+- Sulik
+- Jeremussy
+- Wiarubane
+
+</description>
+                            <image path="fomod\images\wd_ahhh.png" />
+                            <files>
+                                <folder source="src\core\gamedata" destination="gamedata"
+                                    priority="0" />
+                            </files>
+                            <typeDescriptor>
+                                <type name="Required" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+        <installStep name="STOP">
+            <optionalFileGroups order="Explicit">
+                <group name="STOP AND READ" type="SelectAll">
+                    <plugins order="Explicit">
+                        <plugin name="README">
+                            <description>
+Please read through this FOMOD carefully, it takes 30 seconds and will help to make sure you have the best experience with this mod!
+</description>
+                            <image path="fomod\images\STOP.jpg" />
+                            <files />
+                            <typeDescriptor>
+                                <type name="Optional" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+        <installStep name="Information">
+            <optionalFileGroups order="Explicit">
+                <group name="Handbook" type="SelectAll">
+                    <plugins order="Explicit">
+                        <plugin name="Handbook">
+                            <description>
+You can find our handbook here:
+https://www.figma.com/deck/4DU6ARNuRGBRN4s1Zjt77S
+It contains details on installation, requirements and mod overview
+
+</description>
+                            <image path="fomod\images\06. SECTION B.3 - PROMIN UI.png" />
+                            <files />
+                            <typeDescriptor>
+                                <type name="Optional" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+                <group name="Thread" type="SelectAll">
+                    <plugins order="Explicit">
+                        <plugin name="Thread">
+                            <description>
+Make sure to read the mod thread in G.A.M.M.A Discord! The main post, pins and handbook should cover the majority of your questions!
+https://discord.gg/stalker-gamma
+</description>
+                            <image path="fomod\images\GAMMA.png" />
+                            <files />
+                            <typeDescriptor>
+                                <type name="Optional" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+        <installStep name="Options">
+            <optionalFileGroups order="Explicit">
+                <group name="Options" type="SelectAny">
+                    <plugins order="Explicit">
+                        <plugin name="Disable Exo UI Screen">
+                            <description>
+!! IF YOU HAVE GFY THIS IS REQUIRED !!
+Pick this if you see floating UI while wearing an exo. Exo UI will get an overhaul, until that happens consider it a work in progress.
+</description>
+                            <files>
+                                <folder source="src\promin_exo_off\gamedata" destination="gamedata"
+                                    priority="1" />
+                            </files>
+                            <typeDescriptor>
+                                <type name="Optional" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+        <installStep name="Support">
+            <optionalFileGroups order="Explicit">
+                <group name="Support" type="SelectAll">
+                    <plugins order="Explicit">
+                        <plugin name="Support on Ko-fi">
+                            <description>
+Consider supporting us!
+
+https://ko-fi.com/wearable_dev
+
+</description>
+                            <image path="fomod\images\steamhappy.png" />
+                            <files />
+                            <typeDescriptor>
+                                <type name="Required" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+        <installStep name="DELETE YOUR SHADER CACHE AFTER INSTALLING">
+            <optionalFileGroups order="Explicit">
+                <group name="DELETE YOUR SHADER CACHE AFTER INSTALLING" type="SelectAll">
+                    <plugins order="Explicit">
+                        <plugin name="Enjoy!">
+                            <description>
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+DELETE YOUR SHADER CACHE AFTER INSTALLING
+</description>
+                            <image path="fomod\images\Zorro.jpg" />
+                            <files />
+                            <typeDescriptor>
+                                <type name="Optional" />
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+    </installSteps>
+
+</config>
