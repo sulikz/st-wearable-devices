@@ -1,0 +1,133 @@
+local POS_UNIT = 0.1
+local ROT_UNIT = 10.0
+local LAYER_SPEED = 1.0
+local EPSILON = 1e-4
+local AXIS_EPSILON = 1e-6
+
+local function copy_offsets(offsets)
+    return {
+        pos = wd_transforms.copy_axes(offsets and offsets.pos),
+        rot = wd_transforms.copy_axes(offsets and offsets.rot),
+    }
+end
+
+local function set_axes(target, source)
+    for axis = 1, 3 do
+        target[axis] = source and source[axis] or 0
+    end
+end
+
+local function ease_smooth(progress)
+    return progress * progress * (3 - 2 * progress)
+end
+
+local function lerp_axes(target, from, to, ease)
+    for axis = 1, 3 do
+        target[axis] = from[axis] + (to[axis] - from[axis]) * ease
+    end
+end
+
+local function is_same_axes(axes, target)
+    for axis = 1, 3 do
+        if math.abs(axes[axis] - (target and target[axis] or 0)) > AXIS_EPSILON then
+            return false
+        end
+    end
+    return true
+end
+
+function new_blend(from, to, now, duration)
+    return {
+        current = copy_offsets(from),
+        from = copy_offsets(from),
+        to = copy_offsets(to),
+        start = now,
+        duration = math.max(duration, 1),
+    }
+end
+
+function advance_blend(blend, now)
+    local ease = ease_smooth(math.min(1, math.max(0, (now - blend.start) / blend.duration)))
+    lerp_axes(blend.current.pos, blend.from.pos, blend.to.pos, ease)
+    lerp_axes(blend.current.rot, blend.from.rot, blend.to.rot, ease)
+    return blend.current
+end
+
+function is_blend_done(blend, now)
+    return now - blend.start >= blend.duration
+end
+
+function new(cfg)
+    local self = {}
+    local pos_anms = cfg.pos_anms
+    local rot_anms = cfg.rot_anms
+    local part = cfg.part
+    local active_layers = {}
+    local current = copy_offsets(nil)
+    local blend = nil
+
+    local function drive_layer(anm, power)
+        if math.abs(power) > EPSILON then
+            game.play_hud_anm(anm, part, LAYER_SPEED, power, true, true)
+            active_layers[anm] = true
+        elseif active_layers[anm] then
+            game.stop_hud_anm(anm, false)
+            active_layers[anm] = nil
+        end
+    end
+
+    local function get_axis_power(values, axis, unit)
+        local value = values and values[axis] or 0
+        return value / unit
+    end
+
+    function self.drive(pos, rot)
+        for axis = 1, 3 do
+            drive_layer(pos_anms[axis], get_axis_power(pos, axis, POS_UNIT))
+            drive_layer(rot_anms[axis], get_axis_power(rot, axis, ROT_UNIT))
+        end
+        set_axes(current.pos, pos)
+        set_axes(current.rot, rot)
+    end
+
+    function self.forget()
+        active_layers = {}
+        blend = nil
+        set_axes(current.pos, nil)
+        set_axes(current.rot, nil)
+    end
+
+    function self.stop()
+        for anm in pairs(active_layers) do
+            game.stop_hud_anm(anm, false)
+        end
+        self.forget()
+    end
+
+    function self.set(pos, rot)
+        local target = { pos = pos, rot = rot }
+        blend = new_blend(target, target, 0, 1)
+        self.drive(pos, rot)
+    end
+
+    function self.blend_to(pos, rot, at, duration)
+        if blend and is_same_axes(blend.to.pos, pos) and is_same_axes(blend.to.rot, rot) then
+            return
+        end
+        blend = new_blend(current, { pos = pos, rot = rot }, at, duration)
+    end
+
+    function self.tick(now)
+        if not blend then
+            return
+        end
+        local target = advance_blend(blend, now)
+        self.drive(target.pos, target.rot)
+    end
+
+    function self.is_live()
+        return blend ~= nil
+    end
+
+    return self
+end

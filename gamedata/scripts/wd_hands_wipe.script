@@ -1,0 +1,25 @@
+local function fire_on_press(key)
+    if not (actor_effects and actor_effects.Hit_MaskCleaning) then
+        return
+    end
+    if dik_to_bind(key) ~= key_bindings.kCAM_ZOOM_IN then
+        return
+    end
+    if actor_effects.is_mask_on and not actor_effects.is_mask_on() then
+        return
+    end
+    if lam2 and lam2.is_running and lam2.is_running() then
+        return
+    end
+    wd_inspect.yield_for_action()
+    actor_effects.Hit_MaskCleaning()
+end
+
+function register()
+    wd_core.register({
+        id = "wd_hands_wipe",
+        callbacks = {
+            on_key_press = { { fire_on_press, unless_captured = true } },
+        },
+    })
+end

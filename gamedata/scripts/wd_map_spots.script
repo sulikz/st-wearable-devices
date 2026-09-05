@@ -1,0 +1,263 @@
+local SWEEP_CHUNK = 640
+local SNAPSHOT_INTERVAL_MS = 1000
+local PAUSE_RESTART_MS = 1000
+local SWEEP_INTERVAL_MS = 100
+
+local function get_engine_max_id()
+    if alife then
+        local ok, value = pcall(function()
+            return alife():max_id()
+        end)
+        if ok and type(value) == "number" then
+            return value
+        end
+    end
+    return 0
+end
+
+local function get_engine_object_spots(object_id)
+    return level.map_get_object_spots_by_id(object_id)
+end
+
+function new(deps)
+    deps = deps or {}
+    local get_max_id = deps.get_max_id or get_engine_max_id
+    local sweep_chunk = deps.sweep_chunk or SWEEP_CHUNK
+    local snapshot_interval_ms = deps.snapshot_interval_ms or SNAPSHOT_INTERVAL_MS
+    local get_all_spots = deps.get_all_spots
+    if get_all_spots == nil then
+        get_all_spots = level.map_get_object_spots or false
+    end
+    local get_object_spots = deps.get_object_spots
+    if get_object_spots == nil then
+        get_object_spots = level.map_get_object_spots_by_id and get_engine_object_spots or false
+    end
+
+    local registry = {}
+    local entries = {}
+    local held = {}
+    local pending_entries = {}
+    local pending = {}
+    local published_once = false
+    local sweeping = false
+    local sweep_max_id = 0
+    local sweep_index = 1
+    local last_tick_at = -1
+    local next_snapshot_at = 0
+
+    local function record(list, map, spot_type, object_id)
+        local spots = map[object_id]
+        if not spots then
+            spots = {}
+            map[object_id] = spots
+        end
+        if spots[spot_type] then
+            return
+        end
+        spots[spot_type] = true
+        list[#list + 1] = { id = object_id, spot_type = spot_type }
+    end
+
+    local function publish()
+        entries = pending_entries
+        held = pending
+        pending_entries = {}
+        pending = {}
+        published_once = true
+    end
+
+    local function start_sweep()
+        pending_entries = {}
+        pending = {}
+        sweep_index = 1
+        sweep_max_id = get_object_spots and not get_all_spots and get_max_id() or 0
+        sweeping = sweep_max_id > 0
+    end
+
+    local function take_snapshot(now)
+        if now < next_snapshot_at then
+            return
+        end
+        next_snapshot_at = now + snapshot_interval_ms
+        pending_entries = {}
+        pending = {}
+        for _, spot in ipairs(get_all_spots() or {}) do
+            record(pending_entries, pending, spot.spot_type, spot.id)
+        end
+        publish()
+    end
+
+    function registry.request_sweep()
+        if sweeping or get_all_spots then
+            return
+        end
+        start_sweep()
+    end
+
+    function registry.is_sweeping()
+        return sweeping or (get_all_spots and true or false)
+    end
+
+    function registry.update()
+        local now = time_global()
+        if now == last_tick_at then
+            return
+        end
+        if get_all_spots then
+            last_tick_at = now
+            take_snapshot(now)
+            return
+        end
+        if not sweeping then
+            return
+        end
+        if now - last_tick_at > PAUSE_RESTART_MS then
+            start_sweep()
+        end
+        last_tick_at = now
+        local last = math.min(sweep_index + sweep_chunk - 1, sweep_max_id)
+        for object_id = sweep_index, last do
+            for _, spot in ipairs(get_object_spots(object_id) or {}) do
+                record(pending_entries, pending, spot.spot_type, object_id)
+                if not published_once then
+                    record(entries, held, spot.spot_type, object_id)
+                end
+            end
+        end
+        sweep_index = last + 1
+        if sweep_index > sweep_max_id then
+            publish()
+            sweeping = false
+        end
+    end
+
+    function registry.reset()
+        entries = {}
+        held = {}
+        published_once = false
+        last_tick_at = -1
+        next_snapshot_at = 0
+        start_sweep()
+    end
+
+    function registry.is_ready()
+        return published_once
+    end
+
+    function registry.get_entries()
+        return entries
+    end
+
+    registry.reset()
+    return registry
+end
+
+local spots_xml = nil
+
+local function get_spots_xml()
+    if not spots_xml then
+        spots_xml = CScriptXmlInit()
+        spots_xml:ParseFile("map_spots.xml")
+    end
+    return spots_xml
+end
+
+local function read_xml_node(name)
+    local xml = get_spots_xml()
+    xml:NavigateToRoot()
+    if not xml:NodeExist(name, 0) then
+        return nil
+    end
+    local node = {
+        width = tonumber(xml:ReadAttribute(name, 0, "width")),
+        height = tonumber(xml:ReadAttribute(name, 0, "height")),
+    }
+    xml:NavigateToNode(name, 0)
+    if xml:NodeExist("mini_map", 0) then
+        node.mini_map = xml:ReadAttribute("mini_map", 0, "spot")
+        node.pointer = xml:ReadAttribute("mini_map", 0, "pointer")
+    end
+    if xml:NodeExist("texture", 0) then
+        node.texture = xml:ReadValue("texture", 0)
+        node.r = tonumber(xml:ReadAttribute("texture", 0, "r"))
+        node.g = tonumber(xml:ReadAttribute("texture", 0, "g"))
+        node.b = tonumber(xml:ReadAttribute("texture", 0, "b"))
+    end
+    return node
+end
+
+function new_icons(deps)
+    deps = deps or {}
+    local read_node = deps.read_node or read_xml_node
+    local icons = {}
+    local cache = {}
+
+    function icons.get(spot_type)
+        if type(spot_type) ~= "string" then
+            return nil
+        end
+        local hit = cache[spot_type]
+        if hit ~= nil then
+            return hit or nil
+        end
+        local resolved = false
+        local declaration = read_node(spot_type)
+        local mini_name = declaration and declaration.mini_map
+        local mini = mini_name and mini_name ~= "" and read_node(mini_name)
+        if mini and type(mini.texture) == "string" and mini.texture ~= "" then
+            resolved = {
+                id = mini.texture,
+                px_w = mini.width or 16,
+                px_h = mini.height or 16,
+                pointer = (declaration.pointer ~= nil and declaration.pointer ~= ""),
+                r = mini.r,
+                g = mini.g,
+                b = mini.b,
+            }
+        end
+        cache[spot_type] = resolved
+        return resolved or nil
+    end
+
+    return icons
+end
+
+local shared_registry = nil
+local shared_icons = nil
+
+function get_registry()
+    if not shared_registry then
+        shared_registry = new({})
+    end
+    return shared_registry
+end
+
+function get_icon(spot_type)
+    if not shared_icons then
+        shared_icons = new_icons({})
+    end
+    return shared_icons.get(spot_type)
+end
+
+local allow_sweep = wd_core.throttle(SWEEP_INTERVAL_MS)
+
+local function on_first_update()
+    get_registry().reset()
+    get_spots_xml()
+end
+
+function actor_on_update()
+    local registry = get_registry()
+    if not registry.is_sweeping() then
+        return
+    end
+    if registry.is_ready() and not allow_sweep() then
+        return
+    end
+    registry.update()
+end
+
+function register()
+    RegisterScriptCallback("actor_on_first_update", on_first_update)
+    RegisterScriptCallback("actor_on_update", actor_on_update)
+end

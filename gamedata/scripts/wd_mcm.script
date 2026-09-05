@@ -1,0 +1,135 @@
+local ROOT = "wd"
+local ID_HOLD_KEY = "hold_key"
+local ID_TAP_MS = "tap_ms"
+local ID_GUI_KEY = "gui_key"
+local ID_GUI_MOD = "gui_mod"
+local ID_DOUBLE_TAP_MS = "double_tap_ms"
+
+hold_key = DIK_keys.MOUSE_4
+tap_ms = 300
+gui_key = DIK_keys.DIK_M
+gui_mod = "alt"
+double_tap_ms = 250
+
+local MOD_DIKS = {
+    alt = { "DIK_LMENU", "DIK_RMENU" },
+    ctrl = { "DIK_LCONTROL", "DIK_RCONTROL" },
+    shift = { "DIK_LSHIFT", "DIK_RSHIFT" },
+}
+
+function is_mod_held(mode)
+    if mode == "none" then
+        return true
+    end
+    local diks = MOD_DIKS[mode]
+    if not diks then
+        return false
+    end
+    return key_state(DIK_keys[diks[1]]) ~= 0 or key_state(DIK_keys[diks[2]]) ~= 0
+end
+
+function on_mcm_load()
+    return {
+        id = ROOT,
+        sh = true,
+        gr = {
+            {
+                id = "title",
+                type = "slide",
+                link = "ui_options_slider_player",
+                text = "ui_mcm_wd_title",
+                size = { 512, 50 },
+                spacing = 20,
+            },
+            {
+                id = ID_HOLD_KEY,
+                type = "key_bind",
+                val = 2,
+                def = DIK_keys.MOUSE_4,
+                text = "ui_mcm_wd_hold_key",
+            },
+            {
+                id = ID_TAP_MS,
+                type = "track",
+                val = 2,
+                def = 200,
+                min = 150,
+                max = 600,
+                step = 25,
+                text = "ui_mcm_wd_tap_ms",
+            },
+            {
+                id = ID_DOUBLE_TAP_MS,
+                type = "track",
+                val = 2,
+                def = 250,
+                min = 150,
+                max = 600,
+                step = 25,
+                text = "ui_mcm_wd_double_tap_ms",
+            },
+            {
+                id = ID_GUI_KEY,
+                type = "key_bind",
+                val = 2,
+                def = DIK_keys.DIK_M,
+                text = "ui_mcm_wd_gui_key",
+            },
+            {
+                id = ID_GUI_MOD,
+                type = "list",
+                val = 0,
+                def = "alt",
+                text = "ui_mcm_wd_gui_mod",
+                content = { { "none", "none" }, { "alt", "alt" }, { "ctrl", "ctrl" }, { "shift", "shift" } },
+            },
+        },
+    }
+end
+
+local function is_bound(value)
+    return value ~= -1
+end
+
+local function is_positive(value)
+    return value > 0
+end
+
+local function read_option(id, current, is_valid)
+    local value = ui_mcm.get(ROOT .. "/" .. id)
+    if value == nil or (is_valid and not is_valid(value)) then
+        return current
+    end
+    return value
+end
+
+function on_option_change()
+    if not ui_mcm then
+        return
+    end
+    hold_key = read_option(ID_HOLD_KEY, hold_key, is_bound)
+    tap_ms = read_option(ID_TAP_MS, tap_ms, is_positive)
+    gui_key = read_option(ID_GUI_KEY, gui_key)
+    gui_mod = read_option(ID_GUI_MOD, gui_mod)
+    double_tap_ms = read_option(ID_DOUBLE_TAP_MS, double_tap_ms, is_positive)
+end
+
+function get_hold_key_dik()
+    return hold_key
+end
+
+function get_tap_threshold_ms()
+    return tap_ms
+end
+
+function get_gui_key_dik()
+    return gui_key
+end
+
+function is_gui_mod_held()
+    return is_mod_held(gui_mod)
+end
+
+function get_double_tap_ms()
+    return math.max(double_tap_ms, tap_ms)
+end

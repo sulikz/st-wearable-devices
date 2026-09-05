@@ -1,0 +1,1781 @@
+local ANM_DRAW = "anm_draw"
+local ANM_IDLE = "anm_idle"
+local ANM_SPRINT = "anm_sprint"
+local ANM_DRAW_BOTH = "anm_draw_both"
+local ANM_DRAW_WATCH = "anm_draw_watch"
+local ANM_IDLE_BOTH = "anm_idle_both"
+local ANM_TO_WATCH = "anm_to_watch"
+local ANM_FROM_WATCH = "anm_from_watch"
+local ANM_FIDGET = "anm_fidget"
+local ANM_HOLSTER = "anm_holster"
+local SWAP_SUFFIX = "_swap"
+local DETECTOR_SUFFIX = "_detector"
+local VARIANT_WATCH = "_watch"
+local ANM_IDLE_WATCH = ANM_IDLE .. VARIANT_WATCH
+local ANM_SPEED = 1.0
+local SWAP_ANM_SPEED = 1.25
+local SWAP_HOLD_ANM_SPEED = 0.001
+local SWITCH_SPEED_MODE = "switch"
+
+local DETECTOR_FAMILY = {
+    detector_advanced = "bear",
+    detector_grizzly = "bear",
+    detector_simple = "echo",
+    detector_elite = "veles",
+    detector_scientific = "veles",
+    detector_radio = "radio",
+    detector_geiger = "dosimeter",
+    detector_anomaly = "anomalous",
+    device_flashlight = "flashlight",
+}
+local DETECTOR_FAMILY_TOKENS = { "bear", "echo", "veles", "radio", "dosimeter", "anomalous", "flashlight" }
+
+local function get_detector_anm_name(anm, family)
+    return anm .. DETECTOR_SUFFIX .. "_" .. family
+end
+
+local function get_detector_family()
+    local detector = db.actor and db.actor:active_detector()
+    return detector and DETECTOR_FAMILY[detector:section()]
+end
+
+local function get_swap_anm(base, variant)
+    return base .. variant .. SWAP_SUFFIX
+end
+
+local POSE_BY_VARIANT = { [""] = "promin", [VARIANT_WATCH] = "watch" }
+
+local ANM_SPEED_BY_CLIP = {}
+local ANM_SPEED_MODE_BY_CLIP = {}
+
+local function set_speed_mode(anm, pose)
+    ANM_SPEED_MODE_BY_CLIP[anm] = pose
+    for _, family in ipairs(DETECTOR_FAMILY_TOKENS) do
+        ANM_SPEED_MODE_BY_CLIP[get_detector_anm_name(anm, family)] = pose
+    end
+end
+
+set_speed_mode(ANM_DRAW_BOTH, POSE_BY_VARIANT[""])
+set_speed_mode(ANM_TO_WATCH, SWITCH_SPEED_MODE)
+set_speed_mode(ANM_FROM_WATCH, SWITCH_SPEED_MODE)
+for variant, pose in pairs(POSE_BY_VARIANT) do
+    for _, base in ipairs({ ANM_DRAW, ANM_HOLSTER }) do
+        local swap_anm = get_swap_anm(base, variant)
+        set_speed_mode(base .. variant, pose)
+        ANM_SPEED_MODE_BY_CLIP[swap_anm] = pose
+        ANM_SPEED_BY_CLIP[swap_anm] = SWAP_ANM_SPEED
+    end
+end
+
+function get_anm_speed_mode(anm)
+    return ANM_SPEED_MODE_BY_CLIP[anm]
+end
+
+local registered = nil
+local active = nil
+
+local NOOP = function() end
+local FALSE = function()
+    return false
+end
+
+function register(spec)
+    if type(spec) ~= "table" or not spec.id then
+        return false
+    end
+    spec.variants = spec.variants or FALSE
+    spec.on_attach = spec.on_attach or NOOP
+    spec.teardown_response = spec.teardown_response or "hard"
+    spec.yields_now = spec.yields_now or FALSE
+    spec.on_wheel = spec.on_wheel or FALSE
+    registered = spec
+    return true
+end
+
+local function resolve()
+    if registered and registered.eligible() then
+        return registered
+    end
+    return nil
+end
+
+function get_active_spec()
+    return active
+end
+
+function repaint_active(device_id, apply)
+    if active and active.id == device_id then
+        apply()
+    end
+end
+
+local MS = {
+    DEBOUNCE = 150,
+    PENDING_SHOW = 800,
+    UNLOWER_SHOW = 2000,
+    RETRY = 100,
+    SEAM = 120,
+    HANDOFF_SEAM = 34,
+    WATCHDOG_GRACE = 3000,
+    FALLBACK_ANM = 800,
+    LOOP_HOLD = 3600000,
+    YIELD_HOLD = 800,
+    STOW_MAX = 2000,
+    RESTORE_WAIT = 1200,
+    DETECTOR_SHOW_HOLD = 700,
+    MELEE_GRACE = 1500,
+    RECOVER_MAX = 3000,
+    FIDGET_MIN = 12000,
+    FIDGET_SPREAD = 13000,
+    FIRE_BLOCK = 350,
+    ZOOM_BLOCK = 3000,
+    SWAP_PAUSE = 670,
+    ROOT_UNWIND = 200,
+    OFFSET_BLEND = 500,
+    ENGINE_LAYER_FADE = 400,
+    HAND_RESYNC = 334,
+}
+local MAX_ZOOM_CANCELS = 2
+
+local ST_IDLE, ST_RAISING, ST_HELD, ST_LOWERING = 0, 1, 2, 3
+
+local TEARDOWN_BINDS = {}
+do
+    local names = {
+        "kACTIVE_JOBS",
+        "kSAFEMODE",
+    }
+    for _, name in ipairs(names) do
+        if key_bindings[name] then
+            TEARDOWN_BINDS[key_bindings[name]] = true
+        end
+    end
+end
+
+local SLOT_BY_BIND = {}
+do
+    local slot_names = { "kWPN_1", "kWPN_2", "kWPN_3", "kWPN_4", "kWPN_5", "kWPN_6" }
+    for index, name in ipairs(slot_names) do
+        if key_bindings[name] then
+            SLOT_BY_BIND[key_bindings[name]] = index
+        end
+    end
+end
+
+local DETECTOR_SLOT = 9
+
+local WPN_STATE_IDLE = 0
+local WPN_STATE_HIDDEN = 3
+local WPN_STATE_BORE = 4
+
+local WPN_YIELD_STATES = {
+    [2] = true,
+    [5] = true,
+    [6] = true,
+    [7] = true,
+    [8] = true,
+    [9] = true,
+    [10] = true,
+}
+
+local state = ST_IDLE
+local state_deadline = 0
+local watchdog_at = 0
+local retry_at = 0
+local last_toggle = 0
+local in_vehicle = false
+local aiming = false
+local raise_weapon_id = nil
+local raise_detector_id = nil
+local DRAW_TRIM_SHARE = 0.66
+local hand_offset_driver = nil
+
+local function get_hand_offset_driver()
+    if not hand_offset_driver then
+        hand_offset_driver = wd_hands_offset.new({
+            pos_anms = { [[wd\left_hand_x.anm]], [[wd\left_hand_y.anm]], [[wd\left_hand_z.anm]] },
+            rot_anms = { [[wd\left_hand_pitch.anm]], [[wd\left_hand_yaw.anm]], [[wd\left_hand_roll.anm]] },
+            part = 1,
+        })
+    end
+    return hand_offset_driver
+end
+local held_anm = nil
+local raise_variant = ""
+local swap_redraw = false
+local swap_hold = false
+local swap_queue = {}
+
+local function has_pending_swap()
+    return #swap_queue > 0
+end
+
+local function drain_swap_queue()
+    local pending = swap_queue
+    swap_queue = {}
+    for _, callback in ipairs(pending) do
+        callback()
+    end
+end
+
+local function is_editor_gui_open()
+    return wd_gui.is_open() or wd_customize.is_open()
+end
+
+local function is_gui_pose_free()
+    return wd_gui.is_open() and wd_gui.is_pose_free()
+end
+
+local function is_editor_gui_holding()
+    return is_editor_gui_open() and not is_gui_pose_free()
+end
+
+local function is_both_hands_free()
+    return wd_hands_empty.is_drawn() and not wd_customize.is_open()
+end
+
+local queued_anm = nil
+local fidget_at = 0
+local require_release = false
+local prev_held = false
+local pending_show_until = 0
+local zoom_cancel_sent = false
+local zoom_cancel_tries = 0
+local zoom_block_until = 0
+local zoom_key_held = false
+local stuck_blocked = false
+local recover_stage = 0
+local recover_slot = nil
+local recover_deadline = 0
+local melee_deadline = 0
+local yield_until = 0
+local stow_deadline = 0
+local owes_detector_show = false
+local detector_restore_at = 0
+local restore_wait_until = 0
+local pipboy_toggled = false
+local watch_hold = false
+local customize_was_open = false
+local customize_entry_flip = false
+local press_pending = false
+local press_start = 0
+local double_tap_deadline = 0
+local fire_block_until = 0
+
+local function is_sprinting()
+    return IsMoveState("mcSprint")
+end
+
+local function is_lam2_running()
+    return lam2 and lam2.is_running and lam2.is_running() or false
+end
+
+local function is_low_crouch()
+    return IsMoveState("mcCrouch") and IsMoveState("mcAccel")
+end
+
+local function is_weapon_yielding(wpn_state)
+    return WPN_YIELD_STATES[wpn_state] == true
+end
+
+local function cancel_bore(wpn, wpn_state)
+    if wpn_state ~= WPN_STATE_BORE then
+        return false
+    end
+    wpn:switch_state(WPN_STATE_IDLE)
+    return true
+end
+
+local function cancel_grok_inspect()
+    if grok_doom_weapons_inspect and grok_doom_weapons_inspect.block_repeat then
+        grok_doom_weapons_inspect.unset()
+        RemoveTimeEvent("grok_inspect", "restore")
+    end
+end
+
+local motion_available = {}
+local hands_visual_by_section = {}
+
+local function get_hands_visual()
+    if not (wd_hands_left and wd_hands_left.get_base_hands_section) then
+        return nil
+    end
+    local hands_section = wd_hands_left.get_base_hands_section()
+    if not hands_section then
+        return nil
+    end
+    local cached = hands_visual_by_section[hands_section]
+    if cached == nil then
+        local visual = ini_sys:r_string_ex(hands_section, "visual")
+        cached = (visual ~= nil and visual ~= "" and visual) or false
+        hands_visual_by_section[hands_section] = cached
+    end
+    return cached or nil
+end
+
+local hands_visual
+
+local function has_hands_motion(visual, base)
+    for variant = 0, 8 do
+        local name = variant == 0 and base or (base .. variant)
+        if game.motion_exists(visual, name) then
+            return true
+        end
+    end
+    return false
+end
+
+local function get_available_cache(visual, section)
+    local by_section = motion_available[visual]
+    if not by_section then
+        by_section = {}
+        motion_available[visual] = by_section
+    end
+    local by_anm = by_section[section]
+    if not by_anm then
+        by_anm = {}
+        by_section[section] = by_anm
+    end
+    return by_anm
+end
+
+local anm_def = {}
+
+local function get_anm_def(section, anm)
+    local by_anm = anm_def[section]
+    if not by_anm then
+        by_anm = {}
+        anm_def[section] = by_anm
+    end
+    local cached = by_anm[anm]
+    if cached == nil then
+        cached = ini_sys:r_string_ex(section, anm) or false
+        by_anm[anm] = cached
+    end
+    return cached or nil
+end
+
+local function is_anm_available(section, anm)
+    if not (game and game.motion_exists) then
+        return true
+    end
+    local visual = hands_visual
+    if not visual then
+        return true
+    end
+    local cache = get_available_cache(visual, section)
+    local cached = cache[anm]
+    if cached ~= nil then
+        return cached
+    end
+    local def = get_anm_def(section, anm)
+    local base = def and def:match("^%s*([^%s,]+)")
+    local available = base ~= nil and has_hands_motion(visual, base)
+    cache[anm] = available
+    return available
+end
+
+local function resolve_anm(section, ...)
+    for index = 1, select("#", ...) do
+        local candidate = select(index, ...)
+        if candidate and is_anm_available(section, candidate) then
+            return candidate
+        end
+    end
+    return nil
+end
+
+local function resolve_defined_anm(section, anm)
+    if not get_anm_def(section, anm) then
+        return nil
+    end
+    if not is_anm_available(section, anm) then
+        return nil
+    end
+    return anm
+end
+
+local function resolve_detector_anm(section, base_anm, family)
+    if not family then
+        return nil
+    end
+    return resolve_defined_anm(section, get_detector_anm_name(base_anm, family))
+end
+
+local function resolve_anm_for_state(section, ...)
+    local family = get_detector_family()
+    if family then
+        for index = 1, select("#", ...) do
+            local candidate = select(index, ...)
+            local detector_anm = candidate and resolve_detector_anm(section, candidate, family)
+            if detector_anm then
+                return detector_anm
+            end
+        end
+    end
+    return resolve_anm(section, ...)
+end
+
+local hud_part = nil
+local motion_end = 0
+
+local function is_motion_live()
+    return hud_part ~= nil and time_global() < motion_end
+end
+
+function get_hud_part()
+    if not is_motion_live() then
+        return nil
+    end
+    return hud_part
+end
+
+local function forget_motion()
+    hud_part = nil
+    motion_end = 0
+end
+
+local function stop_motion()
+    local was_live = is_motion_live()
+    forget_motion()
+    if was_live and not game.hud_motion_allowed() then
+        game.stop_hud_motion()
+    end
+end
+
+local function is_hud_motion_ok(keep_current)
+    if not db.actor then
+        return false
+    end
+    if not (db.actor:active_item() or db.actor:active_detector()) then
+        return false
+    end
+    if not keep_current and not game.hud_motion_allowed() then
+        return false
+    end
+    if is_lam2_running() then
+        return false
+    end
+    return true
+end
+
+local function play_hand(anm, mix, part, keep_current, speed_override)
+    if not is_hud_motion_ok(keep_current) then
+        return nil
+    end
+    local sec = active.get_hand_section()
+    if not is_anm_available(sec, anm) then
+        return nil
+    end
+    local speed = speed_override
+    if not speed then
+        speed = ANM_SPEED_BY_CLIP[anm] or ANM_SPEED
+        local speed_mode = get_anm_speed_mode(anm)
+        if speed_mode then
+            speed = speed * wd_gui.get_anm_speed_scale(speed_mode)
+        end
+    end
+    local target_part = part or 1
+    local len = game.play_hud_motion(target_part, sec, anm, mix, speed) or 0
+    hud_part = target_part
+    motion_end = len > 0 and (time_global() + len) or math.huge
+    return len
+end
+
+local holster_defined = {}
+
+local function get_holster_anm()
+    local by_variant = holster_defined[active.id]
+    if not by_variant then
+        by_variant = {}
+        holster_defined[active.id] = by_variant
+    end
+    local anm = ANM_HOLSTER .. raise_variant
+    local family = get_detector_family()
+    local key = family and get_detector_anm_name(anm, family) or anm
+    local cached = by_variant[key]
+    if cached == nil then
+        local sec = active.get_hand_section()
+        cached = resolve_detector_anm(sec, anm, family) or resolve_defined_anm(sec, anm) or false
+        by_variant[key] = cached
+    end
+    return cached or nil
+end
+
+local function schedule_raising(now, len)
+    if len <= 0 then
+        len = MS.FALLBACK_ANM
+    end
+    state = ST_RAISING
+    state_deadline = now + math.max(len - MS.HANDOFF_SEAM, MS.RETRY)
+    watchdog_at = state_deadline
+end
+
+local function get_detector_draw_anm(sec)
+    return resolve_detector_anm(sec, ANM_DRAW .. raise_variant, get_detector_family())
+end
+
+local function get_hand_trims()
+    if active.hand_offsets then
+        return active.hand_offsets(raise_variant == VARIANT_WATCH)
+    end
+    return nil, nil
+end
+
+local function begin_hand_raise(now)
+    local both_hands = is_both_hands_free()
+    local watch_raise = raise_variant == VARIANT_WATCH
+    local sec = active.get_hand_section()
+    local draw_anm = get_detector_draw_anm(sec)
+    if not draw_anm and swap_redraw then
+        draw_anm = resolve_defined_anm(sec, get_swap_anm(ANM_DRAW, raise_variant))
+    end
+    if not draw_anm then
+        draw_anm = resolve_anm_for_state(sec, watch_raise and ANM_DRAW_WATCH, both_hands and ANM_DRAW_BOTH, ANM_DRAW)
+    end
+    if not draw_anm then
+        return false
+    end
+    local draw_part = draw_anm == ANM_DRAW_BOTH and 2 or 1
+    local len = play_hand(draw_anm, true, draw_part)
+    if not len then
+        return false
+    end
+    local driver = get_hand_offset_driver()
+    if driver.is_live() then
+        local pos, rot = get_hand_trims()
+        driver.blend_to(pos, rot, now, len * DRAW_TRIM_SHARE)
+    end
+    swap_redraw = false
+    local trans_anm
+    if watch_raise and get_anm_speed_mode(draw_anm) ~= POSE_BY_VARIANT[VARIANT_WATCH] then
+        trans_anm = resolve_anm_for_state(sec, ANM_TO_WATCH)
+    end
+    queued_anm = trans_anm
+    schedule_raising(now, len)
+    return true
+end
+
+local function can_show(ui_open, wpn_state)
+    if in_vehicle then
+        return false
+    end
+    if ui_open then
+        return false
+    end
+    if is_low_crouch() then
+        return false
+    end
+    if active.yields_now() then
+        return false
+    end
+    if is_lam2_running() then
+        return false
+    end
+    if is_weapon_yielding(wpn_state) then
+        return false
+    end
+    return true
+end
+
+local function has_variant_pose()
+    return active.variants() and is_anm_available(active.get_hand_section(), ANM_IDLE_WATCH)
+end
+
+local function get_raise_variant()
+    if not has_variant_pose() then
+        return ""
+    end
+    if wd_gui.is_open() then
+        return wd_gui.get_pose() == POSE_BY_VARIANT[VARIANT_WATCH] and VARIANT_WATCH or ""
+    end
+    return watch_hold and VARIANT_WATCH or ""
+end
+
+local function schedule_pending_show(now)
+    if pending_show_until == 0 then
+        pending_show_until = now + MS.PENDING_SHOW
+    end
+end
+
+local function stow_detector_for_show(now, detector_draw_anm)
+    if not db.actor:active_detector() or detector_draw_anm then
+        return false
+    end
+    if stow_deadline == 0 then
+        stow_deadline = now + MS.STOW_MAX
+        owes_detector_show = true
+        db.actor:hide_detector(false)
+    end
+    if now <= stow_deadline then
+        pending_show_until = now + MS.PENDING_SHOW
+    end
+    return true
+end
+
+local function show_detector_now()
+    owes_detector_show = false
+    restore_wait_until = 0
+    if db.actor then
+        db.actor:show_detector(false)
+        wd_hands_empty.hold_draw(MS.DETECTOR_SHOW_HOLD)
+    end
+end
+
+local function restore_detector()
+    stow_deadline = 0
+    detector_restore_at = 0
+    if not owes_detector_show then
+        return
+    end
+    if db.actor and wd_hands_empty.is_drawn() then
+        if restore_wait_until == 0 then
+            restore_wait_until = time_global() + MS.RESTORE_WAIT
+            db.actor:activate_slot(0)
+        end
+        return
+    end
+    show_detector_now()
+end
+
+local function defer_detector_restore(at)
+    stow_deadline = 0
+    if not owes_detector_show then
+        return
+    end
+    detector_restore_at = at
+end
+
+local function is_pose_busy()
+    return state ~= ST_IDLE or pending_show_until ~= 0 or press_pending
+end
+
+local function handle_detector_restore(now)
+    if restore_wait_until ~= 0 then
+        if is_pose_busy() then
+            restore_wait_until = 0
+            detector_restore_at = now + MS.RETRY
+        elseif now > restore_wait_until or not wd_hands_empty.is_drawn() then
+            show_detector_now()
+        end
+        return
+    end
+    if detector_restore_at ~= 0 and now >= detector_restore_at and not is_pose_busy() then
+        restore_detector()
+    end
+end
+
+local function cancel_weapon_zoom()
+    local dik = bind_to_dik(key_bindings.kWPN_ZOOM)
+    if dik == 0 then
+        return
+    end
+    if get_console_cmd(1, "wpn_aim_toggle") == true then
+        level.press_action(dik)
+    else
+        level.release_action(dik)
+    end
+end
+
+local function defer_for_zoomed_weapon(now)
+    if not aiming then
+        return false
+    end
+    if zoom_cancel_tries >= MAX_ZOOM_CANCELS then
+        pending_show_until = 0
+        require_release = true
+        return true
+    end
+    if not zoom_cancel_sent then
+        zoom_cancel_sent = true
+        zoom_cancel_tries = zoom_cancel_tries + 1
+        zoom_block_until = now + MS.ZOOM_BLOCK
+        cancel_weapon_zoom()
+    end
+    schedule_pending_show(now)
+    return true
+end
+
+local function defer_for_blocked_hud(now)
+    if is_hud_motion_ok() then
+        return false
+    end
+    if stuck_blocked then
+        local slot = db.actor:active_slot()
+        if slot and slot > 0 then
+            stuck_blocked = false
+            pending_show_until = 0
+            recover_slot = slot
+            recover_stage = 1
+            recover_deadline = now + MS.RECOVER_MAX
+            db.actor:activate_slot(0)
+            return true
+        end
+    end
+    if pending_show_until == 0 then
+        stop_motion()
+        local window = game.actor_weapon_lowered() and MS.UNLOWER_SHOW or MS.PENDING_SHOW
+        pending_show_until = now + window
+    end
+    return true
+end
+
+local function request_sprint_lower()
+    if lower_weapon_sprint and lower_weapon_sprint.delay_lower_weapon then
+        CreateTimeEvent("delay_lower_weapon", 0, 0, lower_weapon_sprint.delay_lower_weapon)
+    end
+end
+
+local function set_raise_anchor(wpn, detector)
+    if wpn then
+        raise_weapon_id = wpn:id()
+        raise_detector_id = nil
+    else
+        raise_weapon_id = nil
+        raise_detector_id = detector and detector:id()
+    end
+end
+
+local function show(now, ui_open)
+    if now < yield_until then
+        pending_show_until = math.max(pending_show_until, yield_until + MS.PENDING_SHOW)
+        return
+    end
+    if now - last_toggle < MS.DEBOUNCE then
+        return
+    end
+    local wpn = db.actor:active_item()
+    local wpn_state = wpn and wpn:get_state()
+    if wpn and not cancel_bore(wpn, wpn_state) then
+        cancel_grok_inspect()
+    end
+    if not can_show(ui_open, wpn_state) then
+        return
+    end
+    last_toggle = now
+    local detector_draw_anm = get_detector_draw_anm(active.get_hand_section())
+    if stow_detector_for_show(now, detector_draw_anm) then
+        return
+    end
+    if not wpn then
+        local detector = db.actor:active_detector()
+        if detector then
+            if defer_for_blocked_hud(now) then
+                return
+            end
+            if not begin_hand_raise(now) then
+                return
+            end
+            pending_show_until = 0
+            zoom_cancel_tries = 0
+            detector_restore_at = 0
+            set_raise_anchor(nil, detector)
+            return
+        end
+        if wd_hands_empty.try_draw() then
+            schedule_pending_show(now)
+        end
+        return
+    end
+    if defer_for_zoomed_weapon(now) then
+        return
+    end
+    if defer_for_blocked_hud(now) then
+        return
+    end
+    if not begin_hand_raise(now) then
+        return
+    end
+    if game.actor_weapon_lowered() then
+        game.actor_lower_weapon(false)
+        request_sprint_lower()
+    end
+    pending_show_until = 0
+    zoom_cancel_tries = 0
+    detector_restore_at = 0
+    set_raise_anchor(wpn)
+end
+
+local release_deadline = 0
+local offsets_released = false
+
+local function release_offset_layers()
+    if offsets_released then
+        return
+    end
+    offsets_released = true
+    get_hand_offset_driver().stop()
+end
+
+local function drive_hand_offsets(now)
+    if swap_hold or state == ST_LOWERING or not active.hand_offsets then
+        return
+    end
+    local driver = get_hand_offset_driver()
+    local pos, rot = get_hand_trims()
+    if wd_gui.is_open() or not driver.is_live() then
+        driver.set(pos, rot)
+    else
+        driver.blend_to(pos, rot, now, MS.OFFSET_BLEND)
+    end
+end
+
+local function reset_press_tracking()
+    pipboy_toggled = false
+    press_pending = false
+    press_start = 0
+    double_tap_deadline = 0
+end
+
+local function reset_raise_state()
+    get_hand_offset_driver().stop()
+    release_deadline = 0
+    offsets_released = false
+    swap_hold = false
+    customize_entry_flip = false
+    state = ST_IDLE
+    watchdog_at = 0
+    raise_weapon_id = nil
+    raise_detector_id = nil
+    held_anm = nil
+    queued_anm = nil
+    fidget_at = 0
+    pending_show_until = 0
+    retry_at = 0
+    drain_swap_queue()
+end
+
+local function reset_runtime()
+    if detector_restore_at == 0 then
+        restore_detector()
+    end
+    reset_press_tracking()
+    reset_raise_state()
+end
+
+local function hard_teardown(latch)
+    stop_motion()
+    reset_runtime()
+    if latch then
+        require_release = true
+    end
+end
+
+local function soft_yield()
+    stop_motion()
+    reset_runtime()
+    yield_until = time_global() + MS.YIELD_HOLD
+end
+
+local function get_held_anim()
+    if is_sprinting() then
+        return ANM_SPRINT
+    end
+    return ANM_IDLE
+end
+
+local function get_held_clip()
+    local sec = active.get_hand_section()
+    local held_base = get_held_anim()
+    local both_idle = held_base == ANM_IDLE and raise_variant == "" and is_both_hands_free()
+    return resolve_anm_for_state(
+        sec,
+        both_idle and ANM_IDLE_BOTH,
+        held_base .. raise_variant,
+        ANM_IDLE .. raise_variant,
+        ANM_IDLE
+    ) or ANM_IDLE
+end
+
+local function held_refire(now, keep_current)
+    local anm = get_held_clip()
+    local held_part = anm == ANM_IDLE_BOTH and 2 or 1
+    local len = play_hand(anm, false, held_part, keep_current == true)
+    if not len then
+        retry_at = now + MS.RETRY
+        return false
+    end
+    held_anm = anm
+    if len <= 0 and active.looping then
+        state_deadline = now + MS.LOOP_HOLD
+        watchdog_at = 0
+    else
+        state_deadline = now + math.max(len - MS.SEAM, MS.RETRY)
+        watchdog_at = state_deadline
+    end
+    retry_at = 0
+    return true
+end
+
+local function enter_held(now, keep_current)
+    if not held_refire(now, keep_current) then
+        return false
+    end
+    state = ST_HELD
+    if raise_variant == "" and not is_editor_gui_open() then
+        fidget_at = now + MS.FIDGET_MIN + math.random(0, MS.FIDGET_SPREAD)
+    else
+        fidget_at = 0
+    end
+    return true
+end
+
+local function play_transition(now, trans_anm)
+    stop_motion()
+    queued_anm = nil
+    fidget_at = 0
+    local len = play_hand(trans_anm, true)
+    if not len then
+        queued_anm = trans_anm
+        state = ST_RAISING
+        state_deadline = now
+        retry_at = now + MS.RETRY
+        return
+    end
+    schedule_raising(now, len)
+    retry_at = 0
+end
+
+local function apply_variant_transition(now)
+    local wanted = get_raise_variant()
+    if wanted == raise_variant then
+        return false
+    end
+    local trans_base = wanted == VARIANT_WATCH and ANM_TO_WATCH or ANM_FROM_WATCH
+    raise_variant = wanted
+    if customize_entry_flip then
+        customize_entry_flip = false
+        if state == ST_RAISING then
+            stop_motion()
+            queued_anm = nil
+            if begin_hand_raise(now) then
+                return true
+            end
+        end
+    end
+    local trans_anm = resolve_anm_for_state(active.get_hand_section(), trans_base)
+    if not trans_anm then
+        return false
+    end
+    play_transition(now, trans_anm)
+    return true
+end
+
+function install_foreign_anim_yields()
+    if lam2 and lam2.add_action and not _G.wd_inspect_lam2_wrapped then
+        local prev_add = lam2.add_action
+        lam2.add_action = function(action)
+            yield_for_action()
+            return prev_add(action)
+        end
+        local prev_add_first = lam2.add_action_first
+        if prev_add_first then
+            lam2.add_action_first = function(action)
+                yield_for_action()
+                return prev_add_first(action)
+            end
+        end
+        _G.wd_inspect_lam2_wrapped = true
+    end
+    if actor_effects and not _G.wd_inspect_actor_effects_wrapped then
+        for _, hit_name in ipairs({ "Hit_TorchToggle", "Hit_GrenadeQuickthrow" }) do
+            local prev_hit = actor_effects[hit_name]
+            if prev_hit then
+                actor_effects[hit_name] = function()
+                    yield_for_action()
+                    return prev_hit()
+                end
+            end
+        end
+        _G.wd_inspect_actor_effects_wrapped = true
+    end
+    if grok_doom_weapons_inspect and grok_doom_weapons_inspect.play_anim and not _G.wd_inspect_grok_wrapped then
+        local prev_play = grok_doom_weapons_inspect.play_anim
+        grok_doom_weapons_inspect.play_anim = function(weapon, anim, sound)
+            if state ~= ST_IDLE then
+                return
+            end
+            return prev_play(weapon, anim, sound)
+        end
+        _G.wd_inspect_grok_wrapped = true
+    end
+end
+
+local hands_excluded = false
+local inertia_api = nil
+
+local function get_inertia_api()
+    if inertia_api then
+        return inertia_api
+    end
+    local liz = liz_inertia_expanded
+    if liz and liz.set_mask_flag and liz.mask_layers and liz.mask_layers.anm_plays then
+        inertia_api = liz
+    end
+    return inertia_api
+end
+
+local function set_inertia_exclusion(liz, excluded)
+    hands_excluded = excluded
+    liz.set_mask_flag(liz.mask_layers.anm_plays, excluded)
+end
+
+local function is_inertia_exclusion_live(liz)
+    if liz.is_overriden then
+        return liz.is_overriden(liz.mask_layers.anm_plays)
+    end
+    return hands_excluded
+end
+
+function sync_inertia_exclusion()
+    local liz = get_inertia_api()
+    if not liz then
+        return
+    end
+    if is_pose_up() then
+        if not is_inertia_exclusion_live(liz) then
+            set_inertia_exclusion(liz, true)
+        end
+    elseif hands_excluded then
+        set_inertia_exclusion(liz, false)
+    end
+end
+
+local function reset_inertia_exclusion()
+    local liz = get_inertia_api()
+    if liz and hands_excluded then
+        set_inertia_exclusion(liz, false)
+    end
+end
+
+local function is_sprint_lower_suppressed()
+    return is_pose_up() or pending_show_until ~= 0 or recover_stage ~= 0
+end
+
+function install_sprint_lower_suppression()
+    if _G.wd_inspect_sprint_lower_wrapped then
+        return
+    end
+    if not (lower_weapon_sprint and lower_weapon_sprint.delay_lower_weapon) then
+        return
+    end
+    local prev_delay = lower_weapon_sprint.delay_lower_weapon
+    local deferred = false
+    lower_weapon_sprint.delay_lower_weapon = function(...)
+        if is_sprint_lower_suppressed() then
+            deferred = true
+            return false
+        end
+        if deferred then
+            deferred = false
+            if not IsMoveState("mcSprint") then
+                return true
+            end
+            local wpn = db.actor and db.actor:active_item()
+            if not wpn then
+                return true
+            end
+            local wpn_state = wpn:get_state()
+            if wpn_state ~= WPN_STATE_IDLE and wpn_state ~= WPN_STATE_HIDDEN then
+                deferred = true
+                return false
+            end
+        end
+        return prev_delay(...)
+    end
+    _G.wd_inspect_sprint_lower_wrapped = true
+end
+
+local function track_press(now, pressed, held, accept_press)
+    if pressed and accept_press then
+        press_start = now
+        press_pending = true
+    end
+    if not press_pending then
+        return nil
+    end
+    if not held then
+        press_pending = false
+        return "tap"
+    end
+    if now - press_start >= wd_mcm.get_tap_threshold_ms() then
+        press_pending = false
+        watch_hold = true
+        return "hold"
+    end
+    return nil
+end
+
+local function handle_pending_melee(now)
+    if melee_deadline == 0 then
+        return false
+    end
+    if now > melee_deadline then
+        melee_deadline = 0
+        return false
+    end
+    if db.actor:active_slot() == 0 and not db.actor:active_item() then
+        if quickdraw and quickdraw.hit_key then
+            quickdraw.hit_key()
+        end
+        melee_deadline = 0
+    end
+    return true
+end
+
+local function guard_raised(now, ui_open)
+    local wpn = db.actor:active_item()
+    if raise_detector_id then
+        local detector = db.actor:active_detector()
+        if wpn or not detector or detector:id() ~= raise_detector_id then
+            hard_teardown(true)
+            return true
+        end
+    elseif not wpn or wpn:id() ~= raise_weapon_id then
+        hard_teardown(true)
+        return true
+    end
+    if in_vehicle or ui_open then
+        hard_teardown(true)
+        return true
+    end
+    if watchdog_at ~= 0 and now > watchdog_at + MS.WATCHDOG_GRACE then
+        hard_teardown(true)
+        return true
+    end
+    local wpn_state = wpn and wpn:get_state()
+    cancel_bore(wpn, wpn_state)
+    if is_weapon_yielding(wpn_state) then
+        soft_yield()
+        return true
+    end
+    if active.yields_now() then
+        soft_yield()
+        return true
+    end
+    return false
+end
+
+local function handle_slot_recovery(now)
+    if recover_stage == 1 then
+        if not db.actor:active_item() then
+            db.actor:activate_slot(recover_slot)
+            recover_stage = 2
+        elseif now > recover_deadline then
+            recover_stage = 0
+        end
+        return true
+    end
+    if recover_stage == 2 then
+        if db.actor:active_item() and is_hud_motion_ok() then
+            recover_stage = 0
+            pending_show_until = now + MS.PENDING_SHOW
+            return false
+        end
+        if now > recover_deadline then
+            recover_stage = 0
+        end
+        return true
+    end
+    return false
+end
+
+local function handle_pending_show(now, ui_open)
+    if pending_show_until == 0 then
+        return false
+    end
+    if now > pending_show_until then
+        pending_show_until = 0
+        zoom_cancel_sent = false
+        restore_detector()
+        if db.actor:active_item() and not is_hud_motion_ok() and not game.actor_weapon_lowered() then
+            stuck_blocked = true
+        end
+        return false
+    end
+    show(now, ui_open)
+    if state ~= ST_IDLE then
+        pending_show_until = 0
+        return true
+    end
+    return false
+end
+
+local function refresh_active()
+    local previous = active
+    active = resolve()
+    if active and active ~= previous then
+        active.on_attach()
+    end
+    return active
+end
+
+local function raise_for_editor(now, ui_open)
+    watch_hold = false
+    raise_variant = get_raise_variant()
+    show(now, ui_open)
+end
+
+local function handle_idle(now, ui_open, pressed, held)
+    if swap_redraw and not is_editor_gui_holding() then
+        swap_redraw = false
+    end
+    if handle_slot_recovery(now) then
+        return
+    end
+    if stuck_blocked and is_hud_motion_ok() then
+        stuck_blocked = false
+    end
+    local pending_drove_show = pending_show_until ~= 0
+    if handle_pending_show(now, ui_open) then
+        return
+    end
+    if pipboy_toggled and pending_show_until == 0 then
+        pipboy_toggled = false
+    end
+    if is_editor_gui_holding() then
+        raise_for_editor(now, ui_open)
+        if state ~= ST_IDLE then
+            return
+        end
+    end
+    if not held then
+        require_release = false
+        zoom_cancel_tries = 0
+    end
+    local press_result = track_press(now, pressed, held, not require_release)
+    if press_result == "tap" then
+        watch_hold = false
+        pipboy_toggled = true
+        raise_variant = ""
+        show(now, ui_open)
+        return
+    end
+    if watch_hold then
+        if not held then
+            watch_hold = false
+        elseif not require_release then
+            raise_variant = get_raise_variant()
+            if not pending_drove_show then
+                show(now, ui_open)
+            end
+        end
+    end
+end
+
+local function get_lower_intent(now, pressed, held)
+    local wants_lower = false
+    local double_tap = active.on_double_tap
+    if pipboy_toggled then
+        if pressed and now < double_tap_deadline then
+            double_tap_deadline = 0
+            double_tap()
+        else
+            if pressed and double_tap then
+                double_tap_deadline = now + wd_mcm.get_double_tap_ms()
+            end
+            local press_result = track_press(now, pressed, held, true)
+            if press_result == "tap" and not double_tap then
+                wants_lower = true
+            elseif press_result == "hold" then
+                double_tap_deadline = 0
+            end
+        end
+        if double_tap_deadline > 0 and now >= double_tap_deadline then
+            double_tap_deadline = 0
+            wants_lower = true
+        end
+        if watch_hold and not held then
+            watch_hold = false
+        end
+    elseif watch_hold then
+        if not held then
+            watch_hold = false
+            wants_lower = true
+        end
+    else
+        wants_lower = true
+    end
+    return wants_lower or is_low_crouch() or is_gui_pose_free()
+end
+
+local function begin_holster(now, for_swap)
+    if state ~= ST_HELD then
+        return false
+    end
+    if held_anm == ANM_IDLE_BOTH then
+        return false
+    end
+    local holster_anm
+    if for_swap then
+        local swap_anm = get_swap_anm(ANM_HOLSTER, raise_variant)
+        holster_anm = resolve_defined_anm(active.get_hand_section(), swap_anm)
+    end
+    holster_anm = holster_anm or get_holster_anm()
+    if not holster_anm then
+        return false
+    end
+    local len = play_hand(holster_anm, true, 1, true)
+    if not len or len <= 0 then
+        return false
+    end
+    state = ST_LOWERING
+    local lead_ms = MS.HAND_RESYNC
+    release_deadline = now + math.max(len - MS.ENGINE_LAYER_FADE, 0)
+    if get_detector_draw_anm(active.get_hand_section()) then
+        lead_ms = MS.ROOT_UNWIND
+    end
+    state_deadline = now + math.max(len - lead_ms, MS.RETRY)
+    watchdog_at = state_deadline
+    offsets_released = false
+    queued_anm = nil
+    fidget_at = 0
+    reset_press_tracking()
+    return true
+end
+
+local function begin_swap_hold(now)
+    local hold_anm = get_swap_anm(ANM_DRAW, raise_variant)
+    if not resolve_defined_anm(active.get_hand_section(), hold_anm) then
+        return false
+    end
+    if not play_hand(hold_anm, true, 1, true, SWAP_HOLD_ANM_SPEED) then
+        return false
+    end
+    local wpn = db.actor:active_item()
+    swap_hold = true
+    state = ST_RAISING
+    state_deadline = now + MS.SWAP_PAUSE
+    watchdog_at = state_deadline
+    retry_at = 0
+    set_raise_anchor(wpn, db.actor:active_detector())
+    return true
+end
+
+local function handle_lowering(now, ui_open)
+    if now >= release_deadline then
+        release_offset_layers()
+    end
+    if now < state_deadline and not game.hud_motion_allowed() then
+        return
+    end
+    defer_detector_restore(math.min(motion_end, now + MS.FALLBACK_ANM))
+    local pending = swap_queue
+    swap_queue = {}
+    hard_teardown(false)
+    local resume = #pending > 0 and is_editor_gui_holding() and refresh_active() ~= nil
+    swap_queue = pending
+    if resume then
+        swap_redraw = true
+        if begin_swap_hold(now) then
+            return
+        end
+    end
+    drain_swap_queue()
+    if resume then
+        show(now, ui_open)
+    end
+end
+
+local function handle_raising(now, ui_open)
+    if swap_hold then
+        if now < state_deadline then
+            return
+        end
+        swap_hold = false
+        drain_swap_queue()
+        stop_motion()
+        state = ST_IDLE
+        show(now, ui_open)
+        return
+    end
+    if apply_variant_transition(now) then
+        return
+    end
+    if now < state_deadline or now < retry_at then
+        return
+    end
+    if queued_anm then
+        play_transition(now, queued_anm)
+        return
+    end
+    stop_motion()
+    enter_held(now, true)
+end
+
+local function handle_held(now)
+    if has_pending_swap() then
+        if not begin_holster(now, true) then
+            drain_swap_queue()
+        end
+        return
+    end
+    if apply_variant_transition(now) then
+        return
+    end
+    if fidget_at > 0 and now >= fidget_at then
+        if is_sprinting() or is_editor_gui_open() then
+            fidget_at = now + MS.FIDGET_MIN
+        elseif not is_anm_available(active.get_hand_section(), ANM_FIDGET) then
+            fidget_at = 0
+        else
+            fidget_at = 0
+            play_transition(now, ANM_FIDGET)
+            return
+        end
+    end
+    if held_anm ~= get_held_clip() or (now >= retry_at and (game.hud_motion_allowed() or now >= state_deadline)) then
+        stop_motion()
+        held_refire(now)
+    end
+end
+
+function actor_on_update()
+    local key = wd_mcm.get_hold_key_dik()
+    local held = key_state(key) == 1
+    local pressed = held and not prev_held
+    prev_held = held
+
+    local customize_open = wd_customize.is_open()
+    if customize_open and not customize_was_open then
+        watch_hold = false
+        customize_entry_flip = state == ST_RAISING and raise_variant == VARIANT_WATCH and not swap_hold
+        reset_press_tracking()
+    elseif customize_was_open and not customize_open then
+        watch_hold = held and not pressed
+    end
+    customize_was_open = customize_open
+
+    local zoom_dik = bind_to_dik(key_bindings.kWPN_ZOOM)
+    zoom_key_held = zoom_dik ~= nil and zoom_dik ~= 0 and key_state(zoom_dik) == 1
+
+    if not (db.actor and db.actor:alive()) then
+        if state ~= ST_IDLE then
+            hard_teardown(true)
+        end
+        if detector_restore_at ~= 0 or restore_wait_until ~= 0 then
+            restore_detector()
+        end
+        return
+    end
+
+    local now = time_global()
+
+    hands_visual = get_hands_visual()
+    handle_detector_restore(now)
+    local driver = get_hand_offset_driver()
+    driver.tick(now)
+
+    if handle_pending_melee(now) then
+        return
+    end
+
+    local ui_open = wd_blocking.is_ui_open()
+
+    if not db.actor:active_item() and not ui_open then
+        wd_hands_empty.try_draw()
+    end
+
+    if state == ST_IDLE then
+        if not refresh_active() then
+            return
+        end
+        handle_idle(now, ui_open, pressed, held)
+        return
+    end
+
+    if guard_raised(now, ui_open) then
+        return
+    end
+    drive_hand_offsets(now)
+    if state == ST_LOWERING then
+        handle_lowering(now, ui_open)
+        return
+    end
+    if customize_open then
+        track_press(now, pressed, held, true)
+    end
+    if get_lower_intent(now, pressed, held) and not is_editor_gui_holding() then
+        if not begin_holster(now) then
+            hard_teardown(false)
+        end
+        return
+    end
+    if state == ST_RAISING then
+        handle_raising(now, ui_open)
+    else
+        handle_held(now)
+    end
+end
+
+function run_swap(callback)
+    if type(callback) ~= "function" then
+        return
+    end
+    if state == ST_RAISING or state == ST_LOWERING then
+        swap_queue[#swap_queue + 1] = callback
+        return
+    end
+    if state == ST_HELD and begin_holster(time_global(), true) then
+        swap_queue[#swap_queue + 1] = callback
+        return
+    end
+    if has_pending_swap() then
+        swap_queue[#swap_queue + 1] = callback
+        return
+    end
+    callback()
+end
+
+function is_raised()
+    return state == ST_RAISING or state == ST_HELD
+end
+
+function is_lowering()
+    return state == ST_LOWERING
+end
+
+function is_pose_up()
+    return is_raised() or is_lowering()
+end
+
+local function is_pose_releasing()
+    return state == ST_LOWERING and offsets_released
+end
+
+function is_pose_held()
+    return is_pose_up() and not is_pose_releasing()
+end
+
+function on_sleep()
+    if state ~= ST_IDLE then
+        hard_teardown(true)
+    end
+end
+
+function on_attach_vehicle()
+    in_vehicle = true
+end
+
+function on_detach_vehicle()
+    in_vehicle = false
+end
+
+function on_weapon_zoom_in()
+    aiming = true
+    if state ~= ST_IDLE then
+        soft_yield()
+    end
+end
+
+function on_weapon_zoom_out()
+    aiming = false
+    zoom_cancel_sent = false
+end
+
+function on_weapon_action()
+    if state == ST_IDLE then
+        yield_until = time_global() + MS.YIELD_HOLD
+        return
+    end
+    soft_yield()
+end
+
+function yield_for_action()
+    if state ~= ST_IDLE then
+        soft_yield()
+    end
+end
+
+local function is_melee_in_hand()
+    local wpn = db.actor and db.actor:active_item()
+    return wpn ~= nil and IsMelee(wpn) == true
+end
+
+local function start_melee()
+    local was_raised = state ~= ST_IDLE
+    if was_raised then
+        hard_teardown(true)
+    end
+    if wd_hands_empty.is_drawn() then
+        db.actor:activate_slot(0)
+    elseif not was_raised then
+        return
+    end
+    melee_deadline = time_global() + MS.MELEE_GRACE
+end
+
+function on_key_press(key)
+    local bind = dik_to_bind(key)
+    if bind == key_bindings.kCUSTOM24 then
+        if not is_melee_in_hand() then
+            wd_hands_empty.hold_melee()
+            start_melee()
+        end
+        return
+    end
+    if state == ST_IDLE then
+        return
+    end
+    local slot = SLOT_BY_BIND[bind]
+    if slot then
+        if db.actor and db.actor:item_in_slot(slot) then
+            soft_yield()
+        end
+        return
+    end
+    if TEARDOWN_BINDS[bind] then
+        if active.teardown_response == "soft" then
+            soft_yield()
+        else
+            hard_teardown(true)
+        end
+    end
+end
+
+local function is_attack_bind(bind)
+    if bind == key_bindings.kWPN_FIRE then
+        return true
+    end
+    return bind == key_bindings.kWPN_ZOOM and is_melee_in_hand()
+end
+
+local function take_detector_key(now)
+    if not db.actor:item_in_slot(DETECTOR_SLOT) then
+        return false
+    end
+    if db.actor:active_detector() then
+        if is_raised() then
+            soft_yield()
+        end
+        return false
+    end
+    if state == ST_IDLE and not wd_hands_empty.is_drawn() then
+        return false
+    end
+    owes_detector_show = true
+    if state == ST_IDLE then
+        restore_detector()
+    elseif is_raised() and not begin_holster(now) then
+        hard_teardown(false)
+    end
+    return true
+end
+
+local function is_repeat_zoom_press(bind)
+    return bind == key_bindings.kWPN_ZOOM and zoom_key_held and not is_melee_in_hand()
+end
+
+local function take_attack_key(now, flags)
+    if state == ST_IDLE then
+        if now < fire_block_until then
+            flags.ret_value = false
+        end
+        return
+    end
+    flags.ret_value = false
+    if state == ST_LOWERING then
+        return
+    end
+    yield_until = now + MS.YIELD_HOLD
+    fire_block_until = now + MS.FIRE_BLOCK
+    if not begin_holster(now) then
+        hard_teardown(false)
+    end
+end
+
+function on_before_key_press(_, bind, dis, flags)
+    if dis or not (db.actor and db.actor:alive()) then
+        return
+    end
+    local now = time_global()
+    if bind == key_bindings.kDETECTOR then
+        if take_detector_key(now) then
+            flags.ret_value = false
+        end
+    elseif is_repeat_zoom_press(bind) then
+        if state ~= ST_IDLE or (pending_show_until ~= 0 and now < zoom_block_until) then
+            flags.ret_value = false
+        end
+    elseif is_attack_bind(bind) then
+        take_attack_key(now, flags)
+    end
+end
+
+function on_first_update()
+    reset_inertia_exclusion()
+    get_hand_offset_driver().forget()
+    active = nil
+    in_vehicle = false
+    aiming = false
+    zoom_cancel_sent = false
+    zoom_cancel_tries = 0
+    zoom_block_until = 0
+    zoom_key_held = false
+    require_release = false
+    watch_hold = false
+    swap_redraw = false
+    prev_held = false
+    fire_block_until = 0
+    stuck_blocked = false
+    recover_stage = 0
+    recover_slot = nil
+    recover_deadline = 0
+    melee_deadline = 0
+    yield_until = 0
+    last_toggle = 0
+    stow_deadline = 0
+    owes_detector_show = false
+    detector_restore_at = 0
+    restore_wait_until = 0
+    reset_press_tracking()
+    reset_raise_state()
+    forget_motion()
+    motion_available = {}
+end
+
+function install_wheel_hook()
+    if _G.wd_inspect_wheel_wrapped then
+        return
+    end
+    local prior = _G.COnMouseWheel
+    _G.COnMouseWheel = function(direction)
+        if prior and not prior(direction) then
+            return false
+        end
+        if wd_blocking.is_input_captured() then
+            return true
+        end
+        if is_raised() and active.on_wheel(direction) then
+            return false
+        end
+        return true
+    end
+    _G.wd_inspect_wheel_wrapped = true
+end
+
+function register_engine()
+    wd_core.register({
+        id = "wd_inspect",
+        callbacks = {
+            actor_on_first_update = { on_first_update },
+            actor_on_update = { actor_on_update, sync_inertia_exclusion },
+            actor_on_attach_vehicle = { on_attach_vehicle },
+            actor_on_detach_vehicle = { on_detach_vehicle },
+            actor_on_weapon_zoom_in = { on_weapon_zoom_in },
+            actor_on_weapon_zoom_out = { on_weapon_zoom_out },
+            actor_on_weapon_reload = { on_weapon_action },
+            actor_on_weapon_fired = { on_weapon_action },
+            actor_on_sleep = { on_sleep },
+            on_option_change = { wd_mcm.on_option_change },
+            on_key_press = { { on_key_press, unless_captured = true } },
+            on_before_key_press = { { on_before_key_press, unless_captured = true } },
+        },
+        on_start = function()
+            install_foreign_anim_yields()
+            install_sprint_lower_suppression()
+            install_wheel_hook()
+            wd_mcm.on_option_change()
+        end,
+    })
+end

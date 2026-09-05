@@ -1,0 +1,126 @@
+local SAVE_KEY = "wd_corpse_spawned"
+
+local SPAWNS = {
+    {
+        key = "watch_artyom_labx18_01",
+        npc_section = "sim_default_stalker_3",
+        item_section = "wd_metro_watch",
+        loot = {
+            { section = "wpn_metroak", condition = 0.85 },
+            { section = "ammo_5.45x39_fmj", ammo = 23 },
+        },
+        name = "Artyom",
+        level = "l04u_labx18",
+        x = 6.91,
+        y = 4.29,
+        z = -19.46,
+        visual = "actors\\stalker_neutral\\stalker_exolight_protoskel_2",
+        guards = { section = "lurker_1_normal", count = 2 },
+    },
+}
+
+local function is_ready(entry)
+    return ini_sys:section_exist(entry.npc_section) and ini_sys:section_exist(entry.item_section)
+end
+
+local function create_guards(entry, position, level_vertex_id, game_vertex_id)
+    local guards = entry.guards
+    if not guards or not ini_sys:section_exist(guards.section) then
+        return
+    end
+    for _ = 1, guards.count do
+        alife_create(guards.section, position, level_vertex_id, game_vertex_id)
+    end
+end
+
+local function create_item_with_condition(item, se_corpse)
+    local se_item = alife_create(
+        item.section,
+        se_corpse.position,
+        se_corpse.m_level_vertex_id,
+        se_corpse.m_game_vertex_id,
+        se_corpse.id,
+        false
+    )
+    if not se_item then
+        return
+    end
+    local data = utils_stpk.get_object_data(se_item)
+    if data then
+        data.condition = item.condition
+        utils_stpk.set_object_data(data, se_item)
+    end
+    alife():register(se_item)
+end
+
+local function create_loot(entry, se_corpse)
+    for _, item in ipairs(entry.loot or {}) do
+        if ini_sys:section_exist(item.section) then
+            if item.condition then
+                create_item_with_condition(item, se_corpse)
+            else
+                alife_create_item(item.section, se_corpse, item)
+            end
+        end
+    end
+end
+
+local function apply_visual(se_corpse, visual)
+    if not se_corpse then
+        return
+    end
+    local data = utils_stpk.get_stalker_data(se_corpse)
+    if not data then
+        return
+    end
+    data.visual_name = visual
+    utils_stpk.set_stalker_data(data, se_corpse)
+end
+
+local function create_corpse(entry, position, level_vertex_id, game_vertex_id)
+    local se_corpse = alife_create(entry.npc_section, position, level_vertex_id, game_vertex_id)
+    if not se_corpse then
+        return false
+    end
+    local corpse_id = se_corpse.id
+    local se_item = alife_create(entry.item_section, position, level_vertex_id, game_vertex_id, corpse_id)
+    if not se_item then
+        alife_release(se_corpse)
+        return false
+    end
+    create_loot(entry, se_corpse)
+    se_corpse:set_character_name(entry.name)
+    se_corpse:kill()
+    if entry.visual then
+        apply_visual(se_corpse, entry.visual)
+    end
+    local corpse_name = se_corpse:name()
+    se_save_var(corpse_id, corpse_name, "dont_release", true)
+    se_save_var(corpse_id, corpse_name, "death_dropped", true)
+    create_guards(entry, position, level_vertex_id, game_vertex_id)
+    return true
+end
+
+local placer = wd_world_spawn.new_placer({
+    save_key = SAVE_KEY,
+    spawns = SPAWNS,
+    is_ready = is_ready,
+    create = create_corpse,
+})
+
+set_spawns = placer.set_spawns
+is_spawned = placer.is_spawned
+spawn_missing = placer.spawn_missing
+save_state = placer.save_state
+load_state = placer.load_state
+
+function register()
+    wd_core.register({
+        id = "wd_corpse_spawn",
+        callbacks = {
+            actor_on_first_update = { spawn_missing },
+            save_state = { save_state },
+            load_state = { load_state },
+        },
+    })
+end

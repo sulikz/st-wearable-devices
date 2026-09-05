@@ -1,0 +1,184 @@
+[wd_promin]:identity_immunities
+GroupControlSection  = spawn_group
+discovery_dependency =
+$spawn          = "devices\promin"
+class           = II_ATTCH
+kind            = i_device
+cform           = skeleton
+visual          = wd\world\promin_world.ogf
+inv_name        = st_promin
+inv_name_short  = st_promin
+description     = st_promin_descr
+inv_weight      = 0.211
+icons_texture   = wd\ui\promin\icon_promin_t1
+inv_grid_width  = 2
+inv_grid_height = 1
+inv_grid_x      = 0
+inv_grid_y      = 0
+cost            = 5800
+
+![wd_promin]
+use1_functor = d_promin.get_menu_text
+use1_action_functor = d_promin.toggle_attach
+use3_functor = d_promin.get_remove_module_menu_text
+use3_action_functor = d_promin.remove_module
+use6_functor = item_device.menu_battery
+use6_action_functor = item_device.func_battery
+battery = batteries_dead
+power_critical = 0.05
+can_break = false
+use_condition = true
+condition_bar = power_progess_bar
+
+[wd_promin_2]:wd_promin
+inv_name        = st_promin_2
+inv_name_short  = st_promin_2
+description     = st_promin_2_descr
+icons_texture   = wd\ui\promin\icon_promin_t2
+cost            = 11400
+
+[wd_promin_module_map]:identity_immunities
+GroupControlSection  = spawn_group
+discovery_dependency =
+$spawn          = "devices\promin"
+class           = II_ATTCH
+kind            = i_wearable_module
+cform           = skeleton
+visual          = wd\world\promin_module_world.ogf
+inv_name        = st_promin_module_map
+inv_name_short  = st_promin_module_map
+description     = st_promin_module_map_descr
+inv_weight      = 0.08
+icons_texture   = wd\ui\promin\icon_promin_module_map
+inv_grid_width  = 1
+inv_grid_height = 1
+inv_grid_x      = 0
+inv_grid_y      = 0
+cost            = 3600
+use1_functor = d_promin.get_module_menu_text
+use1_action_functor = d_promin.install_module
+
+[wd_promin_module_conn]:wd_promin_module_map
+inv_name        = st_promin_module_conn
+inv_name_short  = st_promin_module_conn
+description     = st_promin_module_conn_descr
+icons_texture   = wd\ui\promin\icon_promin_module_null
+cost            = 3600
+
+[wd_promin_module_side]:wd_promin_module_map
+inv_name        = st_promin_module_side
+inv_name_short  = st_promin_module_side
+description     = st_promin_module_side_descr
+icons_texture   = wd\ui\promin\icon_promin_module_null
+cost            = 3600
+
+[wd_promin_upgrade_kit]:identity_immunities
+GroupControlSection  = spawn_group
+discovery_dependency =
+$spawn          = "devices\promin_upgrade_kit"
+class           = II_ATTCH
+kind            = i_wearable_kit
+cform           = skeleton
+visual          = wd\world\upgrade_kit_world.ogf
+inv_name        = st_wd_parts
+inv_name_short  = st_wd_parts
+description     = st_wd_parts_descr
+inv_weight      = 0.4
+icons_texture   = wd\ui\promin\icon_upgrade_kit
+inv_grid_width  = 1
+inv_grid_height = 1
+inv_grid_x      = 0
+inv_grid_y      = 0
+cost            = 2600
+
+[anim_promin_hud]
+anm_draw                = wd_promin_draw_left
+anm_draw_both           = wd_promin_draw_both
+anm_draw_watch          = wd_watch_draw_left
+anm_idle                = wd_promin_idle
+anm_idle_both           = wd_promin_idle_both
+anm_sprint              = wd_promin_idle
+anm_to_watch            = wd_promin_to_watch
+anm_from_watch          = wd_watch_to_promin
+anm_fidget              = wd_promin_idle_fidget
+anm_idle_watch          = wd_watch_idle
+anm_sprint_watch        = wd_watch_idle
+anm_holster             = wd_promin_holster_left
+anm_holster_watch       = wd_watch_holster_left
+; per-family detector clip sets (grizzly->bear, scientific->veles alias in wd_inspect;
+; anomalous + flashlight grips are rotated 108/149 deg vs bear - drop their keys if the hold reads wrong)
+anm_draw_detector_bear               = wd_promin_draw_left_bear
+anm_draw_watch_detector_bear         = wd_watch_draw_left_bear
+anm_idle_detector_bear               = wd_promin_idle_bear
+anm_idle_watch_detector_bear         = wd_watch_idle_bear
+anm_sprint_detector_bear             = wd_promin_idle_bear
+anm_sprint_watch_detector_bear       = wd_watch_idle_bear
+anm_to_watch_detector_bear           = wd_promin_to_watch_bear
+anm_from_watch_detector_bear         = wd_watch_to_promin_bear
+anm_holster_detector_bear            = wd_promin_holster_left_bear
+anm_holster_watch_detector_bear      = wd_watch_holster_left_bear
+anm_draw_detector_echo               = wd_promin_draw_left_echo
+anm_draw_watch_detector_echo         = wd_watch_draw_left_echo
+anm_idle_detector_echo               = wd_promin_idle_echo
+anm_idle_watch_detector_echo         = wd_watch_idle_echo
+anm_sprint_detector_echo             = wd_promin_idle_echo
+anm_sprint_watch_detector_echo       = wd_watch_idle_echo
+anm_to_watch_detector_echo           = wd_promin_to_watch_echo
+anm_from_watch_detector_echo         = wd_watch_to_promin_echo
+anm_holster_detector_echo            = wd_promin_holster_left_echo
+anm_holster_watch_detector_echo      = wd_watch_holster_left_echo
+anm_draw_detector_veles              = wd_promin_draw_left_veles
+anm_draw_watch_detector_veles        = wd_watch_draw_left_veles
+anm_idle_detector_veles              = wd_promin_idle_veles
+anm_idle_watch_detector_veles        = wd_watch_idle_veles
+anm_sprint_detector_veles            = wd_promin_idle_veles
+anm_sprint_watch_detector_veles      = wd_watch_idle_veles
+anm_to_watch_detector_veles          = wd_promin_to_watch_veles
+anm_from_watch_detector_veles        = wd_watch_to_promin_veles
+anm_holster_detector_veles           = wd_promin_holster_left_veles
+anm_holster_watch_detector_veles     = wd_watch_holster_left_veles
+anm_draw_detector_radio              = wd_promin_draw_left_radio
+anm_draw_watch_detector_radio        = wd_watch_draw_left_radio
+anm_idle_detector_radio              = wd_promin_idle_radio
+anm_idle_watch_detector_radio        = wd_watch_idle_radio
+anm_sprint_detector_radio            = wd_promin_idle_radio
+anm_sprint_watch_detector_radio      = wd_watch_idle_radio
+anm_to_watch_detector_radio          = wd_promin_to_watch_radio
+anm_from_watch_detector_radio        = wd_watch_to_promin_radio
+anm_holster_detector_radio           = wd_promin_holster_left_radio
+anm_holster_watch_detector_radio     = wd_watch_holster_left_radio
+anm_draw_detector_dosimeter          = wd_promin_draw_left_dosimeter
+anm_draw_watch_detector_dosimeter    = wd_watch_draw_left_dosimeter
+anm_idle_detector_dosimeter          = wd_promin_idle_dosimeter
+anm_idle_watch_detector_dosimeter    = wd_watch_idle_dosimeter
+anm_sprint_detector_dosimeter        = wd_promin_idle_dosimeter
+anm_sprint_watch_detector_dosimeter  = wd_watch_idle_dosimeter
+anm_to_watch_detector_dosimeter      = wd_promin_to_watch_dosimeter
+anm_from_watch_detector_dosimeter    = wd_watch_to_promin_dosimeter
+anm_holster_detector_dosimeter       = wd_promin_holster_left_dosimeter
+anm_holster_watch_detector_dosimeter = wd_watch_holster_left_dosimeter
+anm_draw_detector_anomalous          = wd_promin_draw_left_anomalous
+anm_draw_watch_detector_anomalous    = wd_watch_draw_left_anomalous
+anm_idle_detector_anomalous          = wd_promin_idle_anomalous
+anm_idle_watch_detector_anomalous    = wd_watch_idle_anomalous
+anm_sprint_detector_anomalous        = wd_promin_idle_anomalous
+anm_sprint_watch_detector_anomalous  = wd_watch_idle_anomalous
+anm_to_watch_detector_anomalous      = wd_promin_to_watch_anomalous
+anm_from_watch_detector_anomalous    = wd_watch_to_promin_anomalous
+anm_holster_detector_anomalous       = wd_promin_holster_left_anomalous
+anm_holster_watch_detector_anomalous = wd_watch_holster_left_anomalous
+anm_draw_detector_flashlight         = wd_promin_draw_left_flashlight
+anm_draw_watch_detector_flashlight   = wd_watch_draw_left_flashlight
+anm_idle_detector_flashlight         = wd_promin_idle_flashlight
+anm_idle_watch_detector_flashlight   = wd_watch_idle_flashlight
+anm_sprint_detector_flashlight       = wd_promin_idle_flashlight
+anm_sprint_watch_detector_flashlight = wd_watch_idle_flashlight
+anm_to_watch_detector_flashlight     = wd_promin_to_watch_flashlight
+anm_from_watch_detector_flashlight   = wd_watch_to_promin_flashlight
+anm_holster_detector_flashlight      = wd_promin_holster_left_flashlight
+anm_holster_watch_detector_flashlight= wd_watch_holster_left_flashlight
+anm_draw_swap           = wd_promin_draw_itm_swap
+anm_draw_watch_swap     = wd_watch_draw_itm_swap
+anm_holster_swap        = wd_promin_holster_itm_swap
+anm_holster_watch_swap  = wd_watch_holster_itm_swap
+

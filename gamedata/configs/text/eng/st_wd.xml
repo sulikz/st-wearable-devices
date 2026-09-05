@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="windows-1251" ?>
+<string_table>
+
+	<!-- General -->
+
+	<!-- MCM settings -->
+
+	<string id="ui_mcm_menu_wd">
+		<text>Wearable Devices</text>
+	</string>
+	<string id="ui_mcm_wd_title">
+		<text>Wearable Devices</text>
+	</string>
+	<string id="ui_mcm_wd_hold_key">
+		<text>Inspect key</text>
+	</string>
+	<string id="ui_mcm_wd_hold_key_desc">
+		<text>Tap: toggle Promin inspection. Hold: inspect the watch.</text>
+	</string>
+	<string id="ui_mcm_wd_tap_ms">
+		<text>Hold threshold (ms)</text>
+	</string>
+	<string id="ui_mcm_wd_tap_ms_desc">
+		<text>This controls hold timeout for watch inspection.</text>
+	</string>
+	<string id="ui_mcm_wd_double_tap_ms">
+		<text>Double tap threshold (ms)</text>
+	</string>
+	<string id="ui_mcm_wd_double_tap_ms_desc">
+		<text>This controls double tap timeout for switching Promin screens.</text>
+	</string>
+	<string id="ui_mcm_wd_gui_key">
+		<text>WD GUI key</text>
+	</string>
+	<string id="ui_mcm_wd_gui_key_desc">
+		<text>Open/close WD configuration GUI.</text>
+	</string>
+	<string id="ui_mcm_wd_gui_mod">
+		<text>WD GUI key modifier</text>
+	</string>
+	<string id="ui_mcm_wd_gui_mod_desc">
+		<text>Hold this modifier together with the WD GUI key to open it.</text>
+	</string>
+
+	<!-- Bracer -->
+
+	<string id="st_wd_bracer">
+		<text>Bracer</text>
+	</string>
+	<string id="st_wd_bracer_descr">
+		<text>Cloth bracer with sewn-in straps for mounting equipment.</text>
+	</string>
+	<string id="st_attach_wd_bracer">
+		<text>wear</text>
+	</string>
+	<string id="st_detach_wd_bracer">
+		<text>take off</text>
+	</string>
+
+	<!-- Promin -->
+
+	<string id="st_promin">
+		<text>Promin</text>
+	</string>
+	<string id="st_promin_descr">
+		<text>Military-issue tablet handed out by the Ukrainian Army for field health monitoring.\nModular design: extension units provide additional capabilities.\n
+		\n
+		FEATURES:\n
+		%c[d_cyan] • %c[pda_white] Biomonitor\n
+		%c[d_cyan] • %c[pda_white] Module bay\n
+		</text>
+	</string>
+	<string id="st_promin_attach_arm">
+		<text>attach to bracer</text>
+	</string>
+	<string id="st_promin_detach_arm">
+		<text>detach from bracer</text>
+	</string>
+	<string id="st_promin_2">
+		<text>Promin-2M</text>
+	</string>
+	<string id="st_promin_2_descr">
+		<text>Military-issue tablet handed out by the Ukrainian Army for field health monitoring.\nModular design - extension units provide additional capabilities.\nThis unit has an expanded module bay and improved battery capacity.\n
+		\n
+		FEATURES:\n
+		%c[d_cyan] • %c[pda_white] Biomonitor\n
+		%c[d_cyan] • %c[pda_white] Extended batterry life\n
+		%c[d_cyan] • %c[pda_white] Extra module bay\n
+		</text>
+	</string>
+	<string id="st_promin_module_map">
+		<text>Promin Navigation Unit</text>
+	</string>
+	<string id="st_promin_module_map_descr">
+		<text>Adds GPS receiver and topographic charts of Chernobyl Exclusion Zone.</text>
+	</string>
+	<string id="st_promin_module_conn">
+		<text>Promin Connector Module</text>
+	</string>
+	<string id="st_promin_module_conn_descr">
+		<text>NOT IMPLEMENTED</text>
+	</string>
+	<string id="st_promin_module_side">
+		<text>Promin Side Module</text>
+	</string>
+	<string id="st_promin_module_side_descr">
+		<text>NOT IMPLEMENTED</text>
+	</string>
+	<string id="st_wd_parts">
+		<text>Device Parts</text>
+	</string>
+	<string id="st_wd_parts_descr">
+		<text>Contains various salvaged electronics, circuit boards, wiring, connectors and sensor components.</text>
+	</string>
+	<string id="st_promin_module_install">
+		<text>install module</text>
+	</string>
+	<string id="st_promin_module_remove">
+		<text>remove module</text>
+	</string>
+
+	<!-- Vektor -->
+
+	<string id="st_vektor_name">
+		<text>Vektor</text>
+	</string>
+	<string id="st_vektor_descr">
+		<text>Military-issue field smartwatch built to survive.\n
+		\n
+		FEATURES:\n
+		%c[d_cyan] • %c[pda_white] Waypoint navigation\n
+		%c[d_cyan] • %c[pda_white] Compass \n
+		%c[d_cyan] • %c[pda_white] Energy score\n
+		%c[d_cyan] • %c[pda_white] Respirator time\n
+		</text>
+	</string>
+	<string id="st_vektor_2_name">
+		<text>Vektor-2M</text>
+	</string>
+	<string id="st_vektor_2_descr">
+		<text>Military-issue field smartwatch built to survive.\nThis piece has been adapted to the hardships of the Zone.\n
+		\n
+		FEATURES:\n
+		%c[d_cyan] • %c[pda_white] Waypoint navigation\n
+		%c[d_cyan] • %c[pda_white] Compass \n
+		%c[d_cyan] • %c[pda_white] Energy score\n
+		%c[d_cyan] • %c[pda_white] Respirator time\n
+		%c[d_cyan] • %c[pda_white] Anomaly &amp; artifact detection\n
+		</text>
+	</string>
+	<string id="st_attach_vektor">
+		<text>attach to bracer</text>
+	</string>
+	<string id="st_detach_vektor">
+		<text>detach from bracer</text>
+	</string>
+
+	<!-- Ulman's Watch -->
+
+	<string id="st_metro_watch_name">
+		<text>Ulman's Watch</text>
+	</string>
+	<string id="st_metro_watch_descr">
+		<text>Whatever the Stalker had seen in those tunnels, he kept to himself. The watch he didn't. Stalkers spread rumours of a black variant lost somewhere in the Zone.\n
+		\n
+		FEATURES:\n
+		%c[d_cyan] • %c[pda_white] Anomaly &amp; radiation detection\n
+		%c[d_cyan] • %c[pda_white] Respirator time\n
+		</text>
+	</string>
+	<string id="st_attach_metro_watch">
+		<text>attach to bracer</text>
+	</string>
+	<string id="st_detach_metro_watch">
+		<text>detach from bracer</text>
+	</string>
+
+	<!-- Glowstick -->
+
+	<string id="st_dev_glowstick_attach_arm">
+		<text>attach to bracer</text>
+	</string>
+	<string id="st_dev_glowstick_detach_arm">
+		<text>detach from bracer</text>
+	</string>
+
+	<!-- Customize -->
+
+	<string id="st_wd_customize">
+		<text>customize</text>
+	</string>
+	<string id="st_wd_slots_no_bracer">
+		<text>Wear the bracer first</text>
+	</string>
+	<string id="st_wd_customize_wrong_slot">
+		<text>Wrong slot for this device</text>
+	</string>
+	<string id="st_wd_customize_no_bracer">
+		<text>Wear the bracer first</text>
+	</string>
+	<string id="st_wd_customize_not_in_inventory">
+		<text>Item not in inventory</text>
+	</string>
+	<string id="st_wd_customize_attach_failed">
+		<text>Could not attach device</text>
+	</string>
+	<string id="st_wd_customize_not_registered">
+		<text>Device not registered</text>
+	</string>
+	<string id="st_wd_customize_module_locked">
+		<text>This tablet does not support that module</text>
+	</string>
+	<string id="st_wd_customize_module_installed">
+		<text>Module already installed</text>
+	</string>
+
+</string_table>

@@ -1,0 +1,972 @@
+local SECTION = "wd_promin"
+local HAND_SECTION = "wd_promin_hand"
+local ATT_NAME = "wd_promin"
+local ATT_MODULE_NAME = "wd_promin_module"
+local MODULES_KEY = "wd_promin_modules"
+local UI_BONE = "screen_bone"
+local EXO_BONE = "l_forearm"
+local EXO_UI_BONE = "wpn_body"
+
+local PAGE_KEY = "wd_promin_page"
+local CHARGE_KEY = "wd_promin_charge"
+local IDLE_UPDATE_MS = 1000
+local MAP_ZOOM_MIN = 50
+local MAP_ZOOM_MAX = 500
+local WHEEL_ZOOM_FACTOR = 1.15
+local WHEEL_SAVE_DELAY_MS = 1000
+local wheel_save_deadline = nil
+local page = "health"
+local map_view = nil
+local last_level_name = nil
+local marks_collector = nil
+local next_idle_update = 0
+local modules_installed = {}
+local owner
+
+local glow = wd_screen.new_screen_glow({
+    name = ATT_NAME,
+    config = d_promin_config,
+    is_lit = function()
+        return is_worn() and is_powered() and not wd_attach.is_screen_hidden(ATT_NAME)
+    end,
+})
+
+local function get_ui()
+    return _G[d_promin_config.get_ui_module()]
+end
+
+local function attach_model()
+    local desc = {
+        name = ATT_NAME,
+        model = d_promin_config.get_model(),
+        ui = d_promin_config.get_ui_module() .. ".get_ui",
+        ui_bone = UI_BONE,
+        transforms = d_promin_config.transforms,
+    }
+    if wd_exo.is_exo() then
+        desc.bone = EXO_BONE
+        desc.ui_bone = EXO_UI_BONE
+    else
+        desc.parent = d_bracer_config.SECTION
+    end
+    return wd_attach.attach(desc)
+end
+
+local function get_installed_index(name)
+    for index, installed in ipairs(modules_installed) do
+        if installed == name then
+            return index
+        end
+    end
+    return nil
+end
+
+function get_active_bay_ids()
+    if not owner.is_attached() then
+        return {}
+    end
+    return d_promin_config.get_active_bays()
+end
+
+local function has_bay(bay_id)
+    for _, tier_bay_id in ipairs(d_promin_config.get_active_bays()) do
+        if tier_bay_id == bay_id then
+            return true
+        end
+    end
+    return false
+end
+
+function is_bay_active(bay_id)
+    return owner.is_attached() and has_bay(bay_id)
+end
+
+function has_module(name)
+    if not get_installed_index(name) then
+        return false
+    end
+    local module = d_promin_config.get_module(name)
+    return module ~= nil and has_bay(module.bay)
+end
+
+local function get_bay_attachment_name(bay_id)
+    return ATT_MODULE_NAME .. "_" .. bay_id
+end
+
+local function get_bay_model(bay_id)
+    for _, module in ipairs(d_promin_config.MODULES) do
+        if module.bay == bay_id and module.model and has_module(module.name) then
+            return module.model
+        end
+    end
+    return d_promin_config.get_bay(bay_id).null_model
+end
+
+local function detach_module_bays()
+    for _, bay in ipairs(d_promin_config.BAYS) do
+        wd_attach.detach(get_bay_attachment_name(bay.id))
+    end
+end
+
+local function get_active_bays()
+    if wd_exo.is_exo() then
+        return {}
+    end
+    return d_promin_config.get_active_bays()
+end
+
+local function sync_module_attachment()
+    if not owner.is_attached() then
+        return
+    end
+    local active = {}
+    for _, bay_id in ipairs(get_active_bays()) do
+        active[bay_id] = true
+        wd_attach.attach({
+            name = get_bay_attachment_name(bay_id),
+            model = get_bay_model(bay_id),
+            parent = d_bracer_config.SECTION,
+            transforms = d_promin_config.transforms,
+        })
+    end
+    for _, bay in ipairs(d_promin_config.BAYS) do
+        if not active[bay.id] then
+            wd_attach.detach(get_bay_attachment_name(bay.id))
+        end
+    end
+end
+
+owner = wd_worn.new({
+    attach_label = "st_promin_attach_arm",
+    detach_label = "st_promin_detach_arm",
+    save_key = "wd_promin_worn",
+    get_obj_value = function(obj)
+        return obj and obj:section()
+    end,
+    on_attach = function(obj)
+        if not (obj and d_promin_config.set_active_tier(obj:section())) then
+            return false
+        end
+        if not wd_attach.get_visual_of(obj:section()) then
+            return false
+        end
+        if attach_model() == nil then
+            return false
+        end
+        sync_module_attachment()
+        return obj:section()
+    end,
+    on_detach = function()
+        wd_attach.detach(ATT_NAME)
+        detach_module_bays()
+        d_promin_config.reset_active_tier()
+    end,
+})
+
+function is_worn()
+    return owner.is_attached()
+end
+
+local function is_attachment_present()
+    return wd_attach.has_attachment(ATT_NAME)
+end
+
+function ensure_attached()
+    glow.sync()
+    if not owner.is_attached() then
+        return
+    end
+    if not wd_attach.get(ATT_NAME) then
+        attach_model()
+    end
+    for _, bay_id in ipairs(get_active_bays()) do
+        if not wd_attach.get(get_bay_attachment_name(bay_id)) then
+            sync_module_attachment()
+            break
+        end
+    end
+end
+
+local function get_tier_sections()
+    local sections = {}
+    for _, tier in ipairs(d_promin_config.TIERS) do
+        sections[#sections + 1] = tier.section
+    end
+    return sections
+end
+
+local function get_consumption()
+    local consumption = d_promin_config.get_battery_consumption()
+    for _, name in ipairs(modules_installed) do
+        local module = d_promin_config.get_module(name)
+        consumption = consumption + ((module and module.consumption) or 0)
+    end
+    return consumption
+end
+
+local battery = wd_battery.new({
+    section = SECTION,
+    sections = get_tier_sections(),
+    get_consumption = get_consumption,
+    get_item = owner.get_object,
+    is_draining = function()
+        return is_worn()
+    end,
+})
+
+function is_powered()
+    return not battery.is_dead()
+end
+
+function get_power_ratio()
+    return battery.get_ratio()
+end
+
+function update_battery()
+    battery.update()
+end
+
+function get_page()
+    return page
+end
+
+function get_available_pages()
+    local hidden = {}
+    for _, module in ipairs(d_promin_config.MODULES) do
+        if has_module(module.name) then
+            for _, page_id in ipairs(module.hides or {}) do
+                hidden[page_id] = true
+            end
+        end
+    end
+    local pages = {}
+    for _, page_id in ipairs(d_promin_config.get_pages() or {}) do
+        if not hidden[page_id] then
+            pages[#pages + 1] = page_id
+        end
+    end
+    for _, module in ipairs(d_promin_config.MODULES) do
+        if has_module(module.name) then
+            for _, page_id in ipairs(module.pages or {}) do
+                pages[#pages + 1] = page_id
+            end
+        end
+    end
+    return pages
+end
+
+function has_available_page(page_id)
+    for _, candidate in ipairs(get_available_pages()) do
+        if candidate == page_id then
+            return true
+        end
+    end
+    return false
+end
+
+function set_page(page_id)
+    if not has_available_page(page_id) then
+        return
+    end
+    page = page_id
+    get_ui().set_page(page)
+end
+
+local function ensure_valid_page()
+    if not has_available_page(page) then
+        set_page(get_available_pages()[1])
+    end
+end
+
+function toggle_page()
+    if not owner.is_attached() then
+        return
+    end
+    wd_audio.play("ui_button")
+    local pages = get_available_pages()
+    for index, page_id in ipairs(pages) do
+        if page_id == page then
+            set_page(pages[index % #pages + 1])
+            return
+        end
+    end
+    set_page(pages[1])
+end
+
+local function get_map_view()
+    if not map_view then
+        map_view = wd_map_minimap.new({})
+    end
+    return map_view
+end
+
+local function refresh_map_level()
+    local level_name = level.name()
+    if level_name ~= last_level_name then
+        last_level_name = level_name
+        get_map_view().refresh()
+    end
+end
+
+local function get_marks_collector()
+    if not marks_collector then
+        marks_collector = wd_map_marks.new({ max_marks = d_promin_map_ui.get_layout().max_marks })
+    end
+    return marks_collector
+end
+
+local mark_pos_scratch = { x = 0, y = 0, z = 0 }
+
+local function project_same_level_mark(player_pos, mark, zoom, screen)
+    mark_pos_scratch.x = mark.pos_x
+    mark_pos_scratch.z = mark.pos_z
+    return wd_map_minimap.project_mark(player_pos, mark_pos_scratch, zoom, screen.w, screen.h)
+end
+
+local function collect_marks(zoom, layout, player_pos, actor_level, range, tracked_id)
+    local marks = {}
+    local view = { pos = player_pos, level_id = actor_level, range = range }
+    for _, mark in ipairs(get_marks_collector().get_marks(view)) do
+        if #marks >= layout.max_marks then
+            break
+        end
+        if mark.id ~= tracked_id then
+            local projected = project_same_level_mark(player_pos, mark, zoom, layout.screen)
+            if projected and projected.inside then
+                projected.category = mark.category
+                projected.icon = mark.icon
+                marks[#marks + 1] = projected
+            end
+        end
+    end
+    return marks
+end
+
+local function get_map_frame()
+    local layout = d_promin_map_ui.get_layout()
+    local screen = layout.screen
+    local zoom = clamp(d_promin_config.transforms.map_zoom, MAP_ZOOM_MIN, MAP_ZOOM_MAX)
+    local span_y = zoom
+    local span_x = zoom * screen.w / screen.h
+    return {
+        layout = layout,
+        screen = screen,
+        zoom = zoom,
+        span_x = span_x,
+        span_y = span_y,
+        range = math.sqrt(span_x * span_x + span_y * span_y) / 2,
+    }
+end
+
+local function prefetch_attach_models()
+    for _, tier in ipairs(d_promin_config.TIERS) do
+        game.prefetch_model(tier.model)
+    end
+    for _, bay in ipairs(d_promin_config.BAYS) do
+        game.prefetch_model(bay.null_model)
+    end
+    for _, module in ipairs(d_promin_config.MODULES) do
+        if module.model then
+            game.prefetch_model(module.model)
+        end
+    end
+end
+
+local function get_quest_category(target)
+    if
+        target.storyline
+        or level.map_has_object_spot(target.id, "storyline_task_location") ~= 0
+        or level.map_has_object_spot(target.id, "storyline_task_location_complex_timer") ~= 0
+    then
+        return "quest"
+    end
+    return "quest_secondary"
+end
+
+local function project_quest_mark(player_pos, actor_level, target_id, zoom, screen)
+    local target_pos, target_gvid = wd_compass.get_target_pos_of(target_id)
+    if not target_pos then
+        return nil
+    end
+    local projected = wd_map_minimap.project_mark(player_pos, target_pos, zoom, screen.w, screen.h)
+    if projected and wd_compass.get_level_id_of(target_gvid) ~= actor_level then
+        projected.inside = false
+    end
+    return projected
+end
+
+local function collect_quest(target, zoom, screen, player_pos, actor_level)
+    if not target then
+        return nil
+    end
+    local projected = project_quest_mark(player_pos, actor_level, target.id, zoom, screen)
+    if projected then
+        projected.category = get_quest_category(target)
+    end
+    return projected
+end
+
+local function is_map_page(page_id)
+    return page_id == "map_small"
+end
+
+local function is_promin_raised()
+    local active_spec = wd_inspect.get_active_spec()
+    return wd_inspect.is_raised() and active_spec ~= nil and active_spec.id == SECTION
+end
+
+local function apply_wheel_zoom(direction)
+    if not is_map_page(page) then
+        return false
+    end
+    local zoom = d_promin_config.transforms.map_zoom
+    if direction > 0 then
+        zoom = zoom / WHEEL_ZOOM_FACTOR
+    else
+        zoom = zoom * WHEEL_ZOOM_FACTOR
+    end
+    zoom = clamp(math.floor(zoom + 0.5), MAP_ZOOM_MIN, MAP_ZOOM_MAX)
+    d_promin_config.set_map_zoom(zoom)
+    wheel_save_deadline = time_global() + WHEEL_SAVE_DELAY_MS
+    return true
+end
+
+local function update_wheel_save()
+    if not wheel_save_deadline then
+        return
+    end
+    if time_global() >= wheel_save_deadline or not is_promin_raised() then
+        wheel_save_deadline = nil
+        d_promin_config.save_global()
+    end
+end
+
+function update_screen()
+    if not (owner.is_attached() and is_map_page(page)) then
+        return
+    end
+    local raised = is_promin_raised()
+    if raised then
+        wd_map_spots.get_registry().request_sweep()
+    else
+        local now = time_global()
+        if now < next_idle_update then
+            return
+        end
+        next_idle_update = now + IDLE_UPDATE_MS
+    end
+    refresh_map_level()
+    local view = get_map_view()
+    local frame = get_map_frame()
+    local screen = frame.screen
+    local zoom = frame.zoom
+    local render_device = device()
+    local heading = wd_map_minimap.get_heading(render_device and render_device.cam_dir)
+    local state = { has_map = false, heading = heading }
+    local actor_pos = db.actor and db.actor:position()
+    if view.has_map() and actor_pos then
+        state.layers = view.get_layers(actor_pos, frame.span_x, frame.span_y)
+        state.has_map = state.layers ~= nil
+    end
+    local player_pos = wd_compass.get_actor_global_pos()
+    if db.actor and player_pos then
+        local actor_level = wd_compass.get_level_id_of(db.actor:game_vertex_id())
+        local target = wd_compass.get_active_task_target()
+        state.marks = collect_marks(zoom, frame.layout, player_pos, actor_level, frame.range, target and target.id)
+        state.quest = collect_quest(target, zoom, screen, player_pos, actor_level)
+    else
+        state.marks = {}
+    end
+    get_ui().update_map(state)
+end
+
+function get_menu_text(obj)
+    return owner.get_menu_text(obj)
+end
+
+function toggle_attach(obj)
+    wd_slots.toggle(obj)
+end
+
+function get_module_menu_text(obj)
+    local module = d_promin_config.get_module_of_section(obj and obj:section())
+    if not module then
+        return nil
+    end
+    if get_installed_index(module.name) or not is_bay_active(module.bay) then
+        return nil
+    end
+    return "st_promin_module_install"
+end
+
+function install_module(obj)
+    if not get_module_menu_text(obj) then
+        return
+    end
+    local module = d_promin_config.get_module_of_section(obj:section())
+    modules_installed[#modules_installed + 1] = module.name
+    alife_release(obj)
+    sync_module_attachment()
+    ensure_valid_page()
+end
+
+function get_installed_modules()
+    local installed = {}
+    for index, name in ipairs(modules_installed) do
+        installed[index] = name
+    end
+    return installed
+end
+
+function get_remove_module_menu_text(_obj)
+    if #modules_installed == 0 then
+        return nil
+    end
+    return "st_promin_module_remove"
+end
+
+function remove_module_at(index)
+    local name = modules_installed[index]
+    if not name then
+        return
+    end
+    local module = d_promin_config.get_module(name)
+    table.remove(modules_installed, index)
+    if db.actor and module then
+        alife_create_item(module.section, db.actor)
+    end
+    sync_module_attachment()
+    ensure_valid_page()
+end
+
+function remove_module(_obj)
+    remove_module_at(#modules_installed)
+end
+
+function save_state(m_data)
+    owner.save(m_data)
+    m_data[PAGE_KEY] = page
+    m_data[CHARGE_KEY] = battery.save()
+    m_data[MODULES_KEY] = get_installed_modules()
+end
+
+function load_state(m_data)
+    owner.load(m_data)
+    local value = owner.get_value()
+    if type(value) == "string" then
+        d_promin_config.set_active_tier(value)
+    end
+    modules_installed = {}
+    for _, name in ipairs(m_data[MODULES_KEY] or {}) do
+        if d_promin_config.get_module(name) then
+            modules_installed[#modules_installed + 1] = name
+        end
+    end
+    local saved_page = m_data[PAGE_KEY]
+    if not (saved_page and has_available_page(saved_page)) then
+        saved_page = get_available_pages()[1]
+    end
+    set_page(saved_page)
+    battery.load(m_data[CHARGE_KEY])
+end
+
+local function get_promin_spec()
+    return {
+        id = SECTION,
+        eligible = function()
+            return db.actor ~= nil
+        end,
+        get_hand_section = function()
+            return d_promin_config.get_hand_section()
+        end,
+        hand_offsets = function(watch_stance)
+            if watch_stance then
+                return d_watch_config.transforms.hand_pos, d_watch_config.transforms.hand_rot
+            end
+            return d_promin_config.transforms.hand_pos, d_promin_config.transforms.hand_rot
+        end,
+        variants = function()
+            return true
+        end,
+        looping = true,
+        on_attach = function()
+            get_ui().repaint()
+        end,
+        teardown_response = "soft",
+        yields_now = function()
+            return wd_blocking.is_hands_locked()
+        end,
+        on_double_tap = function()
+            toggle_page()
+        end,
+        on_wheel = apply_wheel_zoom,
+    }
+end
+
+function reapply_transforms()
+    local applied = wd_attach.reapply_transforms(ATT_NAME, d_promin_config.transforms)
+    for _, bay in ipairs(d_promin_config.BAYS) do
+        wd_attach.reapply_transforms(get_bay_attachment_name(bay.id), d_promin_config.transforms)
+    end
+    return applied
+end
+
+function resync_attachment()
+    if not owner.is_attached() then
+        return
+    end
+    detach_module_bays()
+    if attach_model() then
+        sync_module_attachment()
+    end
+end
+
+local COLOR_STEP = 5
+local COLOR_CHANNELS = { "Red", "Green", "Blue" }
+local color_group_index = 1
+
+local function get_color_group_index()
+    return color_group_index
+end
+
+local function set_color_group_index(index)
+    color_group_index = index
+end
+
+local color_rows = nil
+
+local function get_color_rows(group_index)
+    if not color_rows then
+        color_rows = {}
+        for index, group in ipairs(d_promin_config.COLOR_GROUPS) do
+            local rows = {}
+            for channel = 1, #COLOR_CHANNELS do
+                rows[channel] = { group.key, channel, COLOR_STEP, COLOR_CHANNELS[channel] }
+            end
+            color_rows[index] = rows
+        end
+    end
+    return color_rows[group_index]
+end
+
+local function register_gui()
+    local function repaint()
+        wd_inspect.repaint_active(SECTION, function()
+            get_ui().repaint()
+        end)
+    end
+    local emblem =
+        wd_gui.new_catalog_enum(d_promin_config.EMBLEMS, d_promin_config.get_emblem_index, { no_apply = true })
+    emblem.on_change = repaint
+    local function get_int_text(value)
+        return string.format("%d", math.floor(value + 0.5))
+    end
+    local function bind_repaint(slider)
+        slider.no_apply = true
+        slider.on_change = repaint
+        return slider
+    end
+    local function new_repaint_slider(min, max)
+        local slider = bind_repaint(wd_gui.new_slider(min or 0, max or 255))
+        slider.text = get_int_text
+        return slider
+    end
+    local color = new_repaint_slider()
+    local saturation = new_repaint_slider(0, 100)
+    local brightness = bind_repaint(wd_gui.new_percent_slider())
+    local hand = wd_gui.new_slider(-d_promin_config.HAND_RANGE, d_promin_config.HAND_RANGE)
+    local device_spec = {
+        is_worn = is_worn,
+        store = function()
+            return d_promin_config.transforms
+        end,
+        saved = function()
+            return d_promin_config.saved
+        end,
+        defaults = function()
+            return d_promin_config.get_defaults()
+        end,
+        save_global = d_promin_config.save_global,
+        on_apply = reapply_transforms,
+        fields = {
+            hand_pos = hand,
+            hand_rot = wd_gui.new_slider(-90, 90),
+            model_pos = wd_gui.new_slider(-0.3, 0.3),
+            model_rot = wd_gui.new_slider(-180, 180),
+            model_scale = wd_gui.new_slider(0.01, 3),
+            ui_pos = wd_gui.new_slider(-0.3, 0.3),
+            ui_rot = wd_gui.new_slider(-180, 180),
+            ui_scale = wd_gui.new_slider(0.01, 3),
+            emblem = emblem,
+            saturation = saturation,
+            brightness = brightness,
+            map_zoom = wd_gui.new_slider(50, 500),
+            map_x = wd_gui.new_slider(-0.05, 0.05),
+            map_y = wd_gui.new_slider(-0.05, 0.05),
+            map_scale = wd_gui.new_slider(0.1, 3),
+        },
+    }
+    for _, group in ipairs(d_promin_config.COLOR_GROUPS) do
+        device_spec.fields[group.key] = color
+    end
+    device_spec.id = SECTION
+    device_spec.label = "Promin"
+    wd_gui.register_device(device_spec)
+    local hand_spec = {
+        id = HAND_SECTION,
+        label = "L-Hand",
+        rank = 2,
+        is_worn = wd_slots.is_bracer_worn,
+        store = function()
+            return setmetatable({
+                watch_hand_pos = d_watch_config.transforms.hand_pos,
+                watch_hand_rot = d_watch_config.transforms.hand_rot,
+            }, { __index = d_promin_config.transforms })
+        end,
+        saved = function()
+            return setmetatable({
+                watch_hand_pos = d_watch_config.saved.hand_pos,
+                watch_hand_rot = d_watch_config.saved.hand_rot,
+            }, { __index = d_promin_config.saved })
+        end,
+        defaults = function()
+            return setmetatable({
+                watch_hand_pos = d_watch_config.DEFAULTS.hand_pos,
+                watch_hand_rot = d_watch_config.DEFAULTS.hand_rot,
+            }, { __index = d_promin_config.get_defaults() })
+        end,
+        save_global = function()
+            local promin_ok = d_promin_config.save_global()
+            local watch_ok = d_watch_config.save_global()
+            return promin_ok and watch_ok
+        end,
+        on_apply = function() end,
+        fields = {
+            hand_pos = hand,
+            hand_rot = wd_gui.new_slider(-90, 90),
+            watch_hand_pos = wd_gui.new_slider(-d_promin_config.HAND_RANGE, d_promin_config.HAND_RANGE),
+            watch_hand_rot = wd_gui.new_slider(-90, 90),
+        },
+    }
+    wd_gui.register_device(hand_spec)
+    wd_gui.register_tab({
+        device = SECTION,
+        id = "promin_skin",
+        label = "Promin",
+        rows = {
+            { "brightness", nil, 5, "Brightness" },
+            { "saturation", nil, 5, "Saturation" },
+        },
+        picker = {
+            options = d_promin_config.COLOR_GROUPS,
+            get = get_color_group_index,
+            set = set_color_group_index,
+            rows = get_color_rows,
+        },
+    })
+    local function get_hand_rows(pos_field, rot_field)
+        return {
+            { pos_field, 1, d_promin_config.HAND_STEP, "Position x" },
+            { pos_field, 2, d_promin_config.HAND_STEP, "Position y" },
+            { pos_field, 3, d_promin_config.HAND_STEP, "Position z" },
+            { rot_field, 1, 0.5, "Pitch (X)" },
+            { rot_field, 2, 0.5, "Yaw (Y)" },
+            { rot_field, 3, 0.5, "Roll (Z)" },
+        }
+    end
+    local HAND_ROWS = {
+        promin = get_hand_rows("hand_pos", "hand_rot"),
+        watch = get_hand_rows("watch_hand_pos", "watch_hand_rot"),
+        free = {},
+    }
+    wd_gui.register_tab({
+        device = HAND_SECTION,
+        id = "promin_hand",
+        label = "Hand",
+        rows = function()
+            return HAND_ROWS[wd_gui.get_pose()] or HAND_ROWS.free
+        end,
+    })
+    wd_gui.register_tab({
+        device = SECTION,
+        id = "promin_model",
+        dev = true,
+        label = "Device Position",
+        rows = {
+            { "model_pos", 1, 0.0005, "Position x" },
+            { "model_pos", 2, 0.0005, "Position y" },
+            { "model_pos", 3, 0.0005, "Position z" },
+            { "model_rot", 1, 0.25, "Yaw (Y)" },
+            { "model_rot", 2, 0.25, "Pitch (X)" },
+            { "model_rot", 3, 0.25, "Roll (Z)" },
+            { "model_scale", nil, 0.005, "Scale" },
+        },
+    })
+    wd_gui.register_tab({
+        device = SECTION,
+        id = "promin_ui",
+        dev = true,
+        label = "Display Position",
+        rows = {
+            { "ui_pos", 1, 0.0005, "Position x" },
+            { "ui_pos", 2, 0.0005, "Position y" },
+            { "ui_pos", 3, 0.0005, "Position z" },
+            { "ui_rot", 1, 1, "Yaw (Y)" },
+            { "ui_rot", 2, 1, "Pitch (X)" },
+            { "ui_rot", 3, 1, "Roll (Z)" },
+            { "ui_scale", nil, 0.01, "Scale" },
+        },
+    })
+    wd_gui.register_tab({
+        device = SECTION,
+        id = "promin_emblem",
+        dev = true,
+        label = "Emblem",
+        rows = {
+            { "emblem", nil, 1, "Emblem" },
+        },
+    })
+    wd_gui.register_tab({
+        device = SECTION,
+        id = "promin_map",
+        dev = true,
+        label = "Map",
+        rows = {
+            { "map_zoom", nil, 10, "Zoom (m)" },
+            { "map_x", nil, 0.001, "Offset x" },
+            { "map_y", nil, 0.001, "Offset y" },
+            { "map_scale", nil, 0.01, "Scale" },
+        },
+    })
+end
+
+function update_bleed_audio()
+    if owner.is_attached() and is_powered() then
+        wd_bleed.update()
+    else
+        wd_bleed.reset()
+    end
+end
+
+local function has_tier_item()
+    for _, tier in ipairs(d_promin_config.TIERS) do
+        if db.actor and db.actor:object(tier.section) then
+            return true
+        end
+    end
+    return false
+end
+
+function actor_on_first_update()
+    wd_bleed.reset()
+    if has_tier_item() then
+        get_ui().get_ui()
+        prefetch_attach_models()
+    end
+end
+
+local function build_consumption_line(consumption)
+    local units = { "st_ah_sec", "st_mah_sec", "st_uah_sec", "st_pah_sec" }
+    local value = consumption
+    local unit_index = 1
+    while value < 1 and unit_index < #units do
+        value = value * 1000
+        unit_index = unit_index + 1
+    end
+    return utils_xml.get_color("d_purple")
+        .. "  "
+        .. string.char(149)
+        .. " "
+        .. utils_xml.get_color("ui_gray_2")
+        .. " "
+        .. game.translate_string("st_ui_power_consumption")
+        .. ": "
+        .. utils_xml.get_color("ui_gray_1")
+        .. tostring(value)
+        .. " "
+        .. game.translate_string(units[unit_index])
+        .. " \\n"
+end
+
+local function get_section_consumption(section)
+    local tier = d_promin_config.get_tier_of(section)
+    if tier then
+        return tier.consumption
+    end
+    local module = d_promin_config.get_module_of_section(section)
+    return module and module.consumption
+end
+
+function install_description_hook()
+    if _G.wd_promin_desc_wrapped then
+        return
+    end
+    if not (ui_item and ui_item.build_desc_footer and utils_xml and utils_xml.get_color) then
+        return
+    end
+    local base_build_desc_footer = ui_item.build_desc_footer
+    ui_item.build_desc_footer = function(obj, sec, str)
+        local result = base_build_desc_footer(obj, sec, str)
+        local consumption = get_section_consumption(sec)
+        if consumption and result and result ~= "" then
+            result = result
+                .. utils_xml.get_color("ui_gray_1")
+                .. " "
+                .. game.translate_string("st_itm_desc_properties")
+                .. ":\\n"
+                .. build_consumption_line(consumption)
+        end
+        return result
+    end
+    _G.wd_promin_desc_wrapped = true
+end
+
+function register()
+    wd_slots.register_device({
+        id = "promin",
+        slot = "forearm",
+        matches_section = function(section)
+            return d_promin_config.get_tier_of(section) ~= nil
+        end,
+        owner = owner,
+        is_present = is_attachment_present,
+        resync = ensure_attached,
+    })
+    wd_inspect.register(get_promin_spec())
+    wd_exo.register_device({
+        id = "promin",
+        names = { ATT_NAME },
+        on_change = function(exo)
+            d_promin_config.set_variant(exo and d_promin_config.VARIANT_EXO or nil)
+            ensure_valid_page()
+        end,
+        resync = resync_attachment,
+    })
+    wd_core.register({
+        id = SECTION,
+        callbacks = {
+            actor_on_first_update = { actor_on_first_update },
+            actor_on_update = {
+                { ensure_attached, interval = 200 },
+                update_battery,
+                update_screen,
+                update_wheel_save,
+                update_bleed_audio,
+            },
+            save_state = { save_state },
+            load_state = { load_state },
+        },
+        on_start = function()
+            install_description_hook()
+            battery.reset()
+            modules_installed = {}
+            d_promin_config.load_transforms()
+            get_ui().repaint()
+            last_level_name = nil
+            next_idle_update = 0
+            wheel_save_deadline = nil
+        end,
+    })
+    wd_trader.register(d_promin_config.TIERS[1].section, 1)
+    register_gui()
+end

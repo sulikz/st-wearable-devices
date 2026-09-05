@@ -1,0 +1,27 @@
+local hud = wd_screen.new_static_hud({
+    class_name = "UIVektorArrow",
+    xml_file = "ui_vektor_arrow.xml",
+    window = "vektor_arrow",
+    node = "vektor_arrow:arrow",
+    texture = "vektor_arrow",
+    get_brightness = function()
+        return d_vektor_config.transforms.brightness
+    end,
+})
+
+apply_alpha = hud.apply_alpha
+
+function set_shown(shown)
+    local screen = hud.get()
+    if screen then
+        screen:set_shown(shown)
+    end
+end
+
+function show_hud()
+    return hud.show()
+end
+
+function close_hud()
+    hud.close()
+end

@@ -1,0 +1,239 @@
+local ANM_PITCH_PRE = [[wd\wd_freelook_pitch_pre.anm]]
+local ANM_YAW = [[wd\wd_freelook_yaw.anm]]
+local ANM_PITCH = [[wd\wd_freelook_pitch.anm]]
+local LEFT_HAND_PART = 1
+local LAYER_SPEED = 1
+local YAW_SIGN = 1
+local PITCH_SIGN = 1
+local DEFAULT_HUD_FOV = 0.6
+local RAMP_MS = 300
+local MAX_FRAME_MS = 200
+local HEAL_TURN_RAD = 0.6
+local HEAL_SPLIT_MAX = 0.08
+local REENGAGE_SPLIT = 0.25
+local REENGAGE_MS = 400
+local SETTINGS_REFRESH_MS = 1000
+
+local engage_ramp = 0
+local toggle_engaged = false
+local freelook_key_down = false
+local suppressed = false
+local last_tick_ms = nil
+local layer_live = false
+local prev_cam_heading = nil
+local cam_turn_accum = 0
+local split_high_since_ms = nil
+
+local function get_pitch(dir)
+    return math.atan2(dir.y, math.sqrt(dir.x * dir.x + dir.z * dir.z))
+end
+
+local cached_toggle_mode = false
+local cached_freelook_dik = nil
+local cached_hud_fov = DEFAULT_HUD_FOV
+local allow_settings_refresh = wd_core.throttle(SETTINGS_REFRESH_MS)
+
+local function get_active_item_fov(fallback)
+    local item = db.actor and db.actor:active_item()
+    if not item then
+        return fallback
+    end
+    local section = item:section()
+    local base_fov = ini_sys:r_float_ex(section, "hud_fov") or 0
+    local addition = ini_sys:r_float_ex(section, "hud_fov_addition_modifier") or 0
+    if base_fov <= 0 then
+        base_fov = fallback
+    end
+    return base_fov + addition
+end
+
+local function refresh_settings()
+    if not allow_settings_refresh() then
+        return
+    end
+    local console = get_console()
+    cached_toggle_mode = console:get_bool("g_freelook_toggle") == true
+    cached_freelook_dik = bind_to_dik(key_bindings.kFREELOOK)
+    local hud_fov = console:get_float("hud_fov")
+    if not hud_fov or hud_fov <= 0 or hud_fov > 1 then
+        hud_fov = DEFAULT_HUD_FOV
+    end
+    hud_fov = get_active_item_fov(hud_fov)
+    if hud_fov <= 0 or hud_fov > 1 then
+        hud_fov = DEFAULT_HUD_FOV
+    end
+    cached_hud_fov = hud_fov
+end
+
+local function is_toggle_mode()
+    return cached_toggle_mode
+end
+
+local function is_freelook_key_down()
+    return cached_freelook_dik ~= nil and key_state(cached_freelook_dik) == 1
+end
+
+local function reset_heal_window()
+    cam_turn_accum = 0
+end
+
+local function update_engagement(yaw_split, cam_heading, now_ms)
+    local key_down = is_freelook_key_down()
+    local pressed_edge = key_down and not freelook_key_down
+    freelook_key_down = key_down
+    local toggle_mode = is_toggle_mode()
+
+    local engaged
+    if toggle_mode then
+        if pressed_edge then
+            toggle_engaged = not toggle_engaged
+            suppressed = false
+            reset_heal_window()
+        end
+        engaged = toggle_engaged
+    else
+        toggle_engaged = false
+        if not key_down then
+            suppressed = false
+        end
+        if pressed_edge then
+            reset_heal_window()
+        end
+        engaged = key_down and not suppressed
+    end
+
+    local heading_delta = 0
+    if prev_cam_heading then
+        heading_delta = math.abs(wd_compass.normalize_angle(cam_heading - prev_cam_heading))
+    end
+    prev_cam_heading = cam_heading
+
+    local split = math.abs(yaw_split)
+    if engaged then
+        split_high_since_ms = nil
+        if split > HEAL_SPLIT_MAX then
+            cam_turn_accum = 0
+        else
+            cam_turn_accum = cam_turn_accum + heading_delta
+        end
+        if cam_turn_accum > HEAL_TURN_RAD then
+            if toggle_mode then
+                toggle_engaged = false
+            else
+                suppressed = true
+            end
+            engaged = false
+            reset_heal_window()
+        end
+    elseif toggle_mode and split > REENGAGE_SPLIT then
+        split_high_since_ms = split_high_since_ms or now_ms
+        if now_ms - split_high_since_ms >= REENGAGE_MS then
+            toggle_engaged = true
+            engaged = true
+            split_high_since_ms = nil
+            reset_heal_window()
+        end
+    else
+        split_high_since_ms = nil
+    end
+    return engaged
+end
+
+local function step_ramp(engaged, now_ms)
+    local delta_ms = last_tick_ms and (now_ms - last_tick_ms) or 0
+    last_tick_ms = now_ms
+    delta_ms = clamp(delta_ms, 0, MAX_FRAME_MS)
+    local step = delta_ms / RAMP_MS
+    engage_ramp = clamp(engage_ramp + (engaged and step or -step), 0, 1)
+end
+
+local function fade_layers_out()
+    if layer_live then
+        game.stop_hud_anm(ANM_PITCH_PRE, false)
+        game.stop_hud_anm(ANM_YAW, false)
+        game.stop_hud_anm(ANM_PITCH, false)
+        layer_live = false
+    end
+end
+
+local layers_primed = false
+
+local function prime_layer_order()
+    if layers_primed then
+        return
+    end
+    game.play_hud_anm(ANM_PITCH_PRE, LEFT_HAND_PART, LAYER_SPEED, 0, true, true)
+    game.play_hud_anm(ANM_YAW, LEFT_HAND_PART, LAYER_SPEED, 0, true, true)
+    game.play_hud_anm(ANM_PITCH, LEFT_HAND_PART, LAYER_SPEED, 0, true, true)
+    game.stop_hud_anm(ANM_PITCH_PRE, true)
+    game.stop_hud_anm(ANM_YAW, true)
+    game.stop_hud_anm(ANM_PITCH, true)
+    layers_primed = true
+end
+
+function apply()
+    local actor = db.actor
+    if not actor then
+        return
+    end
+    prime_layer_order()
+    local body_dir = actor:direction()
+    local cam_dir = device().cam_dir
+    if not (body_dir and cam_dir) then
+        return
+    end
+    refresh_settings()
+    local cam_heading = wd_compass.get_heading(cam_dir)
+    local yaw_split = wd_compass.normalize_angle(wd_compass.get_heading(body_dir) - cam_heading)
+    local now_ms = time_global()
+    local engaged = update_engagement(yaw_split, cam_heading, now_ms)
+    step_ramp(engaged, now_ms)
+    if not wd_inspect.is_pose_held() then
+        fade_layers_out()
+        return
+    end
+    if engage_ramp <= 0 and not engaged then
+        fade_layers_out()
+        return
+    end
+    local pre_power = 0
+    local yaw_power = 0
+    local post_power = 0
+    if engage_ramp > 0 then
+        local hud_fov = cached_hud_fov
+        yaw_power = yaw_split * hud_fov * YAW_SIGN * engage_ramp
+        local cam_pitch = get_pitch(cam_dir)
+        local flatten_factor = cam_pitch > 0 and hud_fov or hud_fov / 2
+        local base_pitch = cam_pitch * (1 - flatten_factor * engage_ramp)
+        local target_pitch = cam_pitch * (1 - engage_ramp)
+        pre_power = base_pitch * PITCH_SIGN
+        post_power = -target_pitch * PITCH_SIGN
+    end
+    game.play_hud_anm(ANM_PITCH_PRE, LEFT_HAND_PART, LAYER_SPEED, pre_power, true, true)
+    game.play_hud_anm(ANM_YAW, LEFT_HAND_PART, LAYER_SPEED, yaw_power, true, true)
+    game.play_hud_anm(ANM_PITCH, LEFT_HAND_PART, LAYER_SPEED, post_power, true, true)
+    layer_live = true
+end
+
+function reset()
+    engage_ramp = 0
+    toggle_engaged = false
+    freelook_key_down = false
+    suppressed = false
+    last_tick_ms = nil
+    layer_live = false
+    layers_primed = false
+    prev_cam_heading = nil
+    cam_turn_accum = 0
+    split_high_since_ms = nil
+end
+
+function register()
+    wd_core.register({
+        id = "wd_hands_freelook",
+        callbacks = {
+            actor_on_update = { apply },
+        },
+        on_start = reset,
+    })
+end

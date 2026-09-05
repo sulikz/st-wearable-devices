@@ -1,0 +1,137 @@
+<w>
+<file name="ui\ui_global_map">
+	<texture id="wd_map_global" x="0" y="0" width="4096" height="8192"/>
+</file>
+<file name="map\map_aes_1">
+	<texture id="wd_lvl_aes_1" x="0" y="0" width="2048" height="1024"/>
+</file>
+<file name="map\map_aes_2">
+	<texture id="wd_lvl_aes_2" x="0" y="0" width="2048" height="1024"/>
+</file>
+<file name="map\map_agroprom">
+	<texture id="wd_lvl_agroprom" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_agroprom_underground">
+	<texture id="wd_lvl_agroprom_underground" x="0" y="0" width="512" height="1024"/>
+</file>
+<file name="map\map_bar">
+	<texture id="wd_lvl_bar" x="0" y="0" width="1024" height="2048"/>
+</file>
+<file name="map\map_darkvalley">
+	<texture id="wd_lvl_darkvalley" x="0" y="0" width="1024" height="2048"/>
+</file>
+<file name="map\map_escape">
+	<texture id="wd_lvl_escape" x="0" y="0" width="2048" height="4096"/>
+</file>
+<file name="map\map_fake_start">
+	<texture id="wd_lvl_fake_start" x="0" y="0" width="1024" height="1024"/>
+</file>
+<file name="map\map_garbage">
+	<texture id="wd_lvl_garbage" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_grimwood">
+	<texture id="wd_lvl_grimwood" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_hospital">
+	<texture id="wd_lvl_hospital" x="0" y="0" width="512" height="1024"/>
+</file>
+<file name="map\map_jupiter">
+	<texture id="wd_lvl_jupiter" x="0" y="0" width="4096" height="4096"/>
+</file>
+<file name="map\map_jupiter_underground">
+	<texture id="wd_lvl_jupiter_underground" x="0" y="0" width="1024" height="1024"/>
+</file>
+<file name="map\map_k01_darkscape">
+	<texture id="wd_lvl_k01_darkscape" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_k02_trucks_cemetery">
+	<texture id="wd_lvl_k02_trucks_cemetery" x="0" y="0" width="4096" height="4096"/>
+</file>
+<file name="map\map_l03u_agr_underground">
+	<texture id="wd_lvl_l03u_agr_underground" x="0" y="0" width="1024" height="1024"/>
+</file>
+<file name="map\map_l04_darkvalley">
+	<texture id="wd_lvl_l04_darkvalley" x="0" y="0" width="1024" height="2048"/>
+</file>
+<file name="map\map_l04u_labx18">
+	<texture id="wd_lvl_l04u_labx18" x="0" y="0" width="1024" height="1024"/>
+</file>
+<file name="map\map_l05_bar">
+	<texture id="wd_lvl_l05_bar" x="0" y="0" width="1024" height="2048"/>
+</file>
+<file name="map\map_l06_rostok">
+	<texture id="wd_lvl_l06_rostok" x="0" y="0" width="1024" height="2048"/>
+</file>
+<file name="map\map_l07_military">
+	<texture id="wd_lvl_l07_military" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_l08_yantar">
+	<texture id="wd_lvl_l08_yantar" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_l08u_brainlab">
+	<texture id="wd_lvl_l08u_brainlab" x="0" y="0" width="512" height="256"/>
+</file>
+<file name="map\map_l09_deadcity">
+	<texture id="wd_lvl_l09_deadcity" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_l10_radar">
+	<texture id="wd_lvl_l10_radar" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_l11_pripyat">
+	<texture id="wd_lvl_l11_pripyat" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_l12_stancia">
+	<texture id="wd_lvl_l12_stancia" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_l12u_control_monolith">
+	<texture id="wd_lvl_l12u_control_monolith" x="0" y="0" width="1024" height="1024"/>
+</file>
+<file name="map\map_l12u_control_monolith_1">
+	<texture id="wd_lvl_l12u_control_monolith_1" x="0" y="0" width="1024" height="1024"/>
+</file>
+<file name="map\map_l13_generators">
+	<texture id="wd_lvl_l13_generators" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_labx8">
+	<texture id="wd_lvl_labx8" x="0" y="0" width="512" height="512"/>
+</file>
+<file name="map\map_limansk">
+	<texture id="wd_lvl_limansk" x="0" y="0" width="1024" height="2048"/>
+</file>
+<file name="map\map_marsh">
+	<texture id="wd_lvl_marsh" x="0" y="0" width="4096" height="4096"/>
+</file>
+<file name="map\map_military">
+	<texture id="wd_lvl_military" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_nomap">
+	<texture id="wd_lvl_nomap" x="0" y="0" width="16" height="16"/>
+</file>
+<file name="map\map_poselok_ug">
+	<texture id="wd_lvl_poselok_ug" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_pripyat">
+	<texture id="wd_lvl_pripyat" x="0" y="0" width="4096" height="4096"/>
+</file>
+<file name="map\map_promzona">
+	<texture id="wd_lvl_promzona" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_radar">
+	<texture id="wd_lvl_radar" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_red_forest">
+	<texture id="wd_lvl_red_forest" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_stancia_2">
+	<texture id="wd_lvl_stancia_2" x="0" y="0" width="2048" height="1024"/>
+</file>
+<file name="map\map_y04_pole">
+	<texture id="wd_lvl_y04_pole" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_yantar">
+	<texture id="wd_lvl_yantar" x="0" y="0" width="2048" height="2048"/>
+</file>
+<file name="map\map_zaton">
+	<texture id="wd_lvl_zaton" x="0" y="0" width="4096" height="4096"/>
+</file>
+</w>

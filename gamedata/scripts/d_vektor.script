@@ -1,0 +1,534 @@
+local SECTION = d_vektor_config.SECTION
+local UI_BONE = "wpn_body"
+
+local ATT_NAME = SECTION
+local RING_NAME = "vektor_ring"
+local ARROW_NAME = "vektor_arrow"
+
+local glow = wd_screen.new_screen_glow({
+    name = ATT_NAME,
+    config = d_vektor_config,
+    is_lit = function()
+        return is_worn() and not wd_exo.is_exo()
+    end,
+})
+
+local function new_led_glow(att_name, color, get_offset)
+    return wd_attach.new_blink_glow({
+        name = att_name,
+        color = color,
+        range = d_vektor_config.LED_RANGE,
+        get_offset = get_offset,
+        is_lit = function()
+            return is_worn() and not wd_exo.is_exo()
+        end,
+    })
+end
+
+local anomaly_led = new_led_glow(RING_NAME, d_vektor_config.LED_ANOMALY_COLOR, function()
+    return d_vektor_config.LED_ANOMALY_OFFSET
+end)
+local artefact_led = new_led_glow(ARROW_NAME, d_vektor_config.LED_ARTEFACT_COLOR, function()
+    return d_vektor_config.LED_ARTEFACT_OFFSET
+end)
+
+local bulbs = wd_attach.new_bulb_set({
+    name = ATT_NAME,
+    texture = d_vektor_config.BULB_TEXTURE,
+    get_texture = d_vektor_config.get_bulb_texture,
+    order = d_vektor_config.BULBS,
+})
+
+local function get_ui()
+    return _G[d_vektor_config.get_ui_module()]
+end
+
+local function get_ring_ui()
+    return _G[d_vektor_config.get_active_tier().ring_ui]
+end
+
+local function get_arrow_ui()
+    return _G[d_vektor_config.get_active_tier().arrow_ui]
+end
+
+local owner = wd_worn.new({
+    attach_label = "st_attach_vektor",
+    detach_label = "st_detach_vektor",
+    save_key = "vektor_worn",
+    get_obj_value = function(obj)
+        return obj and obj:section()
+    end,
+    wear_group = "watch",
+    on_attach = function(obj)
+        if not (obj and d_vektor_config.set_active_tier(obj:section())) then
+            return false
+        end
+        if not sync_attachment() then
+            return false
+        end
+        return obj:section()
+    end,
+    on_detach = function()
+        sync_attachment()
+        d_vektor_config.reset_active_tier()
+    end,
+})
+
+function is_worn()
+    return owner.is_attached()
+end
+
+local function is_attachment_present()
+    return wd_attach.has_attachment(ATT_NAME)
+end
+
+local function is_sensor_ready()
+    return is_worn() and is_attachment_present()
+end
+
+local anomaly_sensor = wd_sensor_anomaly.new({
+    group = "d_vektor_anomaly",
+    enabled = function()
+        return is_sensor_ready() and d_vektor_config.has_sensor("anomaly")
+    end,
+    on_blink = function()
+        wd_audio.play("anomaly_blink")
+        bulbs.anomaly.set_on(true)
+        anomaly_led.set_on(true)
+    end,
+    off = function()
+        bulbs.anomaly.set_on(false)
+        anomaly_led.set_on(false)
+    end,
+})
+
+local artefact_sensor = wd_sensor_artefact.new({
+    group = "d_vektor_artefact",
+    enabled = function()
+        return is_sensor_ready() and d_vektor_config.has_sensor("artefact")
+    end,
+    on_blink = function()
+        wd_audio.play("artefact_blink")
+        bulbs.artefact.set_on(true)
+        artefact_led.set_on(true)
+    end,
+    off = function()
+        bulbs.artefact.set_on(false)
+        artefact_led.set_on(false)
+    end,
+})
+
+local compass = wd_compass.new({})
+
+local SPIN_SIGN = -1
+local ARROW_SIGN = -1
+
+local function get_overlay_transforms(prefix)
+    local transforms = d_vektor_config.transforms
+    local base = transforms.ui_pos
+    local delta = transforms[prefix .. "_ui_pos"]
+    return {
+        model_pos = transforms.model_pos,
+        model_rot = transforms.model_rot,
+        model_scale = transforms.model_scale,
+        ui_pos = { base[1] + delta[1], base[2] + delta[2], base[3] + delta[3] },
+        ui_rot = transforms.ui_rot,
+        ui_scale = transforms.ui_scale * transforms[prefix .. "_ui_scale"],
+    }
+end
+
+function sync_attachment()
+    glow.sync()
+    anomaly_led.sync()
+    artefact_led.sync()
+    if not is_worn() then
+        wd_attach.detach(ATT_NAME)
+        wd_attach.detach(RING_NAME)
+        wd_attach.detach(ARROW_NAME)
+        return nil
+    end
+    local transforms = d_vektor_config.transforms
+    local model = d_vektor_config.get_model()
+    local body = wd_attach.attach({
+        name = ATT_NAME,
+        model = model,
+        parent = d_bracer_config.SECTION,
+        ui = d_vektor_config.get_ui_module() .. ".show_hud",
+        ui_bone = UI_BONE,
+        transforms = {
+            model_pos = transforms.model_pos,
+            model_rot = transforms.model_rot,
+            model_scale = transforms.model_scale,
+            ui_pos = transforms.ui_pos,
+            ui_rot = transforms.ui_rot,
+            ui_scale = transforms.ui_scale,
+        },
+    })
+    if not body then
+        wd_attach.detach(RING_NAME)
+        wd_attach.detach(ARROW_NAME)
+        return nil
+    end
+    bulbs.resolve()
+    local tier = d_vektor_config.get_active_tier()
+    local overlays = {
+        { name = RING_NAME, ui = tier.ring_ui, prefix = "ring" },
+        { name = ARROW_NAME, ui = tier.arrow_ui, prefix = "arrow" },
+    }
+    for _, overlay in ipairs(overlays) do
+        wd_attach.attach({
+            name = overlay.name,
+            model = model,
+            parent = d_bracer_config.SECTION,
+            ui = overlay.ui .. ".show_hud",
+            ui_bone = UI_BONE,
+            transforms = get_overlay_transforms(overlay.prefix),
+            bone_visible = { wpn_body = false },
+        })
+    end
+    return body
+end
+
+function spin_ring(north_angle, ring_att)
+    local ring = ring_att or wd_attach.get(RING_NAME)
+    if not ring then
+        return
+    end
+    local rot = d_vektor_config.transforms.ui_rot
+    local roll = 0
+    if north_angle then
+        roll = SPIN_SIGN * math.deg(north_angle) + d_vektor_config.transforms.ring_offset
+    end
+    ring:set_ui_rotation(rot[1], rot[2], rot[3] + roll)
+end
+
+function spin_arrow(target_angle, arrow_att)
+    local arrow = arrow_att or wd_attach.get(ARROW_NAME)
+    if target_angle == nil or not arrow then
+        get_arrow_ui().set_shown(false)
+        return
+    end
+    get_arrow_ui().set_shown(true)
+    local rot = d_vektor_config.transforms.ui_rot
+    local roll = ARROW_SIGN * math.deg(target_angle) + d_vektor_config.transforms.compass_offset
+    arrow:set_ui_rotation(rot[1], rot[2], rot[3] + roll)
+end
+
+function reapply_transforms()
+    glow.sync()
+    return wd_attach.reapply_transforms(ATT_NAME, d_vektor_config.transforms)
+end
+
+local function reapply_overlay(att_name, prefix)
+    if not wd_attach.get(att_name) then
+        return
+    end
+    wd_attach.reapply_transforms(att_name, get_overlay_transforms(prefix))
+end
+
+function reapply_ring()
+    reapply_overlay(RING_NAME, "ring")
+end
+
+function reapply_arrow()
+    reapply_overlay(ARROW_NAME, "arrow")
+end
+
+function reapply_alpha()
+    get_ui().apply_alpha()
+    get_ring_ui().apply_alpha()
+    get_arrow_ui().apply_alpha()
+    glow.sync()
+end
+
+local MIN_TARGET_DISTANCE = 0.5
+
+local cached_target_pos = nil
+local cached_distance = nil
+
+local camera_basis = {}
+
+local function get_camera_basis()
+    local render_device = device()
+    camera_basis.right = render_device.cam_right
+    camera_basis.top = render_device.cam_top
+    camera_basis.dir = render_device.cam_dir
+    return camera_basis
+end
+
+local function get_arrow_angle(frame, camera)
+    if not cached_target_pos then
+        return nil, false
+    end
+    local here = compass.get_actor_pos()
+    if not here then
+        return nil, false
+    end
+    local dir_x = cached_target_pos.x - here.x
+    local dir_z = cached_target_pos.z - here.z
+    if dir_x * dir_x + dir_z * dir_z < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE then
+        return nil, false
+    end
+    return wd_compass.get_dial_angle(frame, camera, dir_x, dir_z), true
+end
+
+local function update_pointers()
+    local camera = get_camera_basis()
+    local parent = wd_attach.get_parent_of(ATT_NAME)
+    local body = wd_attach.get_from(parent, ATT_NAME)
+    local frame = wd_attach.get_ui_frame(ATT_NAME, d_vektor_config.transforms.ui_rot, body)
+    local arrow_angle, has_target = get_arrow_angle(frame, camera)
+    if arrow_angle or not has_target then
+        spin_arrow(arrow_angle, wd_attach.get_from(parent, ARROW_NAME))
+    end
+    local north_angle = wd_compass.get_dial_angle(frame, camera, 0, 1)
+    if north_angle then
+        spin_ring(north_angle, wd_attach.get_from(parent, RING_NAME))
+    end
+end
+
+function update_pointers_if_worn()
+    if is_worn() then
+        update_pointers()
+    end
+end
+
+local function update_status_bar()
+    local mode = d_vektor_config.get_status_bar()
+    if mode ~= "stamina" then
+        local capacity = wd_toxic.get_filter_capacity()
+        if capacity or mode == "toxic" then
+            get_ui().set_status_bar(true, capacity or 0)
+            return
+        end
+    end
+    get_ui().set_status_bar(false, db.actor and db.actor.power or 0)
+end
+
+function update_status_bar_if_worn()
+    if is_worn() then
+        update_status_bar()
+    end
+end
+
+function actor_on_update()
+    if is_worn() then
+        cached_target_pos, cached_distance = compass.get_target()
+        get_ui().set_distance(cached_distance)
+        update_status_bar()
+    end
+end
+
+function update_proximity_sensors()
+    anomaly_sensor.update()
+    artefact_sensor.update()
+end
+
+function actor_on_first_update()
+    anomaly_sensor.reset()
+    artefact_sensor.reset()
+    owner.detach_if_dropped()
+    sync_attachment()
+end
+
+function get_menu_text(obj)
+    return owner.get_menu_text(obj)
+end
+
+function toggle_attach(obj)
+    wd_slots.toggle(obj)
+end
+
+function load_state(m_data)
+    owner.load(m_data)
+    local value = owner.get_value()
+    if type(value) == "string" then
+        d_vektor_config.set_active_tier(value)
+    end
+end
+
+local function new_status_bar_field()
+    local status_bar =
+        wd_gui.new_catalog_enum(d_vektor_config.STATUS_BARS, d_vektor_config.get_status_bar_index, { no_apply = true })
+    status_bar.on_change = update_status_bar_if_worn
+    return status_bar
+end
+
+local function register_gui()
+    local has_gauge = wd_toxic.is_installed()
+
+    wd_gui.register_device({
+        id = "vektor",
+        label = "Vektor",
+        is_worn = is_attachment_present,
+        store = function()
+            return d_vektor_config.transforms
+        end,
+        saved = function()
+            return d_vektor_config.saved
+        end,
+        defaults = function()
+            return d_vektor_config.DEFAULTS
+        end,
+        save_global = d_vektor_config.save_global,
+        on_apply = function()
+            reapply_transforms()
+            reapply_ring()
+            reapply_arrow()
+            reapply_alpha()
+            get_ui().apply_digit_layout()
+        end,
+        fields = {
+            model_pos = wd_gui.new_slider(-0.3, 0.3),
+            model_rot = wd_gui.new_slider(-180, 180),
+            model_scale = wd_gui.new_slider(0.01, 3),
+            ui_pos = wd_gui.new_slider(-0.1, 0.1),
+            ui_rot = wd_gui.new_slider(-180, 180),
+            ui_scale = wd_gui.new_slider(0.01, 3),
+            dig_dx = wd_gui.new_slider(-0.05, 0.05),
+            dig_dy = wd_gui.new_slider(-0.05, 0.05),
+            dig_scale = wd_gui.new_slider(0.1, 3),
+            ring_ui_pos = wd_gui.new_slider(-0.1, 0.1),
+            ring_ui_scale = wd_gui.new_slider(0.01, 3),
+            ring_offset = wd_gui.new_slider(-180, 180),
+            arrow_ui_pos = wd_gui.new_slider(-0.1, 0.1),
+            arrow_ui_scale = wd_gui.new_slider(0.01, 3),
+            compass_offset = wd_gui.new_slider(-180, 180),
+            brightness = wd_gui.new_percent_slider(),
+            status_bar = has_gauge and new_status_bar_field() or nil,
+        },
+    })
+
+    local screen_rows = {
+        { "brightness", nil, 5, "Brightness" },
+    }
+    if has_gauge then
+        screen_rows[#screen_rows + 1] = { "status_bar", nil, 1, "Gauge" }
+    end
+
+    wd_gui.register_tab({
+        device = "vektor",
+        id = "vektor_screen",
+        label = "Vektor",
+        rows = screen_rows,
+    })
+
+    wd_gui.register_tab({
+        device = "vektor",
+        id = "vektor_model",
+        dev = true,
+        label = "Position",
+        rows = {
+            { "model_pos", 1, 0.0005, "Position x" },
+            { "model_pos", 2, 0.0005, "Position y" },
+            { "model_pos", 3, 0.0005, "Position z" },
+            { "model_rot", 1, 0.05, "Yaw (Y)" },
+            { "model_rot", 2, 0.05, "Pitch (X)" },
+            { "model_rot", 3, 0.05, "Roll (Z)" },
+            { "model_scale", nil, 0.001, "Scale" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "vektor",
+        id = "vektor_display",
+        dev = true,
+        label = "Display",
+        rows = {
+            { "ui_pos", 1, 0.00005, "Position x" },
+            { "ui_pos", 2, 0.00005, "Position y" },
+            { "ui_pos", 3, 0.00005, "Position z" },
+            { "ui_rot", 1, 0.05, "Yaw (Y)" },
+            { "ui_rot", 2, 0.05, "Pitch (X)" },
+            { "ui_rot", 3, 0.05, "Roll (Z)" },
+            { "ui_scale", nil, 0.001, "Scale" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "vektor",
+        id = "vektor_digits",
+        dev = true,
+        label = "Digits",
+        rows = {
+            { "dig_dx", nil, 0.00005, "Offset x" },
+            { "dig_dy", nil, 0.00005, "Offset y" },
+            { "dig_scale", nil, 0.0025, "Scale" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "vektor",
+        id = "vektor_compass",
+        dev = true,
+        label = "Ring",
+        default = true,
+        rows = {
+            { "ring_ui_pos", 1, 0.00005, "Ring offset x" },
+            { "ring_ui_pos", 2, 0.00005, "Ring offset y" },
+            { "ring_ui_pos", 3, 0.00005, "Ring offset z" },
+            { "ring_ui_scale", nil, 0.001, "Ring scale (x main)" },
+            { "ring_offset", nil, 1, "Ring north (deg)" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "vektor",
+        id = "vektor_pointer",
+        dev = true,
+        label = "Arrow",
+        rows = {
+            { "arrow_ui_pos", 1, 0.00005, "Arrow offset x" },
+            { "arrow_ui_pos", 2, 0.00005, "Arrow offset y" },
+            { "arrow_ui_pos", 3, 0.00005, "Arrow offset z" },
+            { "arrow_ui_scale", nil, 0.001, "Arrow scale (x main)" },
+            { "compass_offset", nil, 1, "Arrow north (deg)" },
+        },
+    })
+end
+
+local function start()
+    d_vektor_config.load_transforms()
+    wd_trader.register(d_vektor_config.TIERS[1].section, 1)
+end
+
+function register()
+    wd_slots.register_device({
+        id = "vektor",
+        slot = "wrist",
+        matches_section = function(section)
+            return d_vektor_config.get_tier_of(section) ~= nil
+        end,
+        owner = owner,
+        is_present = is_attachment_present,
+        resync = sync_attachment,
+    })
+    wd_exo.register_device({
+        id = "vektor",
+        names = { ATT_NAME, RING_NAME, ARROW_NAME },
+        hide_screen = true,
+        resync = sync_attachment,
+    })
+    wd_core.register({
+        id = "vektor",
+        callbacks = {
+            actor_on_first_update = { actor_on_first_update },
+            actor_on_update = {
+                update_pointers_if_worn,
+                { actor_on_update, interval = 200 },
+                { update_proximity_sensors, interval = 200 },
+            },
+            actor_on_net_destroy = {
+                function()
+                    get_ui().close_hud()
+                end,
+                function()
+                    get_ring_ui().close_hud()
+                end,
+                function()
+                    get_arrow_ui().close_hud()
+                end,
+            },
+            save_state = { owner.save },
+            load_state = { load_state },
+        },
+        on_start = start,
+    })
+    register_gui()
+end

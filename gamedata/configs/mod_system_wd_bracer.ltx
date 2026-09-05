@@ -1,0 +1,24 @@
+[wd_bracer]:identity_immunities
+GroupControlSection  = spawn_group
+discovery_dependency =
+$spawn          = "devices\wd_bracer"
+class           = II_ATTCH
+kind            = i_device
+cform           = skeleton
+visual          = wd\world\bracer_rigid_world.ogf
+inv_name        = st_wd_bracer
+inv_name_short  = st_wd_bracer
+description     = st_wd_bracer_descr
+inv_weight      = 0.2
+icons_texture   = wd\ui\bracer\icon_bracer
+inv_grid_width  = 2
+inv_grid_height = 1
+inv_grid_x      = 0
+inv_grid_y      = 0
+cost            = 2400
+
+![wd_bracer]
+use1_functor = d_bracer.get_menu_text
+use1_action_functor = d_bracer.toggle_attach
+use2_functor = d_bracer.get_customize_text
+use2_action_functor = d_bracer.open_customize

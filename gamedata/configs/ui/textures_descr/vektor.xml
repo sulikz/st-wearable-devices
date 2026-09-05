@@ -1,0 +1,30 @@
+<w>
+  <file name="wd\ui\vektor\face">
+    <texture id="vektor_bg" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\vektor\face_toxic">
+    <texture id="vektor_bg_toxic" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\vektor\compass">
+    <texture id="vektor_compass" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\vektor\bar_fill">
+    <texture id="vektor_bar_fill" x="0" y="0" width="64" height="12" />
+  </file>
+  <file name="wd\ui\vektor\arrow">
+    <texture id="vektor_arrow" x="0" y="0" width="70" height="70" />
+  </file>
+  <file name="wd\ui\vektor\time_digits">
+    <texture id="vektor_t_colon" x="108" y="180" width="43" height="58" />
+    <texture id="vektor_t0" x="158" y="180" width="43" height="58" />
+    <texture id="vektor_t1" x="204" y="180" width="43" height="58" />
+    <texture id="vektor_t2" x="258" y="180" width="43" height="58" />
+    <texture id="vektor_t3" x="310" y="180" width="43" height="58" />
+    <texture id="vektor_t4" x="360" y="180" width="43" height="58" />
+    <texture id="vektor_t5" x="132" y="268" width="43" height="58" />
+    <texture id="vektor_t6" x="182" y="268" width="43" height="58" />
+    <texture id="vektor_t7" x="233" y="268" width="43" height="58" />
+    <texture id="vektor_t8" x="285" y="268" width="43" height="58" />
+    <texture id="vektor_t9" x="335" y="268" width="43" height="58" />
+  </file>
+</w>

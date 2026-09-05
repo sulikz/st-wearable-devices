@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ["VERSION"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: ver
+        run: echo "tag=v$(tr -d ' \n\r\t' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag does not already exist
+        id: tag
+        run: |
+          if git rev-parse "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists, skipping release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build zip
+        if: steps.tag.outputs.exists == 'false'
+        run: python3 tools/package.py --output "dist/WearableDevices-${{ steps.ver.outputs.tag }}.zip"
+
+      - name: Create and push tag
+        if: steps.tag.outputs.exists == 'false'
+        run: |
+          git tag "${{ steps.ver.outputs.tag }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Create GitHub release
+        if: steps.tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            "dist/WearableDevices-${{ steps.ver.outputs.tag }}.zip" \
+            --title "Wearable Devices ${{ steps.ver.outputs.tag }}" \
+            --generate-notes

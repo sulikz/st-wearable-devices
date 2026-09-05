@@ -1,0 +1,669 @@
+local TYPE_HUD = 0
+local ROOT_BONE_ID = 0
+
+local parents = {}
+local textures = {}
+local ui_on = {}
+local ui_transforms = {}
+local lights = {}
+local screens_hidden = false
+local models_hidden = {}
+local screens_hidden_by_name = {}
+
+function get(name)
+    if not (name and db.actor) then
+        return nil
+    end
+    local parent_name = parents[name]
+    if parent_name then
+        local parent_attachment = db.actor:get_attachment(parent_name)
+        if not parent_attachment then
+            return nil
+        end
+        return parent_attachment:get_attachment(name)
+    end
+    return db.actor:get_attachment(name)
+end
+
+function get_parent_of(name)
+    local parent_name = parents[name]
+    if not (parent_name and db.actor) then
+        return nil
+    end
+    return db.actor:get_attachment(parent_name)
+end
+
+function get_from(parent, name)
+    if parent then
+        return parent:get_attachment(name)
+    end
+    return get(name)
+end
+
+function has_attachment(name)
+    return get(name) ~= nil
+end
+
+function set_bone_visible(name, bone, visible)
+    local attachment = get(name)
+    if attachment then
+        attachment:set_bone_visible(bone, visible, true)
+    end
+end
+
+function detach(name)
+    if not name then
+        return
+    end
+    local parent_name = parents[name]
+    if parent_name then
+        local parent_attachment = get(parent_name)
+        if parent_attachment and parent_attachment:get_attachment(name) then
+            parent_attachment:remove_attachment(name)
+        end
+    elseif get(name) then
+        db.actor:remove_attachment(name)
+    end
+    parents[name] = nil
+    textures[name] = nil
+    ui_on[name] = nil
+    ui_transforms[name] = nil
+end
+
+local function apply_ui_scale(attachment, name)
+    if screens_hidden or screens_hidden_by_name[name] then
+        attachment:set_ui_scale(0, 0, 0)
+        return
+    end
+    local transform = ui_transforms[name]
+    local scale = (transform and transform.ui_scale) or 1
+    attachment:set_ui_scale(scale, scale, scale)
+end
+
+local function refresh_ui_scale(name)
+    local attachment = ui_on[name] and get(name)
+    if attachment then
+        apply_ui_scale(attachment, name)
+    end
+end
+
+local function set_screens_hidden(hidden)
+    screens_hidden = hidden
+    for name in pairs(ui_on) do
+        refresh_ui_scale(name)
+    end
+end
+
+function hide_screens()
+    set_screens_hidden(true)
+end
+
+function show_screens()
+    set_screens_hidden(false)
+end
+
+function set_model_hidden(name, hidden)
+    models_hidden[name] = hidden or nil
+end
+
+function is_model_hidden(name)
+    return models_hidden[name] == true
+end
+
+function set_screen_hidden(name, hidden)
+    screens_hidden_by_name[name] = hidden or nil
+    refresh_ui_scale(name)
+end
+
+function is_screen_hidden(name)
+    return screens_hidden_by_name[name] == true
+end
+
+local function collect_child_ids(shaders, texture)
+    local ids = {}
+    for child_id, entry in pairs(shaders) do
+        if entry.texture == texture then
+            ids[#ids + 1] = child_id
+        end
+    end
+    table.sort(ids)
+    return ids
+end
+
+function apply_skin_texture(name, texture, base_texture)
+    local attachment = get(name)
+    if not (attachment and texture and base_texture) then
+        return false
+    end
+    local applied = textures[name]
+    local current = applied[base_texture] or base_texture
+    if current == texture then
+        return true
+    end
+    local shaders = attachment:get_shaders()
+    if not shaders or shaders.error then
+        return false
+    end
+    local ids = collect_child_ids(shaders, current)
+    if #ids == 0 then
+        return false
+    end
+    for _, child_id in ipairs(ids) do
+        attachment:set_shader(child_id, "", texture)
+    end
+    applied[base_texture] = texture
+    return true
+end
+
+function apply_child_shader(name, texture, shader)
+    local attachment = get(name)
+    if not attachment then
+        return false
+    end
+    local shaders = attachment:get_shaders()
+    if not shaders or shaders.error then
+        return false
+    end
+    local ids = collect_child_ids(shaders, texture)
+    for _, child_id in ipairs(ids) do
+        attachment:set_shader(child_id, shader, texture)
+    end
+    return #ids > 0
+end
+
+function get_child_ids(name, texture)
+    local attachment = get(name)
+    if not attachment then
+        return {}
+    end
+    local shaders = attachment:get_shaders()
+    if not shaders or shaders.error then
+        return {}
+    end
+    return collect_child_ids(shaders, texture)
+end
+
+function set_child_material(name, child_id, shader, texture)
+    if not (child_id and child_id >= 1) then
+        return false
+    end
+    local attachment = get(name)
+    if not attachment then
+        return false
+    end
+    attachment:set_shader(child_id, shader, texture)
+    return true
+end
+
+BULB_SHADER = "wd\\body"
+BULB_LIT_SHADER = "wd\\led"
+
+function new_bulb(cfg)
+    local child_id
+    local on = false
+    local bulb = {}
+
+    function bulb.sync()
+        set_child_material(cfg.name, child_id, on and BULB_LIT_SHADER or BULB_SHADER, cfg.get_texture(on))
+    end
+
+    function bulb.set_child(id)
+        child_id = id
+        bulb.sync()
+    end
+
+    function bulb.set_on(value)
+        if on == value then
+            return
+        end
+        on = value
+        bulb.sync()
+    end
+
+    return bulb
+end
+
+function new_bulb_set(cfg)
+    local bulbs = {}
+    for _, role in ipairs(cfg.order) do
+        bulbs[role] = new_bulb(cfg)
+    end
+
+    function bulbs.resolve()
+        local ids = get_child_ids(cfg.name, cfg.texture)
+        for index, role in ipairs(cfg.order) do
+            bulbs[role].set_child(ids[index])
+        end
+    end
+
+    function bulbs.sync()
+        for _, role in ipairs(cfg.order) do
+            bulbs[role].sync()
+        end
+    end
+
+    return bulbs
+end
+
+function attach(desc)
+    if not (desc and desc.name and desc.model and desc.transforms and db.actor) then
+        return nil
+    end
+    if not (desc.bone or desc.parent) then
+        return nil
+    end
+    detach(desc.name)
+    local attachment
+    local started = os.clock() * 1000
+    if desc.parent then
+        local parent_attachment = get(desc.parent)
+        if not parent_attachment then
+            return nil
+        end
+        attachment = parent_attachment:add_attachment(desc.name, desc.model)
+        if attachment then
+            parents[desc.name] = desc.parent
+        end
+    else
+        attachment = db.actor:add_attachment(desc.name, desc.model)
+    end
+    if not attachment then
+        return nil
+    end
+    printf(string.format("wd timing: add_attachment %s %.1f ms", desc.name, os.clock() * 1000 - started))
+    textures[desc.name] = {}
+    local transform = desc.transforms
+    attachment:set_type(TYPE_HUD)
+    if desc.bone and not desc.parent then
+        attachment:set_parent_bone(desc.bone)
+    end
+    attachment:set_position(transform.model_pos[1], transform.model_pos[2], transform.model_pos[3])
+    attachment:set_rotation(transform.model_rot[1], transform.model_rot[2], transform.model_rot[3])
+    attachment:set_scale(transform.model_scale)
+    if desc.ui then
+        attachment:set_ui(desc.ui)
+        if desc.ui_bone then
+            attachment:set_ui_bone(desc.ui_bone)
+        end
+        attachment:set_ui_position(transform.ui_pos[1], transform.ui_pos[2], transform.ui_pos[3])
+        attachment:set_ui_rotation(transform.ui_rot[1], transform.ui_rot[2], transform.ui_rot[3])
+        ui_on[desc.name] = true
+        ui_transforms[desc.name] = transform
+        if transform.ui_scale or screens_hidden or screens_hidden_by_name[desc.name] then
+            apply_ui_scale(attachment, desc.name)
+        end
+    end
+    attachment:set_bone_visible(ROOT_BONE_ID, true, true)
+    if desc.bone_visible then
+        for bone_name, visible in pairs(desc.bone_visible) do
+            attachment:set_bone_visible(bone_name, visible, true)
+        end
+    end
+    if models_hidden[desc.name] then
+        attachment:set_bone_visible(ROOT_BONE_ID, false, true)
+    end
+    local stored_light = lights[desc.name]
+    if stored_light then
+        attachment:attach_light(stored_light.light)
+        attachment:set_light_bone(stored_light.bone)
+    end
+    return attachment
+end
+
+function reapply_transforms(name, transform)
+    local attachment = get(name)
+    if not attachment then
+        return false
+    end
+    attachment:set_position(transform.model_pos[1], transform.model_pos[2], transform.model_pos[3])
+    attachment:set_rotation(transform.model_rot[1], transform.model_rot[2], transform.model_rot[3])
+    attachment:set_scale(transform.model_scale)
+    if ui_on[name] then
+        attachment:set_ui_position(transform.ui_pos[1], transform.ui_pos[2], transform.ui_pos[3])
+        attachment:set_ui_rotation(transform.ui_rot[1], transform.ui_rot[2], transform.ui_rot[3])
+        ui_transforms[name] = transform
+        if transform.ui_scale or screens_hidden then
+            apply_ui_scale(attachment, name)
+        end
+    end
+    return true
+end
+
+function get_visual_of(sec)
+    if type(sec) ~= "string" then
+        return nil
+    end
+    return ini_sys:r_string_ex(sec, "visual")
+end
+
+local offset_cache = {}
+
+local function get_offset_matrix(name, rot)
+    local cached = offset_cache[name]
+    local yaw, pitch, roll = rot[1] or 0, rot[2] or 0, rot[3] or 0
+    if not (cached and cached.yaw == yaw and cached.pitch == pitch and cached.roll == roll) then
+        cached = {
+            yaw = yaw,
+            pitch = pitch,
+            roll = roll,
+            mat = matrix():setHPB(math.rad(yaw), math.rad(pitch), math.rad(roll)),
+        }
+        offset_cache[name] = cached
+    end
+    return cached.mat
+end
+
+function attach_light(name, light, bone)
+    if not (name and light and bone) then
+        return false
+    end
+    lights[name] = { light = light, bone = bone }
+    local attachment = get(name)
+    if not attachment then
+        return false
+    end
+    attachment:attach_light(light)
+    attachment:set_light_bone(bone)
+    return true
+end
+
+function detach_light(name)
+    if not name then
+        return false
+    end
+    lights[name] = nil
+    local attachment = get(name)
+    if not attachment then
+        return false
+    end
+    attachment:detach_light()
+    return true
+end
+
+function set_light_range(light, range)
+    if not (light and range) then
+        return false
+    end
+    local past_deadband = range * 2 + 1
+    light.range = past_deadband
+    light.range = range
+    return true
+end
+
+GLOW_BONE = "wpn_body"
+
+function new_glow(cfg)
+    local glow = {}
+    local light = nil
+    local bound_bone = nil
+    local bound_level = nil
+    local bound_offset = nil
+    local bound_on = nil
+    local bound_color = nil
+
+    local function get_color()
+        if cfg.get_color then
+            return cfg.get_color()
+        end
+        return cfg.color
+    end
+
+    local function get_on()
+        if cfg.is_on then
+            return cfg.is_on()
+        end
+        return true
+    end
+
+    local function get_offset()
+        if cfg.get_offset then
+            return cfg.get_offset()
+        end
+        return nil
+    end
+
+    local function apply_offset(offset)
+        local pos_x = (offset and offset[1]) or 0
+        local pos_y = (offset and offset[2]) or 0
+        local pos_z = (offset and offset[3]) or 0
+        local bound = bound_offset
+        if bound and bound[1] == pos_x and bound[2] == pos_y and bound[3] == pos_z then
+            return
+        end
+        light:set_position(pos_x, pos_y, pos_z)
+        bound_offset = { pos_x, pos_y, pos_z }
+    end
+
+    local function get_level()
+        if cfg.get_level then
+            return clamp(cfg.get_level(), 0, 1)
+        end
+        return 1
+    end
+
+    local function apply_color(tint, level)
+        local color = fcolor()
+        color.r, color.g, color.b, color.a = tint.r * level, tint.g * level, tint.b * level, tint.a
+        light.color = color
+    end
+
+    local function new_light()
+        if light then
+            return
+        end
+        local fresh_light = attachment_script_light()
+        if not fresh_light then
+            return
+        end
+        fresh_light.type = 1
+        set_light_range(fresh_light, cfg.range)
+        fresh_light.shadow = false
+        fresh_light.hud_mode = true
+        fresh_light.enabled = true
+        light = fresh_light
+        bound_offset = { 0, 0, 0 }
+    end
+
+    local function kill_light()
+        if not light then
+            return
+        end
+        detach_light(cfg.name)
+        light.enabled = false
+        light = nil
+        bound_bone = nil
+        bound_level = nil
+        bound_offset = nil
+        bound_on = nil
+        bound_color = nil
+    end
+
+    function glow.sync()
+        if not cfg.is_lit() then
+            kill_light()
+            return
+        end
+        local level = get_level()
+        new_light()
+        if not light then
+            return
+        end
+        if bound_bone ~= GLOW_BONE then
+            bound_bone = GLOW_BONE
+            attach_light(cfg.name, light, GLOW_BONE)
+        end
+        local tint = get_color()
+        if level ~= bound_level or tint ~= bound_color then
+            apply_color(tint, level)
+            bound_level = level
+            bound_color = tint
+        end
+        local on = get_on()
+        if on ~= bound_on then
+            light.enabled = on
+            bound_on = on
+        end
+        apply_offset(get_offset())
+    end
+
+    return glow
+end
+
+function new_blink_glow(cfg)
+    local on = false
+    local led = new_glow({
+        name = cfg.name,
+        color = cfg.color,
+        get_color = cfg.get_color,
+        range = cfg.range,
+        get_offset = cfg.get_offset,
+        is_lit = cfg.is_lit,
+        is_on = function()
+            return on
+        end,
+    })
+
+    function led.set_on(value)
+        on = value
+        led.sync()
+    end
+
+    return led
+end
+
+local MAX_LEAD_S = 0.1
+
+local actor_shadow_prev = nil
+
+local function set_actor_shadow_suppressed(suppress)
+    if suppress then
+        if actor_shadow_prev == nil then
+            actor_shadow_prev = get_console():get_bool("r__actor_shadow")
+            get_console():execute("r__actor_shadow off")
+        end
+    elseif actor_shadow_prev ~= nil then
+        get_console():execute("r__actor_shadow " .. (actor_shadow_prev and "on" or "off"))
+        actor_shadow_prev = nil
+    end
+end
+
+local function get_frame_lead()
+    local actor = db.actor
+    local speed = actor and actor:get_movement_speed()
+    if not speed then
+        return 0, 0, 0
+    end
+    local render = device()
+    local delta = math.min(render and render.f_time_delta or 0, MAX_LEAD_S)
+    return speed.x * delta, speed.y * delta, speed.z * delta
+end
+
+local function is_hud_drawn()
+    return db.actor ~= nil and db.actor:active_item() ~= nil
+end
+
+function new_driven_light(cfg)
+    local driven = {}
+    local light = nil
+    local suppressing = false
+
+    local function new_light()
+        local fresh_light = script_light()
+        if not fresh_light then
+            return
+        end
+        local desc = cfg.get_desc()
+        fresh_light.type = 1
+        set_light_range(fresh_light, desc.range)
+        fresh_light.shadow = desc.shadow or false
+        fresh_light.color = desc.color
+        light = fresh_light
+        if desc.shadow then
+            suppressing = true
+            set_actor_shadow_suppressed(true)
+        end
+    end
+
+    local function place(attachment)
+        local frame = attachment and attachment:bone_transform(cfg.bone)
+        local origin = frame and frame.c
+        if not origin then
+            return false
+        end
+        local lead_x, lead_y, lead_z = get_frame_lead()
+        light:set_position(origin.x + lead_x, origin.y + lead_y, origin.z + lead_z)
+        return true
+    end
+
+    local function place_from_camera()
+        local offset = cfg.camera_offset
+        local render = offset and device()
+        if not render then
+            return false
+        end
+        local origin = render.cam_pos
+        local right = render.cam_right
+        local top = render.cam_top
+        local dir = render.cam_dir
+        if not (origin and right and top and dir) then
+            return false
+        end
+        local lead_x, lead_y, lead_z = get_frame_lead()
+        light:set_position(
+            origin.x + right.x * offset[1] + top.x * offset[2] + dir.x * offset[3] + lead_x,
+            origin.y + right.y * offset[1] + top.y * offset[2] + dir.y * offset[3] + lead_y,
+            origin.z + right.z * offset[1] + top.z * offset[2] + dir.z * offset[3] + lead_z
+        )
+        return true
+    end
+
+    function driven.kill()
+        if light then
+            light.enabled = false
+            light = nil
+        end
+        if suppressing then
+            suppressing = false
+            set_actor_shadow_suppressed(false)
+        end
+    end
+
+    function driven.update(attachment)
+        if not cfg.is_lit() then
+            driven.kill()
+            return
+        end
+        if not light then
+            new_light()
+        end
+        if not light then
+            return
+        end
+        if not screens_hidden and is_hud_drawn() then
+            light.enabled = place(attachment)
+        else
+            light.enabled = place_from_camera()
+        end
+    end
+
+    return driven
+end
+
+function get_ui_frame(name, ui_rot_deg, att)
+    local attachment = att or get(name)
+    if not attachment then
+        return nil
+    end
+    local bone_mat = attachment:bone_transform(attachment:get_ui_bone())
+    if not bone_mat then
+        return nil
+    end
+    local offset = get_offset_matrix(name, ui_rot_deg or { 0, 0, 0 })
+    local frame = matrix():mul_43(bone_mat, offset)
+    local frame_i = frame.i
+    local frame_j = frame.j
+    return {
+        i = { x = frame_i.x, y = frame_i.y, z = frame_i.z },
+        j = { x = frame_j.x, y = frame_j.y, z = frame_j.z },
+    }
+end

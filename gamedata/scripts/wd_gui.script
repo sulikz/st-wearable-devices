@@ -1,0 +1,1198 @@
+local ROW_COUNT = 7
+local PICK_SLOTS = 6
+local GLOBAL_SLOTS = 11
+local BUTTON_ROWS = 3
+local DEVICE_SLOTS = 10
+local SECTION_SLOTS = 6
+local LAYOUTS = {
+    player = {
+        xml = "ui_wd_gui.xml",
+        device_slots = DEVICE_SLOTS,
+        section_slots = 0,
+        pick_slots = PICK_SLOTS,
+        width = 574,
+        rows_y = 104,
+        rows_pitch = 42,
+        buttons_y = 256,
+        buttons_pitch = 30,
+        buttons_height = 26,
+        globals_bottom = 268,
+    },
+    dev = {
+        xml = "ui_wd_gui_dev.xml",
+        device_slots = DEVICE_SLOTS,
+        section_slots = SECTION_SLOTS,
+        pick_slots = PICK_SLOTS,
+        width = 654,
+        rows_y = 168,
+        rows_pitch = 46,
+        buttons_y = 214,
+        buttons_pitch = 46,
+        buttons_height = 28,
+        globals_bottom = 332,
+    },
+}
+
+function get_layouts()
+    return LAYOUTS
+end
+
+local POSE_SLOTS = 3
+local POSE_MODES = {
+    { id = "promin", label = "Promin" },
+    { id = "watch", label = "Watch" },
+    { id = "free", label = "Default" },
+}
+assert(#POSE_MODES <= POSE_SLOTS, "wd_gui: " .. #POSE_MODES .. " pose modes, xml pool is " .. POSE_SLOTS)
+local POSE_BY_ID = {}
+for _, entry in ipairs(POSE_MODES) do
+    POSE_BY_ID[entry.id] = entry
+end
+local DEFAULT_POSE = POSE_MODES[1].id
+local LTX_SECTION = "wd_gui"
+local POSE_KEY = "pose"
+local SPEED_KEY = "anm_speed_"
+local SPEED_STEP = 5
+local FREE_POSE = "free"
+
+local SPEED_MODES = {}
+for _, entry in ipairs(POSE_MODES) do
+    if entry.id ~= FREE_POSE then
+        SPEED_MODES[#SPEED_MODES + 1] =
+            { id = entry.id, label = "Weapon <-> " .. entry.label, min = 0, max = 15, default = 0 }
+    end
+end
+SPEED_MODES[#SPEED_MODES + 1] = { id = "switch", label = "Promin <-> Watch", min = 0, max = 15, default = 10 }
+local SPEED_BY_ID = {}
+for _, entry in ipairs(SPEED_MODES) do
+    SPEED_BY_ID[entry.id] = entry
+end
+
+local pose = DEFAULT_POSE
+local anm_speed = {}
+local anm_speed_dirty = false
+
+local devices = {}
+local tabs = {}
+local tab_order = {}
+
+local global_toggles = { [false] = {}, [true] = {} }
+local global_by_id = {}
+
+GUI = nil
+
+local active_tab = "model"
+local dev_mode = false
+local DEV_SWITCH_SECTION = "wd_gui"
+local DEV_MODE_KEY = "dev_mode"
+
+local FINE_STEP_SCALE = 0.1
+
+local function is_fine_step()
+    return wd_mcm.is_mod_held("shift")
+end
+
+function get_step_scale()
+    return is_fine_step() and FINE_STEP_SCALE or 1
+end
+
+local function resolve(value)
+    if type(value) == "function" then
+        return value()
+    end
+    return value
+end
+
+function new_slider(min, max)
+    return {
+        widget = "slider",
+        apply = function(current, delta)
+            return clamp(current + delta, min or -math.huge, max or math.huge)
+        end,
+        min = min,
+        max = max,
+    }
+end
+
+function new_percent_slider()
+    local slider = new_slider(0, 100)
+    slider.text = function(value)
+        return string.format("%d%%", math.floor(value + 0.5))
+    end
+    return slider
+end
+
+function new_enum(options, current, value_at, opts)
+    opts = opts or {}
+    return {
+        widget = "cycle",
+        choice = true,
+        options = options,
+        current = current,
+        value_at = value_at,
+        text = function()
+            return options()[current()]
+        end,
+        cycle = function(_, delta)
+            local list = options()
+            local index = current() + (delta > 0 and 1 or -1)
+            if index < 1 then
+                index = #list
+            elseif index > #list then
+                index = 1
+            end
+            return value_at(index)
+        end,
+        no_apply = opts.no_apply,
+    }
+end
+
+local function get_labels_of(catalog)
+    return function()
+        local out = {}
+        for index, entry in ipairs(catalog) do
+            out[index] = entry.label
+        end
+        return out
+    end
+end
+
+local function get_name_at(catalog)
+    return function(index)
+        return catalog[index].name
+    end
+end
+
+function new_catalog_enum(catalog, get_index, opts)
+    return new_enum(get_labels_of(catalog), get_index, get_name_at(catalog), opts)
+end
+
+function register_device(spec)
+    devices[spec.id] = spec
+end
+
+function register_tab(spec)
+    assert(
+        devices[spec.device],
+        "wd_gui: tab '" .. tostring(spec.id) .. "' references unregistered device '" .. tostring(spec.device) .. "'"
+    )
+    local picker = spec.picker
+    local pick_count = picker and #resolve(picker.options) or 0
+    assert(
+        pick_count <= PICK_SLOTS,
+        "wd_gui: tab '" .. tostring(spec.id) .. "' has " .. pick_count .. " picks, xml pool is " .. PICK_SLOTS
+    )
+    local slot_count = type(spec.rows) == "table" and #spec.rows or 0
+    if picker then
+        local widest = 0
+        for option_index = 1, pick_count do
+            local option_count = #picker.rows(option_index)
+            widest = option_count > widest and option_count or widest
+        end
+        slot_count = slot_count + 1 + widest
+    end
+    assert(
+        slot_count <= ROW_COUNT,
+        "wd_gui: tab '" .. tostring(spec.id) .. "' needs " .. slot_count .. " row slots, xml pool is " .. ROW_COUNT
+    )
+    if not tabs[spec.id] then
+        tab_order[#tab_order + 1] = spec.id
+    end
+    tabs[spec.id] = spec
+end
+
+function get_tab_list()
+    local list = {}
+    for _, id in ipairs(tab_order) do
+        list[#list + 1] = tabs[id]
+    end
+    return list
+end
+
+function get_device(id)
+    return devices[id]
+end
+
+function register_global_toggle(spec)
+    local list = global_toggles[spec.dev or false]
+    assert(
+        global_by_id[spec.id] or #list < GLOBAL_SLOTS,
+        "wd_gui: global toggle '" .. tostring(spec.id) .. "' overflows the xml pool of " .. GLOBAL_SLOTS
+    )
+    if not global_by_id[spec.id] then
+        list[#list + 1] = spec
+    end
+    global_by_id[spec.id] = spec
+end
+
+function get_global_list()
+    return global_toggles[dev_mode]
+end
+
+function get_global(id)
+    local toggle = global_by_id[id]
+    return toggle ~= nil and toggle.get()
+end
+
+function set_global(id, on)
+    local toggle = global_by_id[id]
+    if toggle then
+        toggle.set(on)
+    end
+end
+
+local function persist_settings()
+    anm_speed_dirty = false
+    local section = { [POSE_KEY] = pose }
+    for key, percent in pairs(anm_speed) do
+        section[key] = tostring(percent)
+    end
+    return wd_store.update({ [LTX_SECTION] = section })
+end
+
+local function load_speeds(section)
+    local speeds = {}
+    for _, entry in ipairs(SPEED_MODES) do
+        local key = SPEED_KEY .. entry.id
+        speeds[key] = clamp(tonumber(section[key]) or entry.default, entry.min, entry.max)
+    end
+    return speeds
+end
+
+local function load_settings()
+    local section = wd_store.read()[LTX_SECTION] or {}
+    if POSE_BY_ID[section[POSE_KEY]] then
+        pose = section[POSE_KEY]
+    end
+    anm_speed = load_speeds(section)
+    anm_speed_dirty = false
+end
+
+function get_pose()
+    return pose
+end
+
+function is_pose_free()
+    return pose == FREE_POSE
+end
+
+function set_pose(mode)
+    if not POSE_BY_ID[mode] then
+        return false
+    end
+    pose = mode
+    return persist_settings()
+end
+
+function get_anm_speed(mode)
+    local entry = SPEED_BY_ID[mode]
+    if not entry then
+        return 0
+    end
+    return anm_speed[SPEED_KEY .. mode] or entry.default
+end
+
+function set_anm_speed(mode, percent)
+    local entry = SPEED_BY_ID[mode]
+    if not entry then
+        return false
+    end
+    anm_speed[SPEED_KEY .. mode] = clamp(percent, entry.min, entry.max)
+    anm_speed_dirty = true
+    return true
+end
+
+function get_anm_speed_scale(mode)
+    return 1 + get_anm_speed(mode) / 100
+end
+
+function save_anm_speed()
+    if not anm_speed_dirty then
+        return true
+    end
+    return persist_settings()
+end
+
+local function get_active_device()
+    local tab = tabs[active_tab]
+    return tab and devices[tab.device]
+end
+
+local EMPTY_ROWS = {}
+
+local function get_picker(tab_id)
+    local tab_spec = tabs[tab_id]
+    return tab_spec and tab_spec.picker or nil
+end
+
+local function get_static_rows(tab_spec)
+    return tab_spec and resolve(tab_spec.rows) or EMPTY_ROWS
+end
+
+local function get_picker_slot(tab_spec)
+    if not (tab_spec and tab_spec.picker) then
+        return 1
+    end
+    return #get_static_rows(tab_spec) + 1
+end
+
+local function append_rows(out, rows)
+    for _, row in ipairs(rows) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+local function get_slot_rows(tab_id)
+    local tab_spec = tabs[tab_id]
+    local picker = tab_spec and tab_spec.picker
+    local rows = get_static_rows(tab_spec)
+    if not picker then
+        return rows
+    end
+    local slots = append_rows({}, rows)
+    slots[#slots + 1] = false
+    return append_rows(slots, picker.rows(picker.get()))
+end
+
+local function get_restore_rows(tab_id)
+    local tab_spec = tabs[tab_id]
+    local picker = tab_spec and tab_spec.picker
+    local rows = get_static_rows(tab_spec)
+    if not picker then
+        return rows
+    end
+    local out = append_rows({}, rows)
+    for option_index = 1, #resolve(picker.options) do
+        append_rows(out, picker.rows(option_index))
+    end
+    return out
+end
+
+function get_active_device_spec()
+    return get_active_device()
+end
+
+function get_active_tab()
+    return active_tab
+end
+
+function run_in_tab(tab_id, fn, ...)
+    local previous = active_tab
+    active_tab = tab_id
+    local result = fn(...)
+    active_tab = previous
+    return result
+end
+
+function get_field(name, comp)
+    local device = get_active_device()
+    if not device then
+        return nil
+    end
+    local store = resolve(device.store)
+    local value = store[name]
+    if comp then
+        return value and value[comp]
+    end
+    return value
+end
+
+local function set_value(name, comp, value)
+    local device = get_active_device()
+    if not device then
+        return
+    end
+    local store = resolve(device.store)
+    if comp then
+        local entry = store[name]
+        if entry then
+            entry[comp] = value
+        end
+    else
+        store[name] = value
+    end
+end
+
+local function get_field_desc(name)
+    local device = get_active_device()
+    return device and device.fields[name]
+end
+
+local function run_field_callbacks(definition)
+    if not definition.no_apply then
+        local on_apply = get_active_device().on_apply
+        if on_apply then
+            on_apply()
+        end
+    end
+    if definition.on_change then
+        definition.on_change()
+    end
+end
+
+function nudge_field(name, comp, delta)
+    local definition = get_field_desc(name)
+    if not definition then
+        return get_field(name, comp)
+    end
+    local new_value
+    if definition.cycle then
+        new_value = definition.cycle(get_field(name, nil), delta)
+        set_value(name, nil, new_value)
+    else
+        new_value = definition.apply(get_field(name, comp), delta)
+        set_value(name, comp, new_value)
+    end
+    run_field_callbacks(definition)
+    return new_value
+end
+
+function get_field_text(name, comp)
+    local definition = get_field_desc(name)
+    if definition and definition.text then
+        return definition.text(get_field(name, comp))
+    end
+    return string.format("%.4f", get_field(name, comp))
+end
+
+function get_field_widget(name)
+    local definition = get_field_desc(name)
+    return (definition and definition.widget) or "slider"
+end
+
+function get_field_range(name)
+    local definition = get_field_desc(name)
+    if not definition then
+        return nil
+    end
+    return definition.min, definition.max
+end
+
+function set_field(name, comp, value)
+    local definition = get_field_desc(name)
+    if not definition then
+        return
+    end
+    value = clamp(value, definition.min or -math.huge, definition.max or math.huge)
+    set_value(name, comp, value)
+    run_field_callbacks(definition)
+    return value
+end
+
+function set_field_vector(name, values)
+    local definition = get_field_desc(name)
+    if not definition then
+        return
+    end
+    local low = definition.min or -math.huge
+    local high = definition.max or math.huge
+    for comp = 1, #values do
+        set_value(name, comp, clamp(values[comp], low, high))
+    end
+    run_field_callbacks(definition)
+end
+
+function select_field(name, item_index)
+    local definition = get_field_desc(name)
+    if not (definition and definition.choice) then
+        return get_field(name)
+    end
+    local value = definition.value_at(item_index)
+    set_value(name, nil, value)
+    run_field_callbacks(definition)
+    return value
+end
+
+function restore_tab(tab_id, source_name)
+    active_tab = tab_id
+    local tab_spec = tabs[tab_id]
+    local device = devices[tab_spec.device]
+    local source = (source_name == "default") and resolve(device.defaults) or resolve(device.saved)
+    local store = resolve(device.store)
+    local seen = {}
+    local changes = {}
+    for _, row in ipairs(get_restore_rows(tab_id)) do
+        local name, comp = row[1], row[2]
+        local value = source[name]
+        if value ~= nil then
+            if comp then
+                local entry = store[name]
+                if entry then
+                    entry[comp] = value[comp]
+                end
+            else
+                store[name] = value
+            end
+        end
+        local definition = device.fields[name]
+        if definition and definition.on_change and not seen[definition.on_change] then
+            seen[definition.on_change] = true
+            changes[#changes + 1] = definition.on_change
+        end
+    end
+    if device.on_apply then
+        device.on_apply()
+    end
+    for _, on_change in ipairs(changes) do
+        on_change()
+    end
+    if GUI then
+        GUI:refresh_values()
+    end
+end
+
+local function get_layout()
+    return dev_mode and LAYOUTS.dev or LAYOUTS.player
+end
+
+local function is_tab_listed(tab_id)
+    return (tabs[tab_id].dev or false) == dev_mode
+end
+
+local function is_device_worn(device)
+    if not (device and device.is_worn) then
+        return true
+    end
+    return device.is_worn() and true or false
+end
+
+function apply_worn_devices()
+    for _, device in pairs(devices) do
+        if device.on_apply and is_device_worn(device) then
+            device.on_apply()
+        end
+    end
+end
+
+local DEFAULT_RANK = 100
+
+local function get_device_order()
+    local seen = {}
+    local listed = {}
+    for _, tab_id in ipairs(tab_order) do
+        local device_id = tabs[tab_id].device
+        if is_tab_listed(tab_id) and not seen[device_id] then
+            seen[device_id] = true
+            local device = devices[device_id]
+            if is_device_worn(device) then
+                listed[#listed + 1] = {
+                    id = device_id,
+                    rank = device.rank or DEFAULT_RANK,
+                    index = #listed,
+                }
+            end
+        end
+    end
+    table.sort(listed, function(left, right)
+        if left.rank ~= right.rank then
+            return left.rank < right.rank
+        end
+        return left.index < right.index
+    end)
+    local order = {}
+    for position, entry in ipairs(listed) do
+        order[position] = entry.id
+    end
+    return order
+end
+
+local function get_sections_of(device_id)
+    local list = {}
+    for _, tab_id in ipairs(tab_order) do
+        if tabs[tab_id].device == device_id and is_tab_listed(tab_id) then
+            list[#list + 1] = tab_id
+        end
+    end
+    return list
+end
+
+local function get_device_label(device_id)
+    local device = devices[device_id]
+    return (device and device.label) or device_id
+end
+
+local function get_default_section(device_id)
+    local first
+    for _, tab_id in ipairs(get_sections_of(device_id)) do
+        first = first or tab_id
+        if tabs[tab_id].default then
+            return tab_id
+        end
+    end
+    return first
+end
+
+local function pick_tab()
+    if
+        active_tab
+        and tabs[active_tab]
+        and is_tab_listed(active_tab)
+        and is_device_worn(devices[tabs[active_tab].device])
+    then
+        return active_tab
+    end
+    local first_device = get_device_order()[1]
+    return first_device and get_default_section(first_device) or nil
+end
+
+class("UIWdGui")(CUIScriptWnd)
+
+function UIWdGui:__init()
+    super()
+    self.tab = pick_tab()
+    self.refreshing = false
+    self.swallow_toggle_key = false
+    self:init_controls()
+end
+
+function UIWdGui:__finalize()
+    Unregister_UI("UIWdGui")
+    GUI = nil
+end
+
+function UIWdGui:init_controls()
+    self:SetWndRect(Frect():set(0, 0, 1024, 768))
+    self:SetAutoDelete(true)
+
+    local layout = get_layout()
+    local xml = CScriptXmlInit()
+    xml:ParseFile(layout.xml)
+
+    self.back = xml:InitStatic("background", self)
+    self.title = xml:InitStatic("title", self.back)
+    self:refresh_title()
+
+    self.device_buttons = {}
+    for device_index = 1, layout.device_slots do
+        local button = xml:Init3tButton("btn_device" .. device_index, self.back)
+        self:Register(button, "btn_device" .. device_index)
+        self:AddCallback("btn_device" .. device_index, ui_events.BUTTON_CLICKED, function()
+            self:on_device(device_index)
+        end, self)
+        self.device_buttons[device_index] = button
+    end
+    self.section_buttons = {}
+    for section_index = 1, layout.section_slots do
+        local button = xml:Init3tButton("btn_section" .. section_index, self.back)
+        self:Register(button, "btn_section" .. section_index)
+        self:AddCallback("btn_section" .. section_index, ui_events.BUTTON_CLICKED, function()
+            self:on_section(section_index)
+        end, self)
+        self.section_buttons[section_index] = button
+    end
+
+    self.pick_buttons = {}
+    self.pick_base = {}
+    for pick_index = 1, layout.pick_slots do
+        local button = xml:Init3tButton("btn_pick" .. pick_index, self.back)
+        self:Register(button, "btn_pick" .. pick_index)
+        self:AddCallback("btn_pick" .. pick_index, ui_events.BUTTON_CLICKED, function()
+            self:on_pick(pick_index)
+        end, self)
+        self.pick_buttons[pick_index] = button
+        self.pick_base[pick_index] = button:GetWndPos().x
+    end
+
+    self.rows = {}
+    for row_index = 1, ROW_COUNT do
+        local row = {}
+        row.cap = xml:InitStatic("cap_r" .. row_index, self.back)
+        row.val = xml:InitStatic("val_r" .. row_index, self.back)
+        row.lt = xml:Init3tButton("btn_r" .. row_index .. "_lt", self.back)
+        row.gt = xml:Init3tButton("btn_r" .. row_index .. "_gt", self.back)
+        row.track = xml:InitTrackBar("track_r" .. row_index, self.back)
+        row.cyc = xml:InitStatic("cyc_r" .. row_index, self.back)
+        self:Register(row.lt, "btn_r" .. row_index .. "_lt")
+        self:Register(row.gt, "btn_r" .. row_index .. "_gt")
+        self:Register(row.track, "track_r" .. row_index)
+        if row.lt.TextControl then
+            row.lt:TextControl():SetText("<")
+            row.gt:TextControl():SetText(">")
+        end
+        self:AddCallback("btn_r" .. row_index .. "_lt", ui_events.BUTTON_CLICKED, function()
+            self:on_nudge(row_index, -1)
+        end, self)
+        self:AddCallback("btn_r" .. row_index .. "_gt", ui_events.BUTTON_CLICKED, function()
+            self:on_nudge(row_index, 1)
+        end, self)
+        self:AddCallback("track_r" .. row_index, ui_events.BUTTON_CLICKED, function()
+            self:on_slide(row_index)
+        end, self)
+        self.rows[row_index] = row
+    end
+
+    self.btn_save = xml:Init3tButton("btn_save", self.back)
+    self:Register(self.btn_save, "btn_save")
+    self:AddCallback("btn_save", ui_events.BUTTON_CLICKED, self.on_save, self)
+    self.btn_reset = xml:Init3tButton("btn_reset", self.back)
+    self:Register(self.btn_reset, "btn_reset")
+    self:AddCallback("btn_reset", ui_events.BUTTON_CLICKED, function()
+        self:restore_tab_view("saved")
+    end, self)
+    self.btn_default = xml:Init3tButton("btn_default", self.back)
+    self:Register(self.btn_default, "btn_default")
+    self:AddCallback("btn_default", ui_events.BUTTON_CLICKED, function()
+        self:restore_tab_view("default")
+    end, self)
+
+    self.globals = {}
+    self.global_captions = {}
+    local toggles = get_global_list()
+    for toggle_index = 1, #toggles do
+        local checkbox = xml:InitCheck("chk_global" .. toggle_index, self.back)
+        local caption = xml:InitStatic("cap_global" .. toggle_index, self.back)
+        self:Register(checkbox, "chk_global" .. toggle_index)
+        caption:TextControl():SetText(toggles[toggle_index].label)
+        self:AddCallback("chk_global" .. toggle_index, ui_events.BUTTON_CLICKED, function()
+            self:on_global(toggle_index)
+        end, self)
+        self.globals[toggle_index] = checkbox
+        self.global_captions[toggle_index] = caption
+    end
+
+    xml:InitStatic("pose_header", self.back)
+    self.pose_buttons = {}
+    for mode_index = 1, #POSE_MODES do
+        local button = xml:Init3tButton("btn_pose" .. mode_index, self.back)
+        self:Register(button, "btn_pose" .. mode_index)
+        self:AddCallback("btn_pose" .. mode_index, ui_events.BUTTON_CLICKED, function()
+            self:on_pose(mode_index)
+        end, self)
+        self.pose_buttons[mode_index] = button
+    end
+
+    self:layout_footer()
+    self:refresh_pose_buttons()
+end
+
+local function get_pick_label(label, picked)
+    return picked and ("[" .. label .. "]") or label
+end
+
+function UIWdGui:refresh_title()
+    self.title:TextControl():SetText(dev_mode and "Wearable Devices Settings - Dev" or "Wearable Devices Settings")
+end
+
+function is_dev_mode()
+    return dev_mode
+end
+
+function is_dev_mode_allowed()
+    return ini_sys:r_bool_ex(DEV_SWITCH_SECTION, DEV_MODE_KEY, false)
+end
+
+function UIWdGui:set_dev_mode(on)
+    if on and not is_dev_mode_allowed() then
+        return
+    end
+    dev_mode = on and true or false
+    self:on_close()
+    toggle()
+end
+
+function UIWdGui:refresh_pose_buttons()
+    for mode_index, mode in ipairs(POSE_MODES) do
+        self.pose_buttons[mode_index]:TextControl():SetText(get_pick_label(mode.label, pose == mode.id))
+    end
+end
+
+function UIWdGui:on_pose(mode_index)
+    set_pose(POSE_MODES[mode_index].id)
+    self:refresh_pose_buttons()
+    self:refresh_tab_view()
+end
+
+function UIWdGui:is_globals_tab()
+    local tab_spec = tabs[self.tab]
+    return (tab_spec and tab_spec.globals) and true or false
+end
+
+function UIWdGui:refresh_globals()
+    local toggles = get_global_list()
+    local shown = self:is_globals_tab()
+    for toggle_index = 1, #self.globals do
+        self.globals[toggle_index]:SetCheck(get_global(toggles[toggle_index].id) and true or false)
+        self.globals[toggle_index]:Show(shown)
+        self.global_captions[toggle_index]:Show(shown)
+    end
+end
+
+function UIWdGui:on_global(index)
+    if self.refreshing then
+        return
+    end
+    local toggle = get_global_list()[index]
+    set_global(toggle.id, self.globals[index]:GetCheck())
+    self.globals[index]:SetCheck(get_global(toggle.id) and true or false)
+    self:set_tab(pick_tab())
+end
+
+function UIWdGui:sync_pickers()
+    local device_id = self.tab and tabs[self.tab].device
+    local order = get_device_order()
+    for device_index = 1, #self.device_buttons do
+        local button = self.device_buttons[device_index]
+        local listed = order[device_index]
+        button:Show(listed ~= nil)
+        if listed then
+            button:TextControl():SetText(get_pick_label(get_device_label(listed), listed == device_id))
+        end
+    end
+    local sections = device_id and get_sections_of(device_id) or {}
+    if #sections < 2 then
+        sections = {}
+    end
+    for section_index = 1, #self.section_buttons do
+        local button = self.section_buttons[section_index]
+        local listed = sections[section_index]
+        button:Show(listed ~= nil)
+        if listed then
+            button:TextControl():SetText(get_pick_label(resolve(tabs[listed].label), listed == self.tab))
+        end
+    end
+end
+
+function UIWdGui:refresh_tab_view()
+    self:refresh_values()
+    self:layout_footer()
+end
+
+function UIWdGui:set_tab(tab_id)
+    self.refreshing = true
+    self.tab = tab_id
+    if tab_id then
+        active_tab = tab_id
+    end
+    self:sync_pickers()
+    self:refresh_picks()
+    self:refresh_globals()
+    self:refresh_tab_view()
+end
+
+function UIWdGui:on_device(index)
+    local device_id = get_device_order()[index]
+    if not device_id then
+        return
+    end
+    self:set_tab(get_default_section(device_id))
+end
+
+function UIWdGui:on_section(index)
+    local tab_id = get_sections_of(tabs[self.tab].device)[index]
+    if not tab_id then
+        return
+    end
+    self:set_tab(tab_id)
+end
+
+function UIWdGui:get_tab_device()
+    local tab_spec = tabs[self.tab]
+    return tab_spec and devices[tab_spec.device]
+end
+
+function UIWdGui:get_picks()
+    if self:is_globals_tab() then
+        return EMPTY_ROWS
+    end
+    local picker = get_picker(self.tab)
+    return picker and resolve(picker.options) or EMPTY_ROWS
+end
+
+function UIWdGui:refresh_picks()
+    local picks = self:get_picks()
+    local tab_spec = tabs[self.tab]
+    local picker = tab_spec and tab_spec.picker
+    local current = picker and picker.get()
+    local layout = get_layout()
+    local pick_y = layout.rows_y + layout.rows_pitch * (get_picker_slot(tab_spec) - 1)
+    for pick_index = 1, #self.pick_buttons do
+        local button = self.pick_buttons[pick_index]
+        local pick = picks[pick_index]
+        button:Show(pick ~= nil)
+        if pick then
+            button:SetWndPos(vector2():set(self.pick_base[pick_index], pick_y))
+            button:TextControl():SetText(get_pick_label(pick.label, pick_index == current))
+        end
+    end
+end
+
+function UIWdGui:on_pick(pick_index)
+    if not self:get_picks()[pick_index] then
+        return
+    end
+    get_picker(self.tab).set(pick_index)
+    self:refresh_picks()
+    self:refresh_tab_view()
+end
+
+function UIWdGui:get_row_field(row_index)
+    return get_slot_rows(self.tab)[row_index] or nil
+end
+
+function UIWdGui:refresh_rows()
+    self.refreshing = true
+    local fields = get_slot_rows(self.tab)
+    for row_index = 1, ROW_COUNT do
+        local field = fields[row_index]
+        local row = self.rows[row_index]
+        if not field then
+            row.cap:Show(false)
+            row.val:Show(false)
+            row.lt:Show(false)
+            row.gt:Show(false)
+            row.track:Show(false)
+            row.cyc:Show(false)
+        else
+            local name, comp = field[1], field[2]
+            local widget = get_field_widget(name)
+            local is_slider = widget == "slider"
+            local is_cycle = widget == "cycle"
+            row.cap:Show(true)
+            row.cap:TextControl():SetText(field[4])
+            row.lt:Show(is_slider or is_cycle)
+            row.gt:Show(is_slider or is_cycle)
+            row.track:Show(is_slider)
+            row.val:Show(is_slider)
+            row.cyc:Show(is_cycle)
+            if is_slider then
+                local low, high = get_field_range(name)
+                if low and high then
+                    row.track:SetOptFBounds(low, high)
+                end
+                row.track:SetStep(field[3])
+                row.track:SetFValue(get_field(name, comp))
+                row.val:TextControl():SetText(get_field_text(name, comp))
+            elseif is_cycle then
+                row.cyc:TextControl():SetText(get_field_text(name, comp))
+            end
+        end
+    end
+    self.refreshing = false
+end
+
+function UIWdGui:refresh_values()
+    run_in_tab(self.tab, self.refresh_rows, self)
+end
+
+function UIWdGui:on_nudge(row_index, direction)
+    local field = self:get_row_field(row_index)
+    if not field then
+        return
+    end
+    local value = nudge_field(field[1], field[2], field[3] * direction * get_step_scale())
+    local row = self.rows[row_index]
+    if row.track and type(value) == "number" then
+        row.track:SetFValue(value)
+    end
+    local text = get_field_text(field[1], field[2])
+    row.val:TextControl():SetText(text)
+    row.cyc:TextControl():SetText(text)
+end
+
+function UIWdGui:on_slide(row_index)
+    if self.refreshing then
+        return
+    end
+    local field = self:get_row_field(row_index)
+    if not field then
+        return
+    end
+    set_field(field[1], field[2], self.rows[row_index].track:GetFValue())
+    self.rows[row_index].val:TextControl():SetText(get_field_text(field[1], field[2]))
+end
+
+function UIWdGui:is_save_blocked()
+    local tab_spec = tabs[self.tab]
+    return (tab_spec and tab_spec.dev and not wd_config.is_using_saved_positions()) and true or false
+end
+
+function UIWdGui:layout_footer()
+    local layout = get_layout()
+    local globals = self:is_globals_tab()
+    local has_tab = self.tab ~= nil
+    self.btn_save:Show(has_tab and not globals and not self:is_save_blocked())
+    self.btn_reset:Show(has_tab and not globals)
+    self.btn_default:Show(has_tab and not globals)
+    local rows_bottom = layout.rows_y + layout.rows_pitch * (#get_slot_rows(self.tab) - 1) + 26
+    local buttons_bottom = layout.buttons_y + layout.buttons_pitch * (BUTTON_ROWS - 1) + layout.buttons_height
+    local content_bottom = globals and layout.globals_bottom or math.max(rows_bottom, buttons_bottom)
+    self.back:SetWndSize(vector2():set(layout.width, content_bottom + 14))
+end
+
+function UIWdGui:on_save()
+    local device = self:get_tab_device()
+    if not device then
+        return
+    end
+    if device.save_global then
+        device.save_global()
+    elseif device.save then
+        device.save()
+    end
+end
+
+function UIWdGui:restore_tab_view(source_name)
+    restore_tab(self.tab, source_name)
+end
+
+function UIWdGui:on_close()
+    save_anm_speed()
+    if self:IsShown() then
+        self:HideDialog()
+    end
+    wd_gizmo.reset()
+    GUI = nil
+    Unregister_UI("UIWdGui")
+end
+
+function UIWdGui:Update()
+    CUIScriptWnd.Update(self)
+    wd_gizmo.update(self)
+end
+
+function UIWdGui:OnKeyboard(dik, action)
+    local result = CUIScriptWnd.OnKeyboard(self, dik, action)
+    if action == ui_events.WINDOW_KEY_PRESSED then
+        if dik == DIK_keys.DIK_ESCAPE then
+            self:on_close()
+            return true
+        elseif dik == DIK_keys.MOUSE_1 and wd_gizmo.on_mouse_press() then
+            return true
+        elseif dik == DIK_keys.DIK_K and wd_mcm.is_mod_held("alt") then
+            self:set_dev_mode(not dev_mode)
+            return true
+        elseif dik == wd_mcm.get_gui_key_dik() then
+            if self.swallow_toggle_key then
+                self.swallow_toggle_key = false
+            else
+                self:on_close()
+            end
+            return true
+        end
+    end
+    return result
+end
+
+function is_open()
+    return GUI ~= nil and GUI:IsShown()
+end
+
+function show_tab(tab_id)
+    if is_open() and tabs[tab_id] then
+        GUI:set_tab(tab_id)
+    end
+end
+
+function toggle()
+    if is_open() then
+        GUI:on_close()
+        return
+    end
+    if GUI == nil then
+        GUI = UIWdGui()
+    end
+    GUI:set_tab(GUI.tab)
+    GUI:ShowDialog(false)
+    Unregister_UI("UIWdGui")
+    Register_UI("UIWdGui", "wd_gui")
+end
+
+function on_key_press(key)
+    local bound = wd_mcm.get_gui_key_dik()
+    if bound == -1 or key ~= bound then
+        return
+    end
+    if not wd_mcm.is_gui_mod_held() then
+        return
+    end
+    toggle()
+    if is_open() then
+        GUI.swallow_toggle_key = true
+    end
+end
+
+local function mark_anm_speed_dirty()
+    anm_speed_dirty = true
+end
+
+local function new_speed_slider(entry)
+    local slider = new_slider(entry.min, entry.max)
+    slider.apply = function(current, delta)
+        local stepped = current + delta
+        stepped = (delta < 0) and math.floor(stepped) or math.ceil(stepped)
+        return clamp(stepped, entry.min, entry.max)
+    end
+    slider.text = function(percent)
+        return string.format("%+d%%", percent)
+    end
+    slider.on_change = mark_anm_speed_dirty
+    return slider
+end
+
+local function get_speed_defaults()
+    local source = {}
+    for _, entry in ipairs(SPEED_MODES) do
+        source[SPEED_KEY .. entry.id] = entry.default
+    end
+    return source
+end
+
+local function get_speed_saved()
+    return load_speeds(wd_store.read()[LTX_SECTION] or {})
+end
+
+local function register_anim()
+    local fields = {}
+    local rows = {}
+    for _, entry in ipairs(SPEED_MODES) do
+        local key = SPEED_KEY .. entry.id
+        fields[key] = new_speed_slider(entry)
+        rows[#rows + 1] = { key, nil, SPEED_STEP, entry.label }
+    end
+    register_device({
+        id = "anim",
+        label = "Anim Speed",
+        rank = 4,
+        store = function()
+            return anm_speed
+        end,
+        saved = get_speed_saved,
+        defaults = get_speed_defaults,
+        save = persist_settings,
+        fields = fields,
+    })
+    register_tab({
+        device = "anim",
+        id = "anim_speed",
+        label = "Anim Speed",
+        rows = rows,
+    })
+end
+
+local function register_gui()
+    register_anim()
+    register_device({
+        id = "dev",
+        label = "Dev",
+        rank = 200,
+    })
+    register_tab({
+        device = "dev",
+        id = "dev_globals",
+        label = "Dev",
+        dev = true,
+        globals = true,
+    })
+end
+
+function register()
+    register_gui()
+    wd_core.register({
+        id = "wd_gui",
+        callbacks = {
+            on_key_press = { { on_key_press, unless_captured = true } },
+        },
+        on_start = load_settings,
+    })
+end

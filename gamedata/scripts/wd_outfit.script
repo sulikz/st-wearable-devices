@@ -1,0 +1,27 @@
+DEFAULT_HANDS = "actor_hud_05"
+
+local OUTFIT_SLOT = 7
+local NONE = "_none"
+
+function get_item()
+    return db.actor and db.actor:item_in_slot(OUTFIT_SLOT)
+end
+
+function get_key()
+    local outfit = get_item()
+    if not outfit then
+        return NONE
+    end
+    return outfit:section()
+end
+
+function is_none(outfit_key)
+    return outfit_key == nil or outfit_key == NONE
+end
+
+function get_hands_section(outfit_key)
+    if is_none(outfit_key) then
+        return DEFAULT_HANDS
+    end
+    return ini_sys:r_string_ex(outfit_key, "player_hud_section")
+end

@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="windows-1251" ?>
+<w>
+	<background x="450" y="8" width="574" height="400" stretch="1">
+		<texture a="220">ui_inGame2_message_box</texture>
+	</background>
+
+	<title x="0" y="8" width="574" height="20">
+		<text align="c" font="letterica18">Wearable Devices Settings</text>
+	</title>
+
+	<btn_device1 x="14" y="40" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device1>
+	<btn_device2 x="122" y="40" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device2>
+	<btn_device3 x="230" y="40" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device3>
+	<btn_device4 x="338" y="40" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device4>
+	<btn_device5 x="446" y="40" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device5>
+	<btn_device6 x="14" y="70" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device6>
+	<btn_device7 x="122" y="70" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device7>
+	<btn_device8 x="230" y="70" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device8>
+	<btn_device9 x="338" y="70" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device9>
+	<btn_device10 x="446" y="70" width="102" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_device10>
+
+	<btn_pick1 x="144" y="104" width="52" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pick1>
+	<btn_pick2 x="198" y="104" width="52" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pick2>
+	<btn_pick3 x="252" y="104" width="52" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pick3>
+	<btn_pick4 x="306" y="104" width="52" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pick4>
+	<btn_pick5 x="360" y="104" width="52" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pick5>
+	<btn_pick6 x="414" y="104" width="52" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pick6>
+
+	<cap_r1 x="144" y="108" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r1>
+	<btn_r1_lt x="230" y="104" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r1_lt>
+	<track_r1 x="260" y="108" width="112" height="18" stretch="1"/>
+	<btn_r1_gt x="376" y="104" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r1_gt>
+	<val_r1 x="408" y="108" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r1>
+	<cyc_r1 x="260" y="108" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r1>
+
+	<cap_r2 x="144" y="150" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r2>
+	<btn_r2_lt x="230" y="146" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r2_lt>
+	<track_r2 x="260" y="150" width="112" height="18" stretch="1"/>
+	<btn_r2_gt x="376" y="146" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r2_gt>
+	<val_r2 x="408" y="150" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r2>
+	<cyc_r2 x="260" y="150" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r2>
+
+	<cap_r3 x="144" y="192" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r3>
+	<btn_r3_lt x="230" y="188" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r3_lt>
+	<track_r3 x="260" y="192" width="112" height="18" stretch="1"/>
+	<btn_r3_gt x="376" y="188" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r3_gt>
+	<val_r3 x="408" y="192" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r3>
+	<cyc_r3 x="260" y="192" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r3>
+
+	<cap_r4 x="144" y="234" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r4>
+	<btn_r4_lt x="230" y="230" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r4_lt>
+	<track_r4 x="260" y="234" width="112" height="18" stretch="1"/>
+	<btn_r4_gt x="376" y="230" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r4_gt>
+	<val_r4 x="408" y="234" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r4>
+	<cyc_r4 x="260" y="234" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r4>
+
+	<cap_r5 x="144" y="276" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r5>
+	<btn_r5_lt x="230" y="272" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r5_lt>
+	<track_r5 x="260" y="276" width="112" height="18" stretch="1"/>
+	<btn_r5_gt x="376" y="272" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r5_gt>
+	<val_r5 x="408" y="276" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r5>
+	<cyc_r5 x="260" y="276" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r5>
+
+	<cap_r6 x="144" y="318" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r6>
+	<btn_r6_lt x="230" y="314" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r6_lt>
+	<track_r6 x="260" y="318" width="112" height="18" stretch="1"/>
+	<btn_r6_gt x="376" y="314" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r6_gt>
+	<val_r6 x="408" y="318" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r6>
+	<cyc_r6 x="260" y="318" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r6>
+
+	<cap_r7 x="144" y="360" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r7>
+	<btn_r7_lt x="230" y="356" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r7_lt>
+	<track_r7 x="260" y="360" width="112" height="18" stretch="1"/>
+	<btn_r7_gt x="376" y="356" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r7_gt>
+	<val_r7 x="408" y="360" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r7>
+	<cyc_r7 x="260" y="360" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r7>
+
+	<chk_global1 x="144" y="104" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global1>
+	<cap_global1 x="174" y="106" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global1>
+	<chk_global2 x="144" y="132" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global2>
+	<cap_global2 x="174" y="134" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global2>
+	<chk_global3 x="144" y="160" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global3>
+	<cap_global3 x="174" y="162" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global3>
+	<chk_global4 x="144" y="188" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global4>
+	<cap_global4 x="174" y="190" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global4>
+	<chk_global5 x="144" y="216" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global5>
+	<cap_global5 x="174" y="218" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global5>
+	<chk_global6 x="352" y="104" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global6>
+	<cap_global6 x="382" y="106" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global6>
+	<chk_global7 x="352" y="132" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global7>
+	<cap_global7 x="382" y="134" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global7>
+	<chk_global8 x="352" y="160" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global8>
+	<cap_global8 x="382" y="162" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global8>
+	<chk_global9 x="352" y="188" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global9>
+	<cap_global9 x="382" y="190" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global9>
+	<chk_global10 x="352" y="216" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global10>
+	<cap_global10 x="382" y="218" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global10>
+	<chk_global11 x="352" y="244" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global11>
+	<cap_global11 x="382" y="246" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global11>
+
+	<pose_header x="14" y="104" width="110" height="20">
+		<text align="l" font="letterica16">Hand pose</text>
+	</pose_header>
+	<btn_pose1 x="14" y="132" width="110" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pose1>
+	<btn_pose2 x="14" y="162" width="110" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pose2>
+	<btn_pose3 x="14" y="192" width="110" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_pose3>
+
+	<btn_save x="476" y="256" width="84" height="26" stretch="1">
+		<text align="c" font="letterica16">Save</text>
+		<texture>ui_button_ordinary</texture>
+	</btn_save>
+	<btn_reset x="476" y="286" width="84" height="26" stretch="1">
+		<text align="c" font="letterica16">Reset</text>
+		<texture>ui_button_ordinary</texture>
+	</btn_reset>
+	<btn_default x="476" y="316" width="84" height="26" stretch="1">
+		<text align="c" font="letterica16">Default</text>
+		<texture>ui_button_ordinary</texture>
+	</btn_default>
+
+</w>

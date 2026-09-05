@@ -1,0 +1,182 @@
+local hud
+
+local binder = wd_screen.new_binder(d_vektor_config.SCREEN_SHADER)
+
+local allow_update = wd_core.throttle(350)
+
+local scratch_pos = vector2()
+local scratch_size = vector2()
+
+local DIGIT_TEX = {}
+for digit = 0, 9 do
+    DIGIT_TEX[digit] = "vektor_t" .. digit
+end
+
+class("UIVektor")(CUIScriptWnd)
+
+function UIVektor:__init()
+    super()
+    self:Show(true)
+    self:Enable(true)
+
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_vektor.xml")
+    xml:InitWindow("vektor", 0, self)
+
+    xml:InitStatic("vektor:wrk_area", self)
+    self.bg = xml:InitStatic("vektor:bg", self)
+
+    self.bar_fill = xml:InitStatic("vektor:bar_fill", self)
+    self.bar_fill_w = self.bar_fill:GetWidth()
+    self.bar_fill_h = self.bar_fill:GetHeight()
+
+    self.t_segs = {
+        xml:InitStatic("vektor:t_h10", self),
+        xml:InitStatic("vektor:t_h1", self),
+        xml:InitStatic("vektor:t_m10", self),
+        xml:InitStatic("vektor:t_m1", self),
+    }
+    self.colon = xml:InitStatic("vektor:t_colon", self)
+    local colon_pos = self.colon:GetWndPos()
+    self.colon_base = {
+        x = colon_pos and colon_pos.x or 0,
+        y = colon_pos and colon_pos.y or 0,
+        w = self.colon:GetWidth(),
+        h = self.colon:GetHeight(),
+    }
+    self.last_time = {}
+
+    self.d_segs = {
+        xml:InitStatic("vektor:d0", self),
+        xml:InitStatic("vektor:d1", self),
+        xml:InitStatic("vektor:d2", self),
+    }
+    self.last_dist = {}
+
+    self.t_base = {}
+    for seg_idx = 1, 4 do
+        local pos = self.t_segs[seg_idx]:GetWndPos()
+        self.t_base[seg_idx] = {
+            x = pos and pos.x or 0,
+            y = pos and pos.y or 0,
+            w = self.t_segs[seg_idx]:GetWidth(),
+            h = self.t_segs[seg_idx]:GetHeight(),
+        }
+    end
+
+    self.tinted = { self.bg, self.bar_fill, self.colon }
+    for seg_idx = 1, 4 do
+        self.tinted[#self.tinted + 1] = self.t_segs[seg_idx]
+    end
+    for seg_idx = 1, 3 do
+        self.tinted[#self.tinted + 1] = self.d_segs[seg_idx]
+    end
+end
+
+function UIVektor:set_alpha(alpha)
+    local color = GetARGB(alpha, 255, 255, 255)
+    for _, wnd in ipairs(self.tinted) do
+        wnd:SetTextureColor(color)
+    end
+end
+
+function UIVektor:__finalize()
+    hud.clear()
+end
+
+function apply_digit_layout()
+    local screen = hud.get()
+    if not (screen and screen.t_segs) then
+        return
+    end
+    local transforms = d_vektor_config.transforms
+    local scale = transforms.dig_scale or 1
+    local dx = transforms.dig_dx or 0
+    local dy = transforms.dig_dy or 0
+    for segment = 1, 4 do
+        local base = screen.t_base[segment]
+        screen.t_segs[segment]:SetWndPos(scratch_pos:set(base.x + dx, base.y + dy))
+        screen.t_segs[segment]:SetWndSize(scratch_size:set(base.w * scale, base.h * scale))
+    end
+    local colon = screen.colon_base
+    screen.colon:SetWndPos(scratch_pos:set(colon.x + dx, colon.y + dy))
+    screen.colon:SetWndSize(scratch_size:set(colon.w * scale, colon.h * scale))
+end
+
+function UIVektor:set_status_bar(is_toxic, ratio)
+    self.face = binder.bind(self.bg, is_toxic and "vektor_bg_toxic" or "vektor_bg", self.face)
+    local fill = clamp(ratio, 0, 1)
+    self.bar_fill:SetWndSize(scratch_size:set(self.bar_fill_w * fill, self.bar_fill_h))
+end
+
+function UIVektor:update_timer()
+    local hours = level.get_time_hours()
+    local minutes = level.get_time_minutes()
+    local digits = { math.floor(hours / 10), hours % 10, math.floor(minutes / 10), minutes % 10 }
+
+    for seg_idx = 1, 4 do
+        if self.last_time[seg_idx] ~= digits[seg_idx] then
+            self.last_time[seg_idx] = digits[seg_idx]
+            binder.set(self.t_segs[seg_idx], DIGIT_TEX[digits[seg_idx]])
+        end
+    end
+end
+
+function UIVektor:set_distance(meters)
+    local value = clamp(math.floor((meters or 0) + 0.5), 0, 999)
+    local digits = { math.floor(value / 100), math.floor(value / 10) % 10, value % 10 }
+    for seg_idx = 1, 3 do
+        if self.last_dist[seg_idx] ~= digits[seg_idx] then
+            self.last_dist[seg_idx] = digits[seg_idx]
+            binder.set(self.d_segs[seg_idx], DIGIT_TEX[digits[seg_idx]])
+        end
+    end
+end
+
+function UIVektor:Update()
+    CUIScriptWnd.Update(self)
+
+    if not allow_update() then
+        return
+    end
+
+    self:update_timer()
+end
+
+hud = wd_screen.new_hud({
+    name = "UIVektor",
+    create = function()
+        return UIVektor()
+    end,
+    get_brightness = function()
+        return d_vektor_config.transforms.brightness
+    end,
+    on_create = function(screen)
+        apply_digit_layout()
+        screen:set_distance(0)
+    end,
+})
+
+apply_alpha = hud.apply_alpha
+
+function set_distance(meters)
+    local screen = hud.get()
+    if screen then
+        screen:set_distance(meters)
+    end
+end
+
+function set_status_bar(is_toxic, ratio)
+    local screen = hud.get()
+    if screen then
+        screen:set_status_bar(is_toxic, ratio)
+    end
+end
+
+function show_hud()
+    return hud.show()
+end
+
+function close_hud()
+    hud.close()
+end

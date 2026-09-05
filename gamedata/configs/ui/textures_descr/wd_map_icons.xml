@@ -1,0 +1,18 @@
+<w>
+<file name="wd\ui\wd_map_player">
+	<texture id="wd_map_player_arrow" x="0" y="0" width="64" height="64"/>
+</file>
+<file name="wd\ui\wd_map_transitions">
+	<texture id="wd_map_transition_up" x="0" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_up_right" x="128" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_right" x="256" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_right_down" x="384" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_down" x="512" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_down_left" x="640" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_left" x="768" y="0" width="128" height="128"/>
+	<texture id="wd_map_transition_left_up" x="896" y="0" width="128" height="128"/>
+</file>
+<file name="wd\ui\wd_map_arrow_frames">
+	<texture id="wd_map_arrow_frames" x="0" y="0" width="384" height="384"/>
+</file>
+</w>

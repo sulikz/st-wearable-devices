@@ -1,0 +1,139 @@
+local IDLE_UPDATE_MS = 250
+local XML_FILE = "ui_wd.xml"
+local WINDOW = "wd"
+local NODE_PREFIX = "wd:"
+local DEFAULT_PAGE = "health"
+local MAP_PAGE = "map_small"
+
+local PAGE_BUILDERS = {
+    health = d_promin_health_ui.build,
+    main = d_promin_health_ui.build_main,
+    [MAP_PAGE] = d_promin_map_ui.build,
+}
+
+local active_page_id = DEFAULT_PAGE
+local singleton = nil
+
+local allow_idle_update = wd_core.throttle(IDLE_UPDATE_MS)
+
+local function is_powered()
+    return d_promin.is_powered()
+end
+
+class("UIPromin")(CUIScriptWnd)
+
+function UIPromin:__init()
+    super()
+    self:Show(true)
+    self:Enable(true)
+    local xml = CScriptXmlInit()
+    xml:ParseFile(XML_FILE)
+    xml:InitWindow(WINDOW, 0, self)
+    self.ctx = {
+        init = function(id)
+            return xml:InitStatic(NODE_PREFIX .. id, self)
+        end,
+    }
+    self.pages = {}
+    self.powered_state = true
+    self:apply_page()
+end
+
+function UIPromin:ensure_page(page_id)
+    local handle = self.pages[page_id]
+    if handle then
+        return handle
+    end
+    local build = PAGE_BUILDERS[page_id]
+    if not build then
+        return nil
+    end
+    handle = build(self.ctx)
+    self.pages[page_id] = handle
+    if page_id ~= active_page_id then
+        handle.set_visible(false)
+    end
+    return handle
+end
+
+function UIPromin:apply_page()
+    self:ensure_page(active_page_id)
+    for page_id, handle in pairs(self.pages) do
+        handle.set_visible(page_id == active_page_id and self.powered_state)
+    end
+    self:update_active()
+end
+
+function UIPromin:update_active()
+    if not self.powered_state then
+        return
+    end
+    local handle = self.pages[active_page_id]
+    if handle and handle.update then
+        handle.update()
+    end
+end
+
+function UIPromin:repaint()
+    for _, handle in pairs(self.pages) do
+        if handle.repaint then
+            handle.repaint()
+        end
+    end
+end
+
+function UIPromin:Update()
+    CUIScriptWnd.Update(self)
+    local powered = is_powered()
+    if powered ~= self.powered_state then
+        self.powered_state = powered
+        self:apply_page()
+    end
+    if not powered then
+        return
+    end
+    if not (wd_inspect.is_raised() or allow_idle_update()) then
+        return
+    end
+    self:update_active()
+end
+
+function UIPromin:__finalize() end
+
+function get_ui()
+    if singleton == nil then
+        singleton = UIPromin()
+    end
+    return singleton
+end
+
+function repaint()
+    if singleton then
+        singleton:repaint()
+    end
+end
+
+function set_page(page_id)
+    if not PAGE_BUILDERS[page_id] then
+        return
+    end
+    active_page_id = page_id
+    if singleton then
+        singleton:apply_page()
+    end
+end
+
+function get_page()
+    return active_page_id
+end
+
+function ensure_page(page_id)
+    return singleton and singleton:ensure_page(page_id)
+end
+
+function update_map(state)
+    local page = ensure_page(MAP_PAGE)
+    if page then
+        page.update_map(state)
+    end
+end

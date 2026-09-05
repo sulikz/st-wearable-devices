@@ -1,0 +1,120 @@
+local AMPER_FACTOR = 1000
+
+function new(cfg)
+    local kernel = {}
+    if _ITM then
+        _ITM.device = _ITM.device or {}
+        for _, section in ipairs(cfg.sections or { cfg.section }) do
+            _ITM.device[section] = true
+        end
+    end
+    local tick_ms = cfg.tick_ms or 5000
+    local critical = ini_sys:r_float_ex(cfg.section, "power_critical")
+    if not critical or critical <= 0 then
+        critical = 0.05
+    end
+    local rest_condition = math.max(critical - 0.001, 0.001)
+    local ceiling = 0.9999
+    local last_time = nil
+    local allow_tick = wd_core.throttle(tick_ms)
+    local last_ratio = nil
+    local dead = nil
+    local pending_restore = nil
+    local last_condition = nil
+
+    local function get_eco_factor()
+        if game_difficulties and game_difficulties.get_eco_factor then
+            return game_difficulties.get_eco_factor("battery_consumption") or 1
+        end
+        return 1
+    end
+
+    local function advance_baseline(now_ms)
+        if not last_time then
+            last_time = now_ms
+            return 0
+        end
+        local seconds = (now_ms - last_time) / 1000
+        last_time = now_ms
+        if seconds <= 0 then
+            return 0
+        end
+        return seconds
+    end
+
+    local function notify(condition)
+        local ratio = clamp((condition - critical) / (ceiling - critical), 0, 1)
+        local is_dead = condition < critical
+        local ratio_moved = last_ratio == nil or math.abs(ratio - last_ratio) >= 0.01
+        if not ratio_moved and is_dead == dead then
+            return
+        end
+        last_ratio = ratio
+        dead = is_dead
+        if cfg.on_power_change then
+            cfg.on_power_change(ratio, is_dead)
+        end
+    end
+
+    function kernel.update()
+        local item = cfg.get_item()
+        if not item then
+            last_time = nil
+            return
+        end
+        if not allow_tick() then
+            return
+        end
+        local now_ms = time_global()
+        if pending_restore ~= nil then
+            item:set_condition(clamp(pending_restore, 0, ceiling))
+            pending_restore = nil
+        end
+        local seconds = advance_baseline(now_ms)
+        local condition = item:condition()
+        if cfg.is_draining() and seconds > 0 and condition >= critical then
+            local delta = seconds * cfg.get_consumption() / AMPER_FACTOR * get_eco_factor()
+            condition = condition - delta
+            if condition < critical then
+                condition = rest_condition
+            elseif condition > ceiling then
+                condition = ceiling
+            end
+            item:set_condition(condition)
+        end
+        last_condition = condition
+        notify(condition)
+    end
+
+    function kernel.is_dead()
+        return dead == true
+    end
+
+    function kernel.get_ratio()
+        return last_ratio or 0
+    end
+
+    function kernel.reset()
+        last_time = nil
+        allow_tick = wd_core.throttle(tick_ms)
+        last_ratio = nil
+        dead = nil
+    end
+
+    function kernel.save()
+        local item = cfg.get_item()
+        if item then
+            return item:condition()
+        end
+        return last_condition
+    end
+
+    function kernel.load(value)
+        if type(value) == "number" then
+            pending_restore = value
+            last_condition = value
+        end
+    end
+
+    return kernel
+end

@@ -1,0 +1,313 @@
+local function assign(dst, fields, src)
+    local fresh = wd_transforms.copy(fields, src)
+    for key in pairs(dst) do
+        dst[key] = nil
+    end
+    for key, value in pairs(fresh) do
+        dst[key] = value
+    end
+end
+
+local function overlay_typed(dst, src, fields)
+    for _, field in ipairs(fields) do
+        local name, is_vec3 = field[1], field[2]
+        local value = src[name]
+        if value ~= nil then
+            dst[name] = is_vec3 and { value[1], value[2], value[3] } or value
+        end
+    end
+end
+
+local GATE_SECTION = "wd_config"
+local GATE_KEY = "use_saved_positions"
+
+local instances = {}
+local use_saved = false
+
+local function get_user_subset(fields, is_user_field)
+    local out = {}
+    for _, field in ipairs(fields) do
+        if is_user_field[field[1]] then
+            out[#out + 1] = field
+        end
+    end
+    return out
+end
+
+function is_using_saved_positions()
+    return use_saved
+end
+
+function reload_all()
+    local store = wd_store.read()
+    for _, instance in ipairs(instances) do
+        instance.load_from_store(store)
+    end
+end
+
+function set_using_saved_positions(on)
+    on = on and true or false
+    if use_saved == on then
+        return true
+    end
+    if not wd_store.update({ [GATE_SECTION] = { [GATE_KEY] = tostring(on) } }) then
+        return false
+    end
+    use_saved = on
+    reload_all()
+    return true
+end
+
+local function load_gate()
+    use_saved = (wd_store.read()[GATE_SECTION] or {})[GATE_KEY] == "true"
+end
+
+function register()
+    wd_gui.register_global_toggle({
+        id = "use_saved_positions",
+        label = "Use saved positions",
+        dev = true,
+        get = is_using_saved_positions,
+        set = function(on)
+            set_using_saved_positions(on)
+            wd_gui.apply_worn_devices()
+        end,
+    })
+    wd_core.register({
+        id = "wd_config",
+        on_start = load_gate,
+    })
+end
+
+function new(cfg)
+    local self = {}
+    local global_key = assert(cfg.global_key, "wd_config.new: global_key required")
+    local family_fields = cfg.family_fields or {}
+    local tier_fields = cfg.tier_fields or {}
+    local variant_defaults = cfg.variant_defaults or {}
+    local fields = {}
+    for _, field in ipairs(family_fields) do
+        fields[#fields + 1] = field
+    end
+    for _, field in ipairs(tier_fields) do
+        fields[#fields + 1] = field
+    end
+
+    local is_variant_field = {}
+    for _, name in ipairs(cfg.variant_fields or {}) do
+        is_variant_field[name] = true
+    end
+    local variant_fields = {}
+    local base_family_fields = {}
+    for _, field in ipairs(family_fields) do
+        if is_variant_field[field[1]] then
+            variant_fields[#variant_fields + 1] = field
+        else
+            base_family_fields[#base_family_fields + 1] = field
+        end
+    end
+    local all_user_fields = cfg.user_fields == "all"
+    local is_user_field = {}
+    if not all_user_fields then
+        for _, name in ipairs(cfg.user_fields or {}) do
+            is_user_field[name] = true
+        end
+    end
+    local user_subset = {}
+    for _, list in ipairs({ family_fields, base_family_fields, variant_fields, tier_fields }) do
+        user_subset[list] = all_user_fields and list or get_user_subset(list, is_user_field)
+    end
+
+    local function get_store_fields(all)
+        if use_saved then
+            return all
+        end
+        return user_subset[all]
+    end
+
+    local active_variant = nil
+
+    local tiers = cfg.tiers or { { id = "t1", section = cfg.section } }
+    local tier_by_section = {}
+    local tier_by_id = {}
+    for _, tier in ipairs(tiers) do
+        tier_by_section[tier.section] = tier
+        tier_by_id[tier.id] = tier
+    end
+    local active_tier = tiers[1]
+
+    self.SECTION = cfg.section
+    self.TIERS = tiers
+    self.DEFAULTS = cfg.defaults
+    self.SKINS = cfg.skins
+    self.EMBLEMS = cfg.emblems
+    self.transforms = {}
+    self.saved = {}
+
+    local function get_tier_store_key(tier)
+        if tier == tiers[1] then
+            return global_key
+        end
+        return global_key .. "@" .. tier.id
+    end
+
+    local function get_variant_store_key(tier)
+        return get_tier_store_key(tier) .. "#" .. active_variant
+    end
+
+    function self.get_active_tier()
+        return active_tier
+    end
+
+    function self.get_tier_of(section)
+        return tier_by_section[section]
+    end
+
+    function self.get_model()
+        return active_tier.model
+    end
+
+    function self.get_ui_module()
+        return active_tier.ui
+    end
+
+    function self.has_sensor(key)
+        local sensors = active_tier.sensors
+        return sensors ~= nil and sensors[key] == true
+    end
+
+    function self.get_pages()
+        return active_tier.pages
+    end
+
+    function self.has_page(page_id)
+        for _, page in ipairs(active_tier.pages or {}) do
+            if page == page_id then
+                return true
+            end
+        end
+        return false
+    end
+
+    function self.reset_transforms()
+        assign(self.transforms, fields, self.resolve({}, active_tier.id))
+    end
+
+    function self.snapshot_saved()
+        assign(self.saved, fields, self.transforms)
+    end
+
+    function self.resolve(store, tier_id)
+        local tier = tier_by_id[tier_id] or tiers[1]
+        local result = wd_transforms.copy(fields, cfg.defaults)
+        if tier.defaults then
+            overlay_typed(result, tier.defaults, tier_fields)
+        end
+        wd_transforms.apply(result, store[global_key] or {}, get_store_fields(family_fields))
+        wd_transforms.apply(result, store[get_tier_store_key(tier)] or {}, get_store_fields(tier_fields))
+        if active_variant then
+            overlay_typed(result, variant_defaults[active_variant] or {}, variant_fields)
+            wd_transforms.apply(result, store[get_variant_store_key(tier)] or {}, get_store_fields(variant_fields))
+        end
+        return result
+    end
+
+    function self.get_variant()
+        return active_variant
+    end
+
+    function self.set_variant(variant)
+        if active_variant == variant then
+            return false
+        end
+        active_variant = variant
+        self.load_transforms()
+        return true
+    end
+
+    function self.get_defaults()
+        if not active_variant then
+            return cfg.defaults
+        end
+        return self.resolve({}, active_tier.id)
+    end
+
+    function self.load_from_store(store)
+        assign(self.transforms, fields, self.resolve(store, active_tier.id))
+        self.snapshot_saved()
+    end
+
+    function self.load_transforms()
+        self.load_from_store(wd_store.read())
+    end
+
+    function self.set_active_tier(section)
+        local tier = tier_by_section[section]
+        if not tier then
+            return nil
+        end
+        if tier ~= active_tier then
+            active_tier = tier
+            self.load_transforms()
+        end
+        return tier
+    end
+
+    function self.reset_active_tier()
+        if active_tier ~= tiers[1] then
+            active_tier = tiers[1]
+            self.load_transforms()
+        end
+    end
+
+    function self.save_global()
+        local store = wd_store.read()
+        local patch = {}
+        patch[global_key] = wd_transforms.serialize(
+            store[global_key] or {},
+            self.transforms,
+            get_store_fields(active_variant and base_family_fields or family_fields)
+        )
+        if active_variant then
+            local variant_key = get_variant_store_key(active_tier)
+            patch[variant_key] =
+                wd_transforms.serialize(store[variant_key] or {}, self.transforms, get_store_fields(variant_fields))
+        end
+        if #tier_fields > 0 then
+            local tier_key = get_tier_store_key(active_tier)
+            patch[tier_key] = wd_transforms.serialize(
+                patch[tier_key] or store[tier_key] or {},
+                self.transforms,
+                get_store_fields(tier_fields)
+            )
+        end
+        if not wd_store.update(patch) then
+            return false
+        end
+        self.snapshot_saved()
+        return true
+    end
+
+    if cfg.skins then
+        function self.get_skin_index()
+            return wd_appearance.get_index(self.transforms, cfg.skins, "skin")
+        end
+        function self.get_skin_model()
+            return cfg.skins[self.get_skin_index()].model
+        end
+    end
+
+    if cfg.emblems then
+        function self.get_emblem_index()
+            return wd_appearance.get_index(self.transforms, cfg.emblems, "emblem")
+        end
+        function self.get_emblem_faction()
+            return wd_appearance.get_faction(self.transforms, cfg.emblems, "emblem")
+        end
+    end
+
+    self.reset_transforms()
+    self.snapshot_saved()
+    instances[#instances + 1] = self
+    return self
+end

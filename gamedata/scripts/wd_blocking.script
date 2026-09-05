@@ -1,0 +1,28 @@
+function is_ui_open()
+    if not db.actor then
+        return true
+    end
+    if db.actor:is_talking() then
+        return true
+    end
+    if actor_menu and actor_menu.inventory_opened and actor_menu.inventory_opened() then
+        return true
+    end
+    local pda = ActorMenu.get_pda_menu()
+    if pda and pda:IsShown() then
+        return true
+    end
+    return false
+end
+
+function is_hands_locked()
+    local only_movekeys_allowed = game.only_movekeys_allowed
+    return only_movekeys_allowed ~= nil and only_movekeys_allowed() == true
+end
+
+function is_input_captured()
+    if is_ui_open() then
+        return true
+    end
+    return Check_UI()
+end

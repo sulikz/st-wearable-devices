@@ -1,0 +1,76 @@
+local SECTION = d_watch_config.SECTION
+local SLOTS = 4
+
+local shown = {}
+
+function get_tube_bone(slot, digit)
+    return "t" .. slot .. "_n" .. digit
+end
+
+function get_bone_visible_map()
+    local map = {}
+    for slot = 1, SLOTS do
+        for digit = 0, 9 do
+            map[get_tube_bone(slot, digit)] = false
+        end
+    end
+    return map
+end
+
+function get_display_digits()
+    local mode = d_watch_config.get_clock()
+    local seconds_left
+    if mode ~= "time" then
+        seconds_left = wd_toxic.get_filter_time_left()
+    end
+    local high
+    local low
+    if seconds_left then
+        high = math.min(math.floor(seconds_left / 60), 99)
+        low = math.floor(seconds_left % 60)
+    elseif mode == "filter" then
+        local has_filter = (wd_toxic.get_filter_capacity() or 0) > 0
+        high = has_filter and 99 or 0
+        low = high
+    else
+        high = level.get_time_hours()
+        low = level.get_time_minutes()
+    end
+    local digits = {
+        math.floor(high / 10),
+        high % 10,
+        math.floor(low / 10),
+        low % 10,
+    }
+    if seconds_left and digits[1] == 0 then
+        digits[1] = nil
+    end
+    return digits
+end
+
+local function apply_digits(digits)
+    for slot = 1, SLOTS do
+        local digit = digits[slot]
+        local previous = shown[slot]
+        if previous ~= digit then
+            if previous ~= nil then
+                wd_attach.set_bone_visible(SECTION, get_tube_bone(slot, previous), false)
+            end
+            if digit ~= nil then
+                wd_attach.set_bone_visible(SECTION, get_tube_bone(slot, digit), true)
+            end
+            shown[slot] = digit
+        end
+    end
+end
+
+function update()
+    if wd_attach.has_attachment(SECTION) then
+        apply_digits(get_display_digits())
+    end
+end
+
+function reset()
+    shown = {}
+    update()
+end

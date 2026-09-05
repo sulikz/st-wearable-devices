@@ -1,0 +1,532 @@
+local ANM_HIGHPORT = [[wd\highport.anm]]
+local PART_RIGHT = 0
+local LAYER_SPEED = 1.0
+HIGHPORT_OVERSHOOT = 1.15
+HIGHPORT_IN_MS = 450
+HIGHPORT_SETTLE_MS = 350
+
+local OFFSET_POS_ANMS = { [[wd\right_hand_x.anm]], [[wd\right_hand_y.anm]], [[wd\right_hand_z.anm]] }
+local OFFSET_ROT_ANMS = { [[wd\right_hand_pitch.anm]], [[wd\right_hand_yaw.anm]], [[wd\right_hand_roll.anm]] }
+
+local WEAPON_GROUPS = {
+    { id = "pistol", label = "Pistols", kind = "w_pistol", pos = { 0.078, 0.046, 0.024 }, rot = { -55, 21, -16 } },
+    { id = "smg", label = "SMGs", kind = "w_smg", pos = { 0.09, 0.04, -0.01 }, rot = { -70.5, 22.5, -15 } },
+    {
+        id = "shotgun",
+        label = "Shotguns",
+        kind = "w_shotgun",
+        pos = { 0.094, -0.084, 0.174 },
+        rot = { -56, 25.5, -14 },
+    },
+    { id = "rifle", label = "Rifles", kind = "w_rifle", pos = { 0.122, 0.044, 0.13 }, rot = { -59.5, 20, -12 } },
+    { id = "sniper", label = "Snipers", kind = "w_sniper", pos = { 0.126, -0.024, -0.024 }, rot = { -62, 22.5, -9 } },
+    { id = "other", label = "Other", pos = { 0.102, 0.03, 0.098 }, rot = { -55.5, 18.5, -23 } },
+}
+
+DEFAULTS = {}
+local FIELDS = {}
+local GROUP_BY_KIND = {}
+local GROUP_BY_ID = {}
+local GROUP_ROWS = {}
+local POS_KEY = {}
+local ROT_KEY = {}
+for _, group in ipairs(WEAPON_GROUPS) do
+    local pos_key = "highport_pos_" .. group.id
+    local rot_key = "highport_rot_" .. group.id
+    POS_KEY[group.id] = pos_key
+    ROT_KEY[group.id] = rot_key
+    GROUP_BY_ID[group.id] = group
+    GROUP_ROWS[group.id] = {
+        { pos_key, 1, 0.002, "Position x" },
+        { pos_key, 2, 0.002, "Position y" },
+        { pos_key, 3, 0.002, "Position z" },
+        { rot_key, 1, 0.5, "Pitch (X)" },
+        { rot_key, 2, 0.5, "Yaw (Y)" },
+        { rot_key, 3, 0.5, "Roll (Z)" },
+    }
+    if group.kind then
+        GROUP_BY_KIND[group.kind] = group.id
+    end
+    DEFAULTS[pos_key] = { group.pos[1], group.pos[2], group.pos[3] }
+    DEFAULTS[rot_key] = { group.rot[1], group.rot[2], group.rot[3] }
+    FIELDS[#FIELDS + 1] = { pos_key, true }
+    FIELDS[#FIELDS + 1] = { rot_key, true }
+end
+local DEVICE_ID = "wd_highport"
+local TAB_ID = "wd_highport_offsets"
+local FALLBACK_GROUP = "other"
+local WEAPON_STORE_SECTION = "wd_highport_weapons"
+
+local WEAPON_DEFAULTS_LTX = "wd_highport.ltx"
+
+WEAPON_DEFAULTS = {}
+
+function load_weapon_defaults()
+    WEAPON_DEFAULTS = {}
+    local ini = ini_file(WEAPON_DEFAULTS_LTX)
+    if not (ini and ini:section_exist(WEAPON_STORE_SECTION)) then
+        return
+    end
+    local count = ini:line_count(WEAPON_STORE_SECTION)
+    for index = 0, count - 1 do
+        local _, key, text = ini:r_line(WEAPON_STORE_SECTION, index, "", "")
+        local axis, weapon
+        if key then
+            axis, weapon = key:match("^(%l+)_(.+)$")
+        end
+        if weapon and text and (axis == "pos" or axis == "rot") then
+            local entry = WEAPON_DEFAULTS[weapon] or {}
+            entry[axis] = wd_transforms.parse_axes(text)
+            WEAPON_DEFAULTS[weapon] = entry
+        end
+    end
+    for weapon, entry in pairs(WEAPON_DEFAULTS) do
+        if not (entry.pos and entry.rot) then
+            WEAPON_DEFAULTS[weapon] = nil
+        end
+    end
+end
+
+local weapon_overrides = {}
+
+local cfg = wd_config.new({
+    section = "wd_highport",
+    global_key = "wd_highport",
+    tier_fields = FIELDS,
+    user_fields = "all",
+    defaults = DEFAULTS,
+})
+
+transforms = cfg.transforms
+saved = cfg.saved
+load_transforms = cfg.load_transforms
+
+local ENGINE_LAYER_FADE_MS = 400
+
+local raise_started_at = 0
+local last_fired_power = nil
+local offset_driver = nil
+local release_at = 0
+
+local function get_offset_driver()
+    if not offset_driver then
+        offset_driver = wd_hands_offset.new({
+            pos_anms = OFFSET_POS_ANMS,
+            rot_anms = OFFSET_ROT_ANMS,
+            part = PART_RIGHT,
+        })
+    end
+    return offset_driver
+end
+
+local traits_by_section = {}
+
+local function resolve_sight_base(section, base)
+    if not base or base == section then
+        return nil
+    end
+    if section:sub(1, #base + 1) ~= base .. "_" then
+        return nil
+    end
+    return base
+end
+
+local function get_weapon_traits(section)
+    local traits = traits_by_section[section]
+    if not traits then
+        local own_kind = ini_sys:r_string_ex(section, "kind")
+        local base = ini_sys:r_string_ex(section, "parent_section")
+        local kind = own_kind or (base and ini_sys:r_string_ex(base, "kind"))
+        local class = ini_sys:r_string_ex(section, "class") or (base and ini_sys:r_string_ex(base, "class"))
+        traits = {
+            group = GROUP_BY_KIND[kind] or "other",
+            sight_base = resolve_sight_base(section, base),
+            carryable = kind ~= "w_melee" and class ~= "II_BOLT",
+        }
+        traits_by_section[section] = traits
+    end
+    return traits
+end
+
+local function get_weapon_group(section)
+    if not section then
+        return "other"
+    end
+    return get_weapon_traits(section).group
+end
+
+local function get_sight_base(section)
+    if not section then
+        return nil
+    end
+    return get_weapon_traits(section).sight_base
+end
+
+local function is_carryable(section)
+    return section ~= nil and get_weapon_traits(section).carryable
+end
+
+local function wants_carry(item, section)
+    if not wd_inspect.is_pose_up() then
+        return false
+    end
+    if not (db.actor and db.actor:alive()) then
+        return false
+    end
+    if not item then
+        return false
+    end
+    if not is_carryable(section) then
+        return false
+    end
+    if wd_hands_empty.is_drawn() then
+        return false
+    end
+    return not game.actor_weapon_lowered()
+end
+
+local CMD_BLEND_MOVE = "blend_move_anims"
+local WPN_STATE_IDLE = 0
+local BLEND_MOVE_SECTION = "wd_blend_move"
+
+local blend_move_restore = nil
+local blend_move_marked = nil
+
+local function redispatch_weapon_idle(item)
+    if item and item:get_state() == WPN_STATE_IDLE then
+        item:switch_state(WPN_STATE_IDLE)
+    end
+end
+
+local function has_blend_move_marker()
+    return wd_store.read()[BLEND_MOVE_SECTION] ~= nil
+end
+
+local function apply_blend_move(on, item)
+    get_console():execute(CMD_BLEND_MOVE .. (on and " on" or " off"))
+    if blend_move_marked ~= on then
+        local written
+        if on then
+            written = wd_store.update({ [BLEND_MOVE_SECTION] = { forced = "true" } })
+        else
+            written = wd_store.remove(BLEND_MOVE_SECTION)
+        end
+        if written then
+            blend_move_marked = on
+        end
+    end
+    redispatch_weapon_idle(item)
+end
+
+local function sync_blend_move_drift(item)
+    if get_console_cmd(1, CMD_BLEND_MOVE) == true then
+        return
+    end
+    blend_move_restore = false
+    apply_blend_move(true, item)
+end
+
+local function set_blend_move_override(wanted, item)
+    if wanted then
+        if blend_move_restore == nil then
+            blend_move_restore = get_console_cmd(1, CMD_BLEND_MOVE) == true
+            if not blend_move_restore then
+                apply_blend_move(true, item)
+            end
+        else
+            sync_blend_move_drift(item)
+        end
+        return
+    end
+    if blend_move_restore ~= nil then
+        if not blend_move_restore then
+            apply_blend_move(false, item)
+        end
+        blend_move_restore = nil
+    end
+end
+
+local function on_net_destroy()
+    set_blend_move_override(false, nil)
+end
+
+local function drop_stale_blend_move(item)
+    if not has_blend_move_marker() then
+        return
+    end
+    apply_blend_move(false, item)
+end
+
+local function ease_smoothstep(ratio)
+    ratio = clamp(ratio, 0, 1)
+    return ratio * ratio * (3 - 2 * ratio)
+end
+
+function get_highport_power(elapsed_ms)
+    if elapsed_ms < HIGHPORT_IN_MS then
+        return HIGHPORT_OVERSHOOT * ease_smoothstep(elapsed_ms / HIGHPORT_IN_MS)
+    end
+    if elapsed_ms < HIGHPORT_IN_MS + HIGHPORT_SETTLE_MS then
+        return HIGHPORT_OVERSHOOT
+            + (1.0 - HIGHPORT_OVERSHOOT) * ease_smoothstep((elapsed_ms - HIGHPORT_IN_MS) / HIGHPORT_SETTLE_MS)
+    end
+    return 1.0
+end
+
+local function persist_weapon_overrides()
+    local section = {}
+    for weapon, override in pairs(weapon_overrides) do
+        section["pos_" .. weapon] = wd_transforms.serialize_axes(override.pos)
+        section["rot_" .. weapon] = wd_transforms.serialize_axes(override.rot)
+    end
+    return wd_store.update({ [WEAPON_STORE_SECTION] = section })
+end
+
+function load_weapon_overrides()
+    weapon_overrides = {}
+    local section = wd_store.read()[WEAPON_STORE_SECTION] or {}
+    for key, text in pairs(section) do
+        local weapon = key:match("^pos_(.+)$")
+        if weapon then
+            weapon_overrides[weapon] = {
+                pos = wd_transforms.parse_axes(text),
+                rot = wd_transforms.parse_axes(section["rot_" .. weapon]),
+            }
+        end
+    end
+end
+
+function save_weapon_override()
+    local item = db.actor and db.actor:active_item()
+    local section = item and item:section()
+    if not section then
+        return false, "no weapon in hand"
+    end
+    local weapon = get_sight_base(section) or section
+    local group = get_weapon_group(section)
+    weapon_overrides[weapon] = {
+        pos = wd_transforms.copy_axes(transforms[POS_KEY[group]]),
+        rot = wd_transforms.copy_axes(transforms[ROT_KEY[group]]),
+    }
+    if weapon ~= section then
+        weapon_overrides[section] = nil
+    end
+    if not persist_weapon_overrides() then
+        return false, "save FAILED"
+    end
+    return true, "saved " .. weapon
+end
+
+local function is_gui_previewing()
+    if not (wd_gui and wd_gui.is_open and wd_gui.is_open()) then
+        return false
+    end
+    local device = wd_gui.get_active_device_spec()
+    return device ~= nil and device.id == DEVICE_ID
+end
+
+local function resolve_saved_offsets(weapon)
+    local base = get_sight_base(weapon)
+    return weapon_overrides[weapon] or weapon_overrides[base] or WEAPON_DEFAULTS[weapon] or WEAPON_DEFAULTS[base]
+end
+
+local function get_weapon_offsets(weapon, group, previewing)
+    if not previewing then
+        local override = resolve_saved_offsets(weapon)
+        if override then
+            return override.pos, override.rot
+        end
+    end
+    return transforms[POS_KEY[group]], transforms[ROT_KEY[group]]
+end
+
+local last_preview_weapon = nil
+local seeded_groups = {}
+local current_group = nil
+
+function get_current_group()
+    return current_group
+end
+
+local function set_group_tab(group)
+    current_group = group
+    wd_gui.show_tab(TAB_ID)
+end
+
+local function seed_group_sliders(weapon, group)
+    local override = resolve_saved_offsets(weapon)
+    local pos = override and override.pos or saved[POS_KEY[group]]
+    local rot = override and override.rot or saved[ROT_KEY[group]]
+    transforms[POS_KEY[group]] = wd_transforms.copy_axes(pos)
+    transforms[ROT_KEY[group]] = wd_transforms.copy_axes(rot)
+    seeded_groups[group] = true
+end
+
+local function restore_seeded_groups()
+    if next(seeded_groups) == nil then
+        return
+    end
+    for group in pairs(seeded_groups) do
+        transforms[POS_KEY[group]] = wd_transforms.copy_axes(saved[POS_KEY[group]])
+        transforms[ROT_KEY[group]] = wd_transforms.copy_axes(saved[ROT_KEY[group]])
+    end
+    seeded_groups = {}
+end
+
+local function clear_preview_seed()
+    last_preview_weapon = nil
+    restore_seeded_groups()
+end
+
+local function sync_gui_to_weapon(weapon, group, previewing)
+    if not previewing then
+        clear_preview_seed()
+        return
+    end
+    if weapon == last_preview_weapon then
+        return
+    end
+    last_preview_weapon = weapon
+    seed_group_sliders(weapon, group)
+    set_group_tab(group)
+end
+
+local function drive_offsets(weapon)
+    local group = get_weapon_group(weapon)
+    local previewing = is_gui_previewing()
+    sync_gui_to_weapon(weapon, group, previewing)
+    local pos, rot = get_weapon_offsets(weapon, group, previewing)
+    get_offset_driver().drive(pos, rot)
+end
+
+local function stop_offsets()
+    get_offset_driver().stop()
+end
+
+function actor_on_update()
+    local now = time_global()
+    local item = db.actor and db.actor:active_item()
+    local section = item and item:section()
+    local blend_move_wanted = wants_carry(item, section)
+    local highport_wanted = blend_move_wanted and wd_inspect.is_pose_held()
+    set_blend_move_override(blend_move_wanted, item)
+    if highport_wanted then
+        if release_at ~= 0 then
+            release_at = 0
+            last_fired_power = nil
+        end
+        if raise_started_at == 0 then
+            raise_started_at = now
+        end
+        local elapsed_ms = now - raise_started_at
+        local power = get_highport_power(elapsed_ms)
+        if power ~= last_fired_power then
+            game.play_hud_anm(ANM_HIGHPORT, PART_RIGHT, LAYER_SPEED, power, true, true)
+            last_fired_power = power
+        end
+        drive_offsets(section)
+        return
+    end
+    clear_preview_seed()
+    if raise_started_at ~= 0 and release_at == 0 then
+        release_at = now
+        game.stop_hud_anm(ANM_HIGHPORT, false)
+        stop_offsets()
+    end
+    if release_at ~= 0 and now - release_at >= ENGINE_LAYER_FADE_MS then
+        release_at = 0
+        raise_started_at = 0
+        last_fired_power = nil
+    end
+end
+
+function on_first_update()
+    local item = db.actor and db.actor:active_item()
+    set_blend_move_override(false, item)
+    drop_stale_blend_move(item)
+    raise_started_at = 0
+    last_fired_power = nil
+    release_at = 0
+    last_preview_weapon = nil
+    seeded_groups = {}
+    get_offset_driver().forget()
+end
+
+local function new_group_source(offsets, fallback)
+    if not (offsets and current_group) then
+        return fallback
+    end
+    return {
+        [POS_KEY[current_group]] = offsets.pos,
+        [ROT_KEY[current_group]] = offsets.rot,
+    }
+end
+
+local function get_saved_source()
+    return new_group_source(resolve_saved_offsets(last_preview_weapon), saved)
+end
+
+local function get_defaults_source()
+    local weapon = last_preview_weapon
+    return new_group_source(WEAPON_DEFAULTS[weapon] or WEAPON_DEFAULTS[get_sight_base(weapon)], DEFAULTS)
+end
+
+local function register_gui()
+    local gui_fields = {}
+    for _, group in ipairs(WEAPON_GROUPS) do
+        gui_fields[POS_KEY[group.id]] = wd_gui.new_slider(-0.3, 0.3)
+        gui_fields[ROT_KEY[group.id]] = wd_gui.new_slider(-90, 90)
+    end
+    wd_gui.register_device({
+        id = DEVICE_ID,
+        label = "R-Hand",
+        rank = 3,
+        store = function()
+            return transforms
+        end,
+        saved = get_saved_source,
+        defaults = get_defaults_source,
+        save = save_weapon_override,
+        fields = gui_fields,
+    })
+    wd_gui.register_tab({
+        device = DEVICE_ID,
+        id = TAB_ID,
+        label = function()
+            return GROUP_BY_ID[current_group].label
+        end,
+        rows = function()
+            if wd_gui.is_pose_free() then
+                return nil
+            end
+            return GROUP_ROWS[current_group]
+        end,
+    })
+    set_group_tab(FALLBACK_GROUP)
+end
+
+local function suppress_cover_tilt(_, flags)
+    if wd_inspect.is_pose_up() then
+        flags.enabled = false
+    end
+end
+
+function register()
+    wd_core.register({
+        id = "wd_hands_highport",
+        on_start = function()
+            load_transforms()
+            load_weapon_defaults()
+            load_weapon_overrides()
+            if weapon_cover_tilt then
+                weapon_cover_tilt.add_callback("actor_on_weapon_before_tilt", suppress_cover_tilt)
+            end
+        end,
+        callbacks = {
+            actor_on_first_update = { on_first_update },
+            actor_on_update = { actor_on_update },
+            actor_on_net_destroy = { on_net_destroy },
+        },
+    })
+    register_gui()
+end

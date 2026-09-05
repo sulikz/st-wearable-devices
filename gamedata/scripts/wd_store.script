@@ -1,0 +1,174 @@
+local FILE = "wd.ltx"
+local BACKUP_FILE = "wd.ltx.bak"
+local STORE_MARK = "; wd_store\n"
+local ERR_MISSING = 2
+
+local function get_path(name)
+    local root = getFS():update_path("$game_config$", "")
+    if not root then
+        return nil
+    end
+    return root .. name
+end
+
+local function parse_kv(line)
+    local key, value = line:match("^%s*([%w_%-%.]+)%s*=%s*(.-)%s*$")
+    if key and value and value ~= "" then
+        return key, value
+    end
+    return nil
+end
+
+local function parse_store(text)
+    local store = {}
+    local section_count = 0
+    if not text then
+        return store, section_count
+    end
+    local section
+    for line in text:gmatch("[^\r\n]+") do
+        local header = line:match("^%s*%[(.-)%]%s*$")
+        if header then
+            section = header
+            if not store[section] then
+                store[section] = {}
+                section_count = section_count + 1
+            end
+        elseif section then
+            local key, value = parse_kv(line)
+            if key then
+                store[section][key] = value
+            end
+        end
+    end
+    return store, section_count
+end
+
+local function read_text(path)
+    local file, _, code = io.open(path, "r")
+    if not file then
+        return nil, code
+    end
+    local text = file:read("*a")
+    file:close()
+    return text
+end
+
+local function load_store()
+    local full_path = get_path(FILE)
+    if not full_path then
+        return {}, false
+    end
+    local text, code = read_text(full_path)
+    if not text and code ~= ERR_MISSING then
+        return {}, false
+    end
+    local store, section_count = parse_store(text)
+    if section_count > 0 or (text and text:sub(1, #STORE_MARK) == STORE_MARK) then
+        return store, true
+    end
+    local backup = read_text(get_path(BACKUP_FILE))
+    local recovered, recovered_count = parse_store(backup)
+    if recovered_count > 0 then
+        return recovered, true
+    end
+    return store, true
+end
+
+function read()
+    local store = load_store()
+    return store
+end
+
+local function serialize_store(store)
+    local lines = { STORE_MARK }
+    local section_names = {}
+    for section_name in pairs(store) do
+        section_names[#section_names + 1] = section_name
+    end
+    table.sort(section_names)
+    for _, section_name in ipairs(section_names) do
+        lines[#lines + 1] = "[" .. section_name .. "]\n"
+        local keys = {}
+        for key in pairs(store[section_name]) do
+            keys[#keys + 1] = key
+        end
+        table.sort(keys)
+        for _, key in ipairs(keys) do
+            lines[#lines + 1] = key .. " = " .. tostring(store[section_name][key]) .. "\n"
+        end
+        lines[#lines + 1] = "\n"
+    end
+    return table.concat(lines)
+end
+
+local function write_text(path, content)
+    local file = io.open(path, "w")
+    if not file then
+        return false
+    end
+    if not file:write(content) then
+        file:close()
+        return false
+    end
+    if not file:flush() then
+        file:close()
+        return false
+    end
+    if not file:close() then
+        return false
+    end
+    return true
+end
+
+local function write_store(store)
+    local full_path = get_path(FILE)
+    if not full_path then
+        return false
+    end
+    local content = serialize_store(store)
+    if not write_text(get_path(BACKUP_FILE), content) then
+        return false
+    end
+    if not write_text(full_path, content) then
+        return false
+    end
+    return read_text(full_path) == content
+end
+
+function update(patch)
+    local store, ok = load_store()
+    if not ok then
+        return false
+    end
+    for section_name, section in pairs(patch) do
+        store[section_name] = section
+    end
+    return write_store(store)
+end
+
+function remove(section_name)
+    local store, ok = load_store()
+    if not ok then
+        return false
+    end
+    store[section_name] = nil
+    return write_store(store)
+end
+
+function load_fields(section_name, names, defaults)
+    local stored = read()[section_name] or {}
+    local out = {}
+    for _, name in ipairs(names) do
+        out[name] = tonumber(stored[name]) or defaults[name]
+    end
+    return out
+end
+
+function save_fields(section_name, names, values)
+    local section = {}
+    for _, name in ipairs(names) do
+        section[name] = tostring(values[name])
+    end
+    return update({ [section_name] = section })
+end

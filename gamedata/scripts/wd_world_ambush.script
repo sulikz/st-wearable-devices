@@ -1,0 +1,68 @@
+local SAVE_KEY = "wd_world_ambushed"
+
+local AMBUSHES = {
+    {
+        key = "chimera_trucks_01",
+        trigger_key = "promin_map_trucks_01",
+        level = "k02_trucks_cemetery",
+        section = "m_chimera_e",
+        x = 120.54,
+        y = 10.34,
+        z = 149.87,
+    },
+}
+
+local fired = {}
+
+function set_ambushes(entries)
+    AMBUSHES = entries
+end
+
+function is_fired(key)
+    return fired[key] == true
+end
+
+function spawn_ambush(entry)
+    local position = vector():set(entry.x, entry.y, entry.z)
+    local level_vertex_id = level.vertex_id(position)
+    local game_vertex_id = db.actor:game_vertex_id()
+    alife_create(entry.section, position, level_vertex_id, game_vertex_id)
+    fired[entry.key] = true
+end
+
+function on_item_take(item)
+    if not db.actor or not item or not item.id then
+        return
+    end
+    local item_id = item:id()
+    local level_name = level.name()
+    for _, entry in ipairs(AMBUSHES) do
+        if
+            not fired[entry.key]
+            and entry.level == level_name
+            and ini_sys:section_exist(entry.section)
+            and item_id == wd_world_spawn.get_spawned_id(entry.trigger_key)
+        then
+            spawn_ambush(entry)
+        end
+    end
+end
+
+function save_state(m_data)
+    m_data[SAVE_KEY] = fired
+end
+
+function load_state(m_data)
+    fired = m_data[SAVE_KEY] or {}
+end
+
+function register()
+    wd_core.register({
+        id = "wd_world_ambush",
+        callbacks = {
+            actor_on_item_take = { on_item_take },
+            save_state = { save_state },
+            load_state = { load_state },
+        },
+    })
+end

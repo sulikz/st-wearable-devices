@@ -1,0 +1,200 @@
+local SECTION = "wd_bracer"
+local ATT_BONE = "l_forearm_twist"
+local PATCH_POLL_MS = 500
+
+local function apply_patch_texture()
+    wd_attach.apply_skin_texture(SECTION, d_bracer_config.get_patch_texture(), d_bracer_config.BAKED_PATCH_TEXTURE)
+end
+
+local owner = wd_worn.new({
+    attach_label = "st_attach_wd_bracer",
+    detach_label = "st_detach_wd_bracer",
+    save_key = "wd_bracer_worn",
+    item_section = SECTION,
+    on_attach = function()
+        if not sync_attachment() then
+            return false
+        end
+        wd_slots.remount_loadout()
+        return true
+    end,
+    on_detach = function()
+        wd_slots.unmount_all(true)
+        sync_attachment()
+    end,
+})
+
+function is_worn()
+    return owner.is_attached()
+end
+
+local function is_attachment_present()
+    return wd_attach.has_attachment(SECTION)
+end
+
+function sync_attachment()
+    if not is_worn() then
+        wd_attach.detach(SECTION)
+        return nil
+    end
+    local attachment = wd_attach.attach({
+        name = SECTION,
+        model = d_bracer_config.MODEL,
+        bone = ATT_BONE,
+        transforms = d_bracer_config.transforms,
+    })
+    apply_patch_texture()
+    return attachment
+end
+
+function reapply_transforms()
+    return wd_attach.reapply_transforms(SECTION, d_bracer_config.transforms)
+end
+
+function actor_on_first_update()
+    owner.detach_if_dropped()
+    if sync_attachment() then
+        wd_slots.remount_loadout()
+    end
+end
+
+function get_menu_text(obj)
+    return owner.get_menu_text(obj)
+end
+
+function toggle_attach(obj)
+    owner.toggle(obj)
+end
+
+function get_customize_text(obj)
+    if not (obj and owner.is_attached()) then
+        return nil
+    end
+    return game.translate_string("st_wd_customize")
+end
+
+function open_customize(obj)
+    if not owner.is_attached() then
+        return
+    end
+    wd_customize.open_from_inventory()
+end
+
+function open_customize_on_chord(_key, bind, dis, flags)
+    if dis or bind ~= key_bindings.kINVENTORY then
+        return
+    end
+    if not owner.is_attached() then
+        return
+    end
+    if key_state(wd_mcm.get_hold_key_dik()) == 0 then
+        return
+    end
+    flags.ret_value = false
+    wd_customize.open_from_inventory()
+end
+
+local function get_forearm_frame()
+    if not (db.actor and is_attachment_present()) then
+        return nil
+    end
+    local bone = db.actor:bone_id(ATT_BONE, true)
+    if bone == 65535 then
+        return nil
+    end
+    return db.actor:bone_transform(bone, true)
+end
+
+local function get_gizmo_frame()
+    local frame = get_forearm_frame()
+    if not frame then
+        return nil
+    end
+    local basis_i, basis_j, basis_k, center = frame.i, frame.j, frame.k, frame.c
+    local pos = d_bracer_config.transforms.model_pos
+    return {
+        i = basis_i,
+        j = basis_j,
+        k = basis_k,
+        c = {
+            x = center.x + basis_i.x * pos[1] + basis_j.x * pos[2] + basis_k.x * pos[3],
+            y = center.y + basis_i.y * pos[1] + basis_j.y * pos[2] + basis_k.y * pos[3],
+            z = center.z + basis_i.z * pos[1] + basis_j.z * pos[2] + basis_k.z * pos[3],
+        },
+    }
+end
+
+local function register_gui()
+    wd_gui.register_device({
+        id = "bracer",
+        label = "Bracer",
+        is_worn = is_attachment_present,
+        store = function()
+            return d_bracer_config.transforms
+        end,
+        saved = function()
+            return d_bracer_config.saved
+        end,
+        defaults = function()
+            return d_bracer_config.DEFAULTS
+        end,
+        save_global = d_bracer_config.save_global,
+        on_apply = function()
+            reapply_transforms()
+        end,
+        fields = {
+            model_pos = wd_gui.new_slider(-0.3, 0.3),
+            model_rot = wd_gui.new_slider(-180, 180),
+            model_scale = wd_gui.new_slider(0.01, 3),
+        },
+    })
+    wd_gui.register_tab({
+        device = "bracer",
+        id = "bracer_model",
+        label = "Bracer Position",
+        default = true,
+        rows = {
+            { "model_pos", 1, 0.0005, "Position x" },
+            { "model_pos", 2, 0.0005, "Position y" },
+            { "model_pos", 3, 0.0005, "Position z" },
+            { "model_rot", 1, 0.05, "Yaw (Y)" },
+            { "model_rot", 2, 0.05, "Pitch (X)" },
+            { "model_rot", 3, 0.05, "Roll (Z)" },
+            { "model_scale", nil, 0.001, "Scale" },
+        },
+    })
+    wd_gizmo.register({
+        tab = "bracer_model",
+        pos_field = "model_pos",
+        rot_field = "model_rot",
+        scale_field = "model_scale",
+        get_frame = get_gizmo_frame,
+    })
+end
+
+local function start()
+    d_bracer_config.load_transforms()
+    wd_trader.register(SECTION, 1)
+end
+
+function register()
+    wd_slots.register_bracer(is_worn)
+    wd_exo.register_device({
+        id = "bracer",
+        names = { SECTION },
+        resync = sync_attachment,
+    })
+    wd_core.register({
+        id = "bracer",
+        callbacks = {
+            actor_on_first_update = { actor_on_first_update },
+            actor_on_update = { owner.drop_poll, { apply_patch_texture, interval = PATCH_POLL_MS } },
+            on_before_key_press = { { open_customize_on_chord, unless_captured = true } },
+            save_state = { owner.save },
+            load_state = { owner.load },
+        },
+        on_start = start,
+    })
+    wd_hands_left.register_item("bracer", is_worn)
+    register_gui()
+end

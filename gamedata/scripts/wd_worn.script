@@ -1,0 +1,141 @@
+local groups = {}
+
+local function detach_group_siblings(group, self)
+    if not group then
+        return
+    end
+    local members = groups[group]
+    if not members then
+        return
+    end
+    for member_index = 1, #members do
+        local member = members[member_index]
+        if member ~= self then
+            member.detach()
+        end
+    end
+end
+
+function new(cfg)
+    local attached = nil
+    local attached_id = nil
+    local id_key = cfg.save_key .. "_id"
+    local self = {}
+
+    if cfg.wear_group then
+        local members = groups[cfg.wear_group] or {}
+        members[#members + 1] = self
+        groups[cfg.wear_group] = members
+    end
+
+    function self.is_attached()
+        return attached ~= nil and attached ~= false
+    end
+
+    function self.get_value()
+        return attached
+    end
+
+    function self.get_id()
+        return attached_id
+    end
+
+    local function is_replacement(obj)
+        return obj ~= nil and obj:id() ~= attached_id
+    end
+
+    function self.get_menu_text(obj)
+        if not obj then
+            return nil
+        end
+        if self.is_attached() and not is_replacement(obj) then
+            return game.translate_string(cfg.detach_label)
+        end
+        return game.translate_string(cfg.attach_label)
+    end
+
+    function self.detach()
+        if not self.is_attached() then
+            return
+        end
+        attached = nil
+        attached_id = nil
+        cfg.on_detach()
+    end
+
+    function self.toggle(obj)
+        if self.is_attached() then
+            local replacing = is_replacement(obj)
+            self.detach()
+            if not replacing then
+                return
+            end
+        end
+        attached = true
+        attached_id = obj and obj:id()
+        local ok, result = pcall(cfg.on_attach, obj)
+        if ok and result then
+            attached = result
+            detach_group_siblings(cfg.wear_group, self)
+        else
+            attached = nil
+            attached_id = nil
+        end
+    end
+
+    local function resolve_item_section()
+        if cfg.item_section == nil and cfg.get_obj_value then
+            return attached
+        end
+        return cfg.item_section
+    end
+
+    self.get_section = resolve_item_section
+
+    function self.get_object()
+        if attached_id == nil or not (db and db.actor) then
+            return nil
+        end
+        return db.actor:object_id(attached_id)
+    end
+
+    function self.detach_if_dropped()
+        if not self.is_attached() then
+            return false
+        end
+        if not (db and db.actor) then
+            return false
+        end
+        if self.get_object() ~= nil then
+            return false
+        end
+        attached = nil
+        attached_id = nil
+        cfg.on_detach()
+        return true
+    end
+
+    self.drop_poll = { self.detach_if_dropped, interval = 200 }
+
+    function self.save(m_data)
+        m_data[cfg.save_key] = attached
+        m_data[id_key] = attached_id
+    end
+
+    function self.load(m_data)
+        attached = m_data[cfg.save_key]
+        if cfg.get_obj_value and attached ~= nil and type(attached) ~= "string" then
+            attached = nil
+        end
+        local saved_id = m_data[id_key]
+        attached_id = nil
+        if self.is_attached() then
+            if type(saved_id) == "number" then
+                attached_id = saved_id
+            end
+            detach_group_siblings(cfg.wear_group, self)
+        end
+    end
+
+    return self
+end

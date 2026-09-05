@@ -1,0 +1,16 @@
+#include "common.h"
+#include "wd_occlude.h"
+
+struct	ui_vert_out
+{
+ 	float2 	tc0		: TEXCOORD0;
+	float4	cpos	: TEXCOORD1;
+	float4	c		: COLOR0;
+};
+
+float4 	main ( ui_vert_out I )	: SV_Target
+{
+	wd_occlude( I.cpos );
+	float4 r	= s_base.Sample( smp_base, I.tc0 ) * I.c;
+	return r;
+}

@@ -1,0 +1,155 @@
+<w>
+    <file name="wd\ui\promin\medik_bar_sys_hp">
+        <texture id="wd_bar_sys_hp"  x="0" y="0" width="64" height="16" />
+        <texture id="wd_gizmo_line" x="28" y="4" width="8" height="8" />
+    </file>
+    <file name="wd\ui\promin\medik_bar_sys_psy">
+        <texture id="wd_bar_sys_psy" x="0" y="0" width="64" height="16" />
+    </file>
+    <file name="wd\ui\promin\medik_bar_sys_rad">
+        <texture id="wd_bar_sys_rad" x="0" y="0" width="64" height="16" />
+    </file>
+    <file name="wd\ui\promin\medik_bar_sys_stam">
+        <texture id="wd_bar_sys_stam" x="0" y="0" width="64" height="16" />
+    </file>
+    <file name="wd\ui\promin\medik_bar_track">
+        <texture id="wd_bar_track"   x="0" y="0" width="64" height="16" />
+    </file>
+
+    <file name="wd\ui\promin\medik_limb_bars">
+        <texture id="wd_limb_bar"       x="0"  y="229" width="38" height="5" />
+        <texture id="wd_limb_bar_green" x="38" y="229" width="38" height="5" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_main_nomap">
+        <texture id="wd_tab_bg_nomap" x="0" y="0" width="1100" height="600" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_main">
+        <texture id="wd_tab_bg_main" x="0" y="0" width="1100" height="600" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_main_map">
+        <texture id="wd_tab_bg_map" x="0" y="0" width="1100" height="600" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_bat_25">
+        <texture id="wd_tab_bat_25" x="0" y="0" width="32" height="17" />
+    </file>
+    <file name="wd\ui\promin\tablet_ui_bat_50">
+        <texture id="wd_tab_bat_50" x="0" y="0" width="32" height="17" />
+    </file>
+    <file name="wd\ui\promin\tablet_ui_bat_75">
+        <texture id="wd_tab_bat_75" x="0" y="0" width="32" height="17" />
+    </file>
+    <file name="wd\ui\promin\tablet_ui_bat_full">
+        <texture id="wd_tab_bat_full" x="0" y="0" width="32" height="17" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_helmet_equipped">
+        <texture id="wd_tab_helmet" x="0" y="0" width="38" height="35" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_silhouette_bleed">
+        <texture id="wd_tab_sil_bleed" x="0" y="0" width="106" height="251" />
+    </file>
+
+    <file name="wd\ui\promin\factions\icon_stalker">
+        <texture id="wd_emblem_stalker" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_bandit">
+        <texture id="wd_emblem_bandit" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_csky">
+        <texture id="wd_emblem_csky" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_dolg">
+        <texture id="wd_emblem_dolg" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_freedom">
+        <texture id="wd_emblem_freedom" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_killer">
+        <texture id="wd_emblem_killer" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_army">
+        <texture id="wd_emblem_army" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_ecolog">
+        <texture id="wd_emblem_ecolog" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_monolith">
+        <texture id="wd_emblem_monolith" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_greh">
+        <texture id="wd_emblem_greh" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_renegade">
+        <texture id="wd_emblem_renegade" x="0" y="0" width="34" height="34" />
+    </file>
+    <file name="wd\ui\promin\factions\icon_isg">
+        <texture id="wd_emblem_isg" x="0" y="0" width="34" height="34" />
+    </file>
+
+    <file name="wd\ui\promin\tablet_ui_digits">
+        <texture id="dig2_0" x="23"  y="30" width="36" height="45" />
+        <texture id="dig2_1" x="55"  y="30" width="36" height="45" />
+        <texture id="dig2_2" x="92"  y="30" width="36" height="45" />
+        <texture id="dig2_3" x="127" y="30" width="36" height="45" />
+        <texture id="dig2_4" x="163" y="30" width="36" height="45" />
+        <texture id="dig2_5" x="199" y="30" width="36" height="45" />
+        <texture id="dig2_6" x="233" y="30" width="36" height="45" />
+        <texture id="dig2_7" x="267" y="30" width="36" height="45" />
+        <texture id="dig2_8" x="303" y="30" width="36" height="45" />
+        <texture id="dig2_9" x="338" y="30" width="36" height="45" />
+        <texture id="dig2_g0" x="23"  y="100" width="36" height="45" />
+    </file>
+
+    <file name="wd\ui\promin\medik_boosters">
+        <texture id="bo_hp_glyph"      x="0"   y="0"  width="32" height="32" />
+        <texture id="bo_bleed_glyph"   x="32"  y="0"  width="32" height="32" />
+        <texture id="bo_rad_glyph"     x="64"  y="0"  width="32" height="32" />
+        <texture id="bo_carry_glyph"   x="96"  y="0"  width="32" height="32" />
+        <texture id="bo_power_glyph"   x="128" y="0"  width="32" height="32" />
+        <texture id="bo_ext_rad_glyph" x="160" y="0"  width="32" height="32" />
+        <texture id="bo_psi_glyph"     x="192" y="0"  width="32" height="32" />
+        <texture id="bo_chem_glyph"    x="224" y="0"  width="32" height="32" />
+    </file>
+
+    <file name="wd\ui\wd_boosters_lit">
+        <texture id="wd_bo_hp_lit"      x="0"   y="0"  width="32" height="32" />
+        <texture id="wd_bo_bleed_lit"   x="32"  y="0"  width="32" height="32" />
+        <texture id="wd_bo_rad_lit"     x="64"  y="0"  width="32" height="32" />
+        <texture id="wd_bo_carry_lit"   x="96"  y="0"  width="32" height="32" />
+        <texture id="wd_bo_power_lit"   x="128" y="0"  width="32" height="32" />
+        <texture id="wd_bo_ext_rad_lit" x="160" y="0"  width="32" height="32" />
+        <texture id="wd_bo_psi_lit"     x="192" y="0"  width="32" height="32" />
+        <texture id="wd_bo_chem_lit"    x="224" y="0"  width="32" height="32" />
+    </file>
+
+    <file name="wd\ui\wd_customize_main">
+        <texture id="wd_customize_main" x="0" y="0" width="1177" height="920" />
+    </file>
+
+    <file name="wd\ui\wd_customize_slot_open">
+        <texture id="wd_customize_slot_open" x="0" y="0" width="104" height="104" />
+    </file>
+
+    <file name="wd\ui\wd_customize_slot_restricted">
+        <texture id="wd_customize_slot_restricted" x="0" y="0" width="105" height="104" />
+    </file>
+
+    <file name="wd\ui\wd_customize_settings">
+        <texture id="wd_customize_settings_e" x="0" y="0" width="87" height="87" />
+        <texture id="wd_customize_settings_h" x="0" y="0" width="87" height="87" />
+        <texture id="wd_customize_settings_t" x="0" y="0" width="87" height="87" />
+        <texture id="wd_customize_settings_d" x="0" y="0" width="87" height="87" />
+    </file>
+
+    <file name="wd\ui\wd_customize_close">
+        <texture id="wd_customize_close_e" x="0" y="0" width="87" height="87" />
+        <texture id="wd_customize_close_h" x="0" y="0" width="87" height="87" />
+        <texture id="wd_customize_close_t" x="0" y="0" width="87" height="87" />
+        <texture id="wd_customize_close_d" x="0" y="0" width="87" height="87" />
+    </file>
+</w>

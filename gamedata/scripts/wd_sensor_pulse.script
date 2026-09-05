@@ -1,0 +1,77 @@
+function get_delay(fraction, min_repeat, max_repeat)
+    return max_repeat - (max_repeat - min_repeat) * fraction
+end
+
+function new(cfg)
+    local kernel = {}
+    local running = false
+    local current_delay
+    local last_blink
+
+    local function fire_off()
+        cfg.off()
+        return true
+    end
+
+    local function get_remaining()
+        if not last_blink then
+            return 0
+        end
+        local due = last_blink + current_delay
+        local now = time_global()
+        if due <= now then
+            return 0
+        end
+        return (due - now) / 1000
+    end
+
+    local function pulse()
+        if not cfg.enabled() or not running then
+            running = false
+            return true
+        end
+        last_blink = time_global()
+        cfg.on_blink()
+        CreateTimeEvent(cfg.group, "off", current_delay / 2000, fire_off)
+        ResetTimeEvent(cfg.group, "pulse", current_delay / 1000)
+    end
+
+    local function arm(delay)
+        current_delay = delay
+        if running then
+            ResetTimeEvent(cfg.group, "pulse", get_remaining())
+        else
+            running = true
+            RemoveTimeEvent(cfg.group, "pulse")
+            CreateTimeEvent(cfg.group, "pulse", get_remaining(), pulse)
+        end
+    end
+
+    local function stop()
+        if running then
+            running = false
+            RemoveTimeEvent(cfg.group, "pulse")
+            RemoveTimeEvent(cfg.group, "off")
+            cfg.off()
+        end
+    end
+
+    function kernel.update()
+        if not cfg.enabled() then
+            return
+        end
+        local sensed = cfg.sense()
+        if sensed then
+            arm(sensed.delay)
+        else
+            stop()
+        end
+    end
+
+    function kernel.reset()
+        running = false
+        last_blink = nil
+    end
+
+    return kernel
+end
