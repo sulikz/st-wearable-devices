@@ -1,0 +1,253 @@
+local DROP_POLL_MS = 200
+
+local REASON_STRINGS = {
+    no_bracer = "st_wd_slots_no_bracer",
+}
+
+local devices = {}
+local loadout = {}
+local check_bracer_worn = nil
+
+local function notify(string_id)
+    if actor_menu and actor_menu.set_msg then
+        actor_menu.set_msg(1, game.translate_string(string_id), 4)
+    end
+end
+
+function register_bracer(is_worn)
+    check_bracer_worn = is_worn
+end
+
+function is_bracer_worn()
+    return check_bracer_worn ~= nil and check_bracer_worn() == true
+end
+
+function register_device(spec)
+    local owner = spec.owner
+    if owner then
+        spec.is_attached = spec.is_attached or owner.is_attached
+        spec.get_section = spec.get_section or owner.get_section
+        spec.attach = spec.attach or owner.toggle
+        spec.detach = spec.detach or owner.detach
+        spec.get_id = spec.get_id or owner.get_id
+        spec.get_worn_object = spec.get_worn_object or owner.get_object
+    end
+    devices[spec.id] = spec
+end
+
+local function find_device_by_section(section)
+    for _, spec in pairs(devices) do
+        if spec.matches_section(section) then
+            return spec
+        end
+    end
+    return nil
+end
+
+local function get_device_object(spec, section)
+    if not (db and db.actor) then
+        return nil
+    end
+    if spec and spec.get_object then
+        return spec.get_object(section)
+    end
+    return db.actor:object(section)
+end
+
+local function is_mounted_object(spec, item)
+    return spec.is_attached() and item:id() == spec.get_id()
+end
+
+function get_slot_of(section)
+    local spec = find_device_by_section(section)
+    return spec and spec.slot or nil
+end
+
+function get_mounted(slot)
+    for _, spec in pairs(devices) do
+        if spec.slot == slot and spec.is_attached() then
+            return spec
+        end
+    end
+    return nil
+end
+
+function get_mounted_object(slot)
+    local spec = get_mounted(slot)
+    return spec and spec.get_worn_object()
+end
+
+local function record_loadout(spec)
+    loadout[spec.slot] = { section = spec.get_section(), id = spec.get_id() }
+end
+
+function can_mount(section, spec)
+    spec = spec or find_device_by_section(section)
+    if not spec then
+        return false, "not_registered"
+    end
+    if not is_bracer_worn() then
+        return false, "no_bracer"
+    end
+    if not get_device_object(spec, section) then
+        return false, "not_in_inventory"
+    end
+    return true
+end
+
+function mount(obj, silent)
+    if not obj then
+        return false, "not_registered"
+    end
+    local section = obj:section()
+    local spec = find_device_by_section(section)
+    if spec and is_mounted_object(spec, obj) then
+        return true
+    end
+    local ok, reason = can_mount(section, spec)
+    if not ok then
+        if not silent and REASON_STRINGS[reason] then
+            notify(REASON_STRINGS[reason])
+        end
+        return false, reason
+    end
+    local occupant = get_mounted(spec.slot)
+    if occupant ~= nil and occupant ~= spec then
+        occupant.detach()
+    end
+    spec.attach(obj)
+    if not spec.is_attached() then
+        return false, "attach_failed"
+    end
+    record_loadout(spec)
+    return true
+end
+
+function unmount(slot)
+    local spec = get_mounted(slot)
+    if not spec then
+        return false
+    end
+    spec.detach()
+    loadout[slot] = nil
+    return true
+end
+
+function toggle(obj)
+    if not obj then
+        return
+    end
+    local section = obj:section()
+    local spec = find_device_by_section(section)
+    if not spec then
+        return
+    end
+    if is_mounted_object(spec, obj) then
+        unmount(spec.slot)
+        return
+    end
+    mount(obj)
+end
+
+function list_unmounted_objects()
+    local result = {}
+    if not (db and db.actor) then
+        return result
+    end
+    db.actor:iterate_inventory(function(_owner, item)
+        local spec = find_device_by_section(item:section())
+        if spec and not is_mounted_object(spec, item) then
+            result[#result + 1] = item
+        end
+    end, db.actor)
+    return result
+end
+
+function unmount_all(remember)
+    for _, spec in pairs(devices) do
+        if spec.is_attached() then
+            if remember then
+                record_loadout(spec)
+            else
+                loadout[spec.slot] = nil
+            end
+            spec.detach()
+        end
+    end
+end
+
+function remount_loadout()
+    if not (db and db.actor) or not is_bracer_worn() then
+        return
+    end
+    for slot, entry in pairs(loadout) do
+        local mounted = get_mounted(slot)
+        if mounted and mounted.is_present and not mounted.is_present() then
+            if mounted.resync then
+                mounted.resync()
+            else
+                mounted.detach()
+                mounted = nil
+            end
+        end
+        if mounted == nil then
+            local spec = find_device_by_section(entry.section)
+            local obj = entry.id and db.actor:object_id(entry.id)
+            if spec and obj then
+                spec.attach(obj)
+                record_loadout(spec)
+            end
+        end
+    end
+end
+
+function unmount_dropped()
+    if not (db and db.actor) then
+        return
+    end
+    for _, spec in pairs(devices) do
+        if spec.is_attached() and spec.get_worn_object() == nil then
+            unmount(spec.slot)
+        end
+    end
+end
+
+function actor_on_update()
+    if not is_bracer_worn() then
+        unmount_all(true)
+    end
+end
+
+function save_state(m_data)
+    local sections = {}
+    local ids = {}
+    for slot, entry in pairs(loadout) do
+        sections[slot] = entry.section
+        ids[slot] = entry.id
+    end
+    m_data.wd_slots_loadout = sections
+    m_data.wd_slots_loadout_ids = ids
+end
+
+function load_state(m_data)
+    loadout = {}
+    local saved_ids = m_data.wd_slots_loadout_ids or {}
+    for slot, section in pairs(m_data.wd_slots_loadout or {}) do
+        if type(section) == "string" then
+            local saved_id = saved_ids[slot]
+            loadout[slot] = { section = section, id = type(saved_id) == "number" and saved_id or nil }
+        end
+    end
+end
+
+function register()
+    wd_core.register({
+        id = "wd_slots",
+        callbacks = {
+            actor_on_first_update = { actor_on_update },
+            actor_on_update = { actor_on_update, { unmount_dropped, interval = DROP_POLL_MS } },
+            save_state = { save_state },
+            load_state = { load_state },
+        },
+    })
+end

@@ -1,0 +1,124 @@
+SECTION = "wd_vektor"
+SCREEN_SHADER = "wd\\crt_vektor"
+LIGHT_OFFSET = { 0.008, 0.1, 0 }
+LED_ANOMALY_COLOR = { r = 0.34, g = 0.12, b = 0.1, a = 0.8 }
+LED_ARTEFACT_COLOR = { r = 0.34, g = 0.26, b = 0.19, a = 0.8 }
+LED_RANGE = 0.25
+LED_ANOMALY_OFFSET = { -0.0178, 0.045, 0.0033 }
+LED_ARTEFACT_OFFSET = { -0.016, 0.045, 0.011 }
+BULB_TEXTURE = "wd\\vektor\\vektor_led_unlit"
+BULB_LIT_TEXTURE = "wd\\vektor\\vektor_led_lit"
+BULBS = { "artefact", "anomaly" }
+
+function get_bulb_texture(lit)
+    return lit and BULB_LIT_TEXTURE or BULB_TEXTURE
+end
+
+TIERS = {
+    {
+        id = "t1",
+        section = SECTION,
+        model = "wd\\vektor\\vektor_t1",
+        ui = "d_vektor_ui",
+        ring_ui = "d_vektor_ring_ui",
+        arrow_ui = "d_vektor_arrow_ui",
+        sensors = {},
+        defaults = {},
+    },
+    {
+        id = "t2",
+        section = "wd_vektor_2",
+        model = "wd\\vektor\\vektor_t2",
+        ui = "d_vektor_ui",
+        ring_ui = "d_vektor_ring_ui",
+        arrow_ui = "d_vektor_arrow_ui",
+        sensors = { anomaly = true, artefact = true },
+        defaults = {},
+    },
+}
+
+STATUS_BARS = {
+    { name = "dynamic", label = "Dynamic" },
+    { name = "stamina", label = "Stamina" },
+    { name = "toxic", label = "Toxic Air" },
+}
+
+local FAMILY_FIELDS = {
+    { "model_pos", true },
+    { "model_rot", true },
+    { "model_scale", false },
+    { "ui_pos", true },
+    { "ui_rot", true },
+    { "ui_scale", false },
+    { "dig_dx", false },
+    { "dig_dy", false },
+    { "dig_scale", false },
+    { "ring_ui_pos", true },
+    { "ring_ui_scale", false },
+    { "ring_offset", false },
+    { "arrow_ui_pos", true },
+    { "arrow_ui_scale", false },
+    { "compass_offset", false },
+    { "brightness", false },
+    { "status_bar", false },
+}
+
+local USER_FIELDS = {
+    "brightness",
+    "status_bar",
+}
+
+DEFAULTS = {
+    model_pos = { 0.0002, -0.0072, 0.1237 },
+    model_rot = { -89.099, 0.587, -177.99 },
+    model_scale = 1.5600000314713,
+    ui_pos = { -0.015799999237061, 0.026469984276295, 0.015299993813038 },
+    ui_rot = { 0, 90, 0 },
+    ui_scale = 0.72100001573563,
+    dig_dx = 0,
+    dig_dy = 0,
+    dig_scale = 1,
+    ring_ui_pos = { 0.015899995338917, 0, -0.015599999237061 },
+    ring_ui_scale = 0.96900004291534,
+    ring_offset = 0,
+    arrow_ui_pos = { 0.015833836, 0, -0.021388926 },
+    arrow_ui_scale = 0.15000000870228,
+    compass_offset = 0,
+    brightness = 80,
+    status_bar = "dynamic",
+}
+
+local cfg = wd_config.new({
+    section = SECTION,
+    global_key = "vektor",
+    tiers = TIERS,
+    family_fields = FAMILY_FIELDS,
+    user_fields = USER_FIELDS,
+    defaults = DEFAULTS,
+})
+
+transforms = cfg.transforms
+saved = cfg.saved
+reset_transforms = cfg.reset_transforms
+load_transforms = cfg.load_transforms
+save_global = cfg.save_global
+get_active_tier = cfg.get_active_tier
+get_tier_of = cfg.get_tier_of
+set_active_tier = cfg.set_active_tier
+reset_active_tier = cfg.reset_active_tier
+get_model = cfg.get_model
+get_ui_module = cfg.get_ui_module
+has_sensor = cfg.has_sensor
+resolve = cfg.resolve
+
+function get_status_bar_index()
+    return wd_appearance.get_index(transforms, STATUS_BARS, "status_bar")
+end
+
+function get_status_bar()
+    local name = transforms.status_bar
+    if name == "toxic" and not wd_toxic.is_installed() then
+        return "dynamic"
+    end
+    return name
+end

@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+
+<w>
+    <wd>
+
+        <bg x="0.00100" y="-0.00800" width="0.08400" height="0.04580" stretch="1">
+            <texture shader="wd\crt">wd_tab_bg_nomap</texture>
+        </bg>
+        <silhouette x="0.01557" y="0.00719" width="0.00809" height="0.01916" stretch="1">
+            <texture shader="wd\crt">wd_tab_sil_bleed</texture>
+        </silhouette>
+        <bar_head_track x="0.00543" y="0.00979" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_head_track>
+        <bar_head_temp x="0.00543" y="0.00979" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar_green</texture>
+        </bar_head_temp>
+        <bar_head x="0.00543" y="0.00979" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar</texture>
+        </bar_head>
+        <bar_torso_track x="0.02831" y="0.00979" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_torso_track>
+        <bar_torso_temp x="0.02831" y="0.00979" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar_green</texture>
+        </bar_torso_temp>
+        <bar_torso x="0.02831" y="0.00979" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar</texture>
+        </bar_torso>
+        <bar_leftarm_track x="0.00543" y="0.01742" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_leftarm_track>
+        <bar_leftarm_temp x="0.00543" y="0.01742" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar_green</texture>
+        </bar_leftarm_temp>
+        <bar_leftarm x="0.00543" y="0.01742" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar</texture>
+        </bar_leftarm>
+        <bar_rightarm_track x="0.02831" y="0.01742" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_rightarm_track>
+        <bar_rightarm_temp x="0.02831" y="0.01742" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar_green</texture>
+        </bar_rightarm_temp>
+        <bar_rightarm x="0.02831" y="0.01742" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar</texture>
+        </bar_rightarm>
+        <bar_leftleg_track x="0.00543" y="0.02498" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_leftleg_track>
+        <bar_leftleg_temp x="0.00543" y="0.02498" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar_green</texture>
+        </bar_leftleg_temp>
+        <bar_leftleg x="0.00543" y="0.02498" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar</texture>
+        </bar_leftleg>
+        <bar_rightleg_track x="0.02831" y="0.02498" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_rightleg_track>
+        <bar_rightleg_temp x="0.02831" y="0.02498" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar_green</texture>
+        </bar_rightleg_temp>
+        <bar_rightleg x="0.02831" y="0.02498" width="0.00458" height="0.00069" stretch="1">
+            <texture shader="wd\crt">wd_limb_bar</texture>
+        </bar_rightleg>
+        <bar_health_track x="0.00855" y="-0.00082" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_health_track>
+        <bar_health x="0.00855" y="-0.00082" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_sys_hp</texture>
+        </bar_health>
+        <bar_psy_track x="0.00855" y="0.00292" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_psy_track>
+        <bar_psy x="0.00855" y="0.00292" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_sys_psy</texture>
+        </bar_psy>
+        <bar_stam_track x="0.00855" y="0.02971" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_stam_track>
+        <bar_stam x="0.00855" y="0.02971" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_sys_stam</texture>
+        </bar_stam>
+        <bar_rad_track x="0.00855" y="0.03337" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_track</texture>
+        </bar_rad_track>
+        <bar_rad x="0.00855" y="0.03337" width="0.02480" height="0.00084" stretch="1">
+            <texture shader="wd\crt">wd_bar_sys_rad</texture>
+        </bar_rad>
+        <tm_h1 x="0.00703" y="-0.00563" width="0.00084" height="0.00099" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </tm_h1>
+        <tm_h2 x="0.00787" y="-0.00563" width="0.00084" height="0.00099" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </tm_h2>
+        <tm_m1 x="0.00924" y="-0.00563" width="0.00084" height="0.00099" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </tm_m1>
+        <tm_m2 x="0.01008" y="-0.00563" width="0.00084" height="0.00099" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </tm_m2>
+        <bat_icon x="0.00665" y="-0.00578" width="0.00244" height="0.00130" stretch="1">
+            <texture shader="wd\crt">wd_tab_bat_full</texture>
+        </bat_icon>
+        <hlm_icon x="0.01528" y="0.00910" width="0.00290" height="0.00267" stretch="1">
+            <texture shader="wd\crt">wd_tab_helmet</texture>
+        </hlm_icon>
+        <bo_icon_1 x="0.04243" y="0.00093" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_hp_glyph</texture>
+        </bo_icon_1>
+        <bo_dig1_1 x="0.04228" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_1>
+        <bo_dig2_1 x="0.04304" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_1>
+        <bo_dig3_1 x="0.04418" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_1>
+        <bo_dig4_1 x="0.04495" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_1>
+        <bo_icon_2 x="0.05006" y="0.00093" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_bleed_glyph</texture>
+        </bo_icon_2>
+        <bo_dig1_2 x="0.04990" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_2>
+        <bo_dig2_2 x="0.05067" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_2>
+        <bo_dig3_2 x="0.05181" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_2>
+        <bo_dig4_2 x="0.05257" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_2>
+        <bo_icon_3 x="0.05769" y="0.00093" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_rad_glyph</texture>
+        </bo_icon_3>
+        <bo_dig1_3 x="0.05753" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_3>
+        <bo_dig2_3 x="0.05830" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_3>
+        <bo_dig3_3 x="0.05944" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_3>
+        <bo_dig4_3 x="0.06020" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_3>
+        <bo_icon_4 x="0.06516" y="0.00093" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_carry_glyph</texture>
+        </bo_icon_4>
+        <bo_dig1_4 x="0.06501" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_4>
+        <bo_dig2_4 x="0.06577" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_4>
+        <bo_dig3_4 x="0.06692" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_4>
+        <bo_dig4_4 x="0.06768" y="0.00582" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_4>
+        <bo_icon_5 x="0.04243" y="0.01047" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_power_glyph</texture>
+        </bo_icon_5>
+        <bo_dig1_5 x="0.04228" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_5>
+        <bo_dig2_5 x="0.04304" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_5>
+        <bo_dig3_5 x="0.04418" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_5>
+        <bo_dig4_5 x="0.04495" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_5>
+        <bo_icon_6 x="0.05006" y="0.01047" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_ext_rad_glyph</texture>
+        </bo_icon_6>
+        <bo_dig1_6 x="0.04990" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_6>
+        <bo_dig2_6 x="0.05067" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_6>
+        <bo_dig3_6 x="0.05181" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_6>
+        <bo_dig4_6 x="0.05257" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_6>
+        <bo_icon_7 x="0.05769" y="0.01047" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_psi_glyph</texture>
+        </bo_icon_7>
+        <bo_dig1_7 x="0.05753" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_7>
+        <bo_dig2_7 x="0.05830" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_7>
+        <bo_dig3_7 x="0.05944" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_7>
+        <bo_dig4_7 x="0.06020" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_7>
+        <bo_icon_8 x="0.06516" y="0.01047" width="0.00305" height="0.00305" stretch="1">
+            <texture shader="wd\crt">bo_chem_glyph</texture>
+        </bo_icon_8>
+        <bo_dig1_8 x="0.06501" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig1_8>
+        <bo_dig2_8 x="0.06577" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig2_8>
+        <bo_dig3_8 x="0.06692" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig3_8>
+        <bo_dig4_8 x="0.06768" y="0.01536" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_g0</texture>
+        </bo_dig4_8>
+        <nd_food_x1 x="0.04281" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_food_x1>
+        <nd_food_x2 x="0.04357" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_food_x2>
+        <nd_food_x3 x="0.04434" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_food_x3>
+        <nd_food_y1 x="0.04571" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_food_y1>
+        <nd_food_y2 x="0.04647" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_food_y2>
+        <nd_food_y3 x="0.04723" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_food_y3>
+        <nd_water_x1 x="0.05280" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_water_x1>
+        <nd_water_x2 x="0.05357" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_water_x2>
+        <nd_water_x3 x="0.05433" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_water_x3>
+        <nd_water_y1 x="0.05570" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_water_y1>
+        <nd_water_y2 x="0.05647" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_water_y2>
+        <nd_water_y3 x="0.05723" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_water_y3>
+        <nd_sleep_x1 x="0.06280" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_sleep_x1>
+        <nd_sleep_x2 x="0.06356" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_sleep_x2>
+        <nd_sleep_x3 x="0.06432" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_sleep_x3>
+        <nd_sleep_y1 x="0.06570" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_sleep_y1>
+        <nd_sleep_y2 x="0.06646" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_sleep_y2>
+        <nd_sleep_y3 x="0.06722" y="0.02681" width="0.00076" height="0.00092" stretch="1">
+            <texture shader="wd\crt">dig2_0</texture>
+        </nd_sleep_y3>
+
+        <emblem x="0.00314" y="-0.00685" width="0.00305" height="0.00321" stretch="1">
+            <texture shader="wd\crt">wd_emblem_stalker</texture>
+        </emblem>
+
+        <map/>
+        <mark/>
+        <quest/>
+        <arrow/>
+    </wd>
+</w>

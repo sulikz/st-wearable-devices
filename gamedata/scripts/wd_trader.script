@@ -1,0 +1,47 @@
+local sections = {}
+
+function register(section, count, min_supply)
+    if not section then
+        return
+    end
+    sections[section] = sections[section] or { count = count or 1, min_supply = min_supply }
+end
+
+function get_supply_level(npc)
+    if not (npc and trader_autoinject and trader_autoinject.supply_level) then
+        return 0
+    end
+    return trader_autoinject.supply_level(npc, true) or 0
+end
+
+local function inject(npc)
+    if not (npc and trader_autoinject) then
+        return
+    end
+    if trader_autoinject.get_trader_type(npc) ~= trader_autoinject.SUPPLIER then
+        return
+    end
+
+    local supply
+    for section, entry in pairs(sections) do
+        local allowed = true
+        if entry.min_supply then
+            supply = supply or get_supply_level(npc)
+            allowed = supply >= entry.min_supply
+        end
+        if allowed then
+            trader_autoinject.spawn_items(npc, { [section] = entry.count }, true)
+        end
+    end
+end
+
+if trader_autoinject and not _G.wd_trader_wrapped then
+    local prev_update = trader_autoinject.update
+    function trader_autoinject.update(npc)
+        if prev_update then
+            prev_update(npc)
+        end
+        inject(npc)
+    end
+    _G.wd_trader_wrapped = true
+end

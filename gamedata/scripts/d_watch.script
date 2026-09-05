@@ -1,0 +1,307 @@
+local SECTION = d_watch_config.SECTION
+
+local owner = wd_worn.new({
+    attach_label = "st_attach_metro_watch",
+    detach_label = "st_detach_metro_watch",
+    save_key = "metro_watch_worn",
+    item_section = SECTION,
+    wear_group = "watch",
+    on_attach = function()
+        if not sync_attachment() then
+            return false
+        end
+        return true
+    end,
+    on_detach = function()
+        sync_attachment()
+    end,
+})
+
+function has_watch()
+    return owner.is_attached()
+end
+
+local function is_attachment_present()
+    return wd_attach.has_attachment(SECTION)
+end
+
+local function is_sensor_ready()
+    return has_watch() and is_attachment_present()
+end
+
+local LED_RAD_NAME = "watch_led_rad"
+local LED_ANOMALY_NAME = "watch_led_anomaly"
+
+local function new_led_glow(att_name, get_offset)
+    return wd_attach.new_blink_glow({
+        name = att_name,
+        get_color = d_watch_config.get_skin_led_color,
+        range = d_watch_config.LED_RANGE,
+        get_offset = get_offset,
+        is_lit = function()
+            return has_watch() and not wd_exo.is_exo()
+        end,
+    })
+end
+
+local rad_led = new_led_glow(LED_RAD_NAME, function()
+    return d_watch_config.LED_RAD_OFFSET
+end)
+local anomaly_led = new_led_glow(LED_ANOMALY_NAME, function()
+    return d_watch_config.LED_ANOMALY_OFFSET
+end)
+
+local bulbs = wd_attach.new_bulb_set({
+    name = SECTION,
+    texture = d_watch_config.BULB_TEXTURE,
+    get_texture = d_watch_config.get_bulb_texture,
+    order = d_watch_config.BULBS,
+})
+
+local rad_sensor = wd_sensor_radiation.new({
+    group = "d_watch_rad",
+    enabled = is_sensor_ready,
+    on_blink = function()
+        bulbs.rad.set_on(true)
+        rad_led.set_on(true)
+    end,
+    off = function()
+        bulbs.rad.set_on(false)
+        rad_led.set_on(false)
+    end,
+})
+
+local anomaly_sensor = wd_sensor_anomaly.new({
+    group = "d_watch_anomaly",
+    enabled = is_sensor_ready,
+    on_blink = function()
+        wd_audio.play("anomaly_blink")
+        bulbs.anomaly.set_on(true)
+        anomaly_led.set_on(true)
+    end,
+    off = function()
+        bulbs.anomaly.set_on(false)
+        anomaly_led.set_on(false)
+    end,
+})
+
+local function apply_skin_textures()
+    wd_attach.apply_skin_texture(SECTION, d_watch_config.get_skin_texture(), d_watch_config.BODY_TEXTURE)
+    wd_attach.apply_skin_texture(SECTION, d_watch_config.get_skin_strap_texture(), d_watch_config.STRAP_TEXTURE)
+end
+
+local function apply_nixie_color()
+    local color = d_watch_config.get_nixie_color()
+    wd_attach.apply_child_shader(SECTION, d_watch_config.NIXIE_TEXTURE, color.shader)
+    wd_attach.apply_child_shader(SECTION, d_watch_config.HALO_TEXTURE, color.halo_shader)
+end
+
+local glow = wd_attach.new_glow({
+    name = SECTION,
+    get_color = d_watch_config.get_nixie_light_color,
+    range = d_watch_config.LIGHT_RANGE,
+    get_offset = function()
+        return d_watch_config.LIGHT_OFFSET
+    end,
+    is_lit = function()
+        return has_watch() and not wd_exo.is_exo()
+    end,
+})
+
+function sync_attachment()
+    glow.sync()
+    rad_led.sync()
+    anomaly_led.sync()
+    if not has_watch() then
+        wd_attach.detach(SECTION)
+        wd_attach.detach(LED_RAD_NAME)
+        wd_attach.detach(LED_ANOMALY_NAME)
+        return nil
+    end
+    local transforms = d_watch_config.transforms
+    local model = d_watch_config.get_skin_model()
+    local model_transforms = {
+        model_pos = transforms.model_pos,
+        model_rot = transforms.model_rot,
+        model_scale = transforms.model_scale,
+    }
+    local attachment = wd_attach.attach({
+        name = SECTION,
+        model = model,
+        parent = d_bracer_config.SECTION,
+        transforms = model_transforms,
+        bone_visible = d_watch_tubes.get_bone_visible_map(),
+    })
+    if not attachment then
+        wd_attach.detach(LED_RAD_NAME)
+        wd_attach.detach(LED_ANOMALY_NAME)
+        return nil
+    end
+    bulbs.resolve()
+    for _, led_name in ipairs({ LED_RAD_NAME, LED_ANOMALY_NAME }) do
+        wd_attach.attach({
+            name = led_name,
+            model = model,
+            parent = d_bracer_config.SECTION,
+            transforms = model_transforms,
+            bone_visible = { wpn_body = false },
+        })
+    end
+    apply_skin_textures()
+    apply_nixie_color()
+    d_watch_tubes.reset()
+    return attachment
+end
+
+function reapply_transforms()
+    wd_attach.reapply_transforms(LED_RAD_NAME, d_watch_config.transforms)
+    wd_attach.reapply_transforms(LED_ANOMALY_NAME, d_watch_config.transforms)
+    return wd_attach.reapply_transforms(SECTION, d_watch_config.transforms)
+end
+
+function reapply_skin()
+    if not has_watch() then
+        return
+    end
+    apply_skin_textures()
+    bulbs.sync()
+end
+
+function reapply_nixie()
+    if not has_watch() then
+        return
+    end
+    apply_nixie_color()
+    glow.sync()
+end
+
+function update_sensors()
+    rad_sensor.update()
+    anomaly_sensor.update()
+end
+
+function actor_on_first_update()
+    anomaly_sensor.reset()
+    rad_sensor.reset()
+    owner.detach_if_dropped()
+    sync_attachment()
+end
+
+function get_menu_text(obj)
+    return owner.get_menu_text(obj)
+end
+
+function toggle_attach(obj)
+    wd_slots.toggle(obj)
+end
+
+local function new_clock_field()
+    local clock = wd_gui.new_catalog_enum(d_watch_config.CLOCKS, d_watch_config.get_clock_index, { no_apply = true })
+    clock.on_change = d_watch_tubes.update
+    return clock
+end
+
+local function register_gui()
+    local has_clock = wd_toxic.is_installed()
+
+    local skin = wd_gui.new_catalog_enum(d_watch_config.SKINS, d_watch_config.get_skin_index)
+    skin.on_change = reapply_skin
+
+    local nixie = wd_gui.new_catalog_enum(d_watch_config.NIXIE_COLORS, d_watch_config.get_nixie_index)
+    nixie.on_change = reapply_nixie
+
+    wd_gui.register_device({
+        id = "watch",
+        label = "Metro",
+        is_worn = is_attachment_present,
+        store = function()
+            return d_watch_config.transforms
+        end,
+        saved = function()
+            return d_watch_config.saved
+        end,
+        defaults = function()
+            return d_watch_config.DEFAULTS
+        end,
+        save_global = d_watch_config.save_global,
+        on_apply = function()
+            reapply_transforms()
+        end,
+        fields = {
+            model_pos = wd_gui.new_slider(-0.3, 0.3),
+            model_rot = wd_gui.new_slider(-180, 180),
+            model_scale = wd_gui.new_slider(0.01, 3),
+            skin = skin,
+            nixie = nixie,
+            clock = has_clock and new_clock_field() or nil,
+        },
+    })
+
+    local appearance_rows = {}
+    if #d_watch_config.SKINS > 1 then
+        appearance_rows[#appearance_rows + 1] = { "skin", nil, 1, "Skin" }
+    end
+    appearance_rows[#appearance_rows + 1] = { "nixie", nil, 1, "Nixie color" }
+    if has_clock then
+        appearance_rows[#appearance_rows + 1] = { "clock", nil, 1, "Clock" }
+    end
+    wd_gui.register_tab({
+        device = "watch",
+        id = "watch_skin",
+        label = "Appearance",
+        default = true,
+        rows = appearance_rows,
+    })
+    wd_gui.register_tab({
+        device = "watch",
+        id = "watch_model",
+        dev = true,
+        label = "Watch Position",
+        rows = {
+            { "model_pos", 1, 0.0005, "Position x" },
+            { "model_pos", 2, 0.0005, "Position y" },
+            { "model_pos", 3, 0.0005, "Position z" },
+            { "model_rot", 1, 0.05, "Yaw (Y)" },
+            { "model_rot", 2, 0.05, "Pitch (X)" },
+            { "model_rot", 3, 0.05, "Roll (Z)" },
+            { "model_scale", nil, 0.001, "Scale" },
+        },
+    })
+end
+
+local function start()
+    d_watch_config.load_transforms()
+end
+
+function register()
+    d_watch_config.load_optional_skins()
+    wd_slots.register_device({
+        id = "watch",
+        slot = "wrist",
+        matches_section = function(section)
+            return section == SECTION
+        end,
+        owner = owner,
+        is_present = is_attachment_present,
+        resync = sync_attachment,
+    })
+    wd_exo.register_device({
+        id = "watch",
+        names = { SECTION },
+        resync = sync_attachment,
+    })
+    wd_core.register({
+        id = "watch",
+        callbacks = {
+            actor_on_first_update = { actor_on_first_update },
+            actor_on_update = {
+                { update_sensors, interval = 200 },
+                d_watch_tubes.update,
+            },
+            save_state = { owner.save },
+            load_state = { owner.load },
+        },
+        on_start = start,
+    })
+    register_gui()
+end

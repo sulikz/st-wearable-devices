@@ -1,0 +1,355 @@
+local SECTION = "glowstick"
+local ATT_NAME = "wd_glowstick"
+local SLOT = "side"
+local DETECTOR_SLOT = 9
+local UNEQUIP_GRACE_MS = 2000
+local SLOT_POLL_MS = 200
+local DRAIN_TICK_MS = 1000
+local DEFAULT_DRAIN = 0.001
+local DEFAULT_CRITICAL = 0.03
+local CONDITION_FLOOR = 0.01
+local CONDITION_CEILING = 0.9999
+local CHARGE_KEY = "wd_glowstick_charge"
+
+DEFAULTS = {
+    model_pos = { -0.0527, 0.0131, 0.0306 },
+    model_rot = { -3.146, 179.429, -129.771 },
+    model_scale = 0.71399995946884,
+}
+
+local FIELDS = {
+    { "model_pos", true },
+    { "model_rot", true },
+    { "model_scale", false },
+}
+
+local cfg = wd_config.new({
+    section = SECTION,
+    global_key = "glowstick",
+    tier_fields = FIELDS,
+    defaults = DEFAULTS,
+})
+
+transforms = cfg.transforms
+saved = cfg.saved
+load_transforms = cfg.load_transforms
+save_transforms = cfg.save_global
+
+function reapply_transforms()
+    return wd_attach.reapply_transforms(ATT_NAME, cfg.transforms)
+end
+
+local LIGHT_BONE = "light_bone_1"
+CAMERA_OFFSET = { -0.3, -0.2, 0.3 }
+
+local owner
+
+local function is_attachment_present()
+    return wd_attach.has_attachment(ATT_NAME)
+end
+
+local unequip_grace_until = 0
+local pending_charge = nil
+local charge_dead = false
+local power_by_section = {}
+local allow_drain_tick = wd_core.throttle(DRAIN_TICK_MS)
+
+local function is_glowstick_section(section)
+    return section ~= nil and string.find(section, "glowstick", 1, true) ~= nil
+end
+
+local function get_slotted_glowstick()
+    if not db.actor then
+        return nil
+    end
+    local item = db.actor:item_in_slot(DETECTOR_SLOT)
+    if item and is_glowstick_section(item:section()) then
+        return item
+    end
+    return nil
+end
+
+local function unequip_if_slotted(obj)
+    local item = get_slotted_glowstick()
+    if not (item and obj and item:id() == obj:id()) then
+        return
+    end
+    db.actor:move_to_ruck(item)
+    unequip_grace_until = time_global() + UNEQUIP_GRACE_MS
+end
+
+local function get_unslotted_glowstick(section)
+    if not db.actor then
+        return nil
+    end
+    local slotted = get_slotted_glowstick()
+    local slotted_id = slotted and slotted:id()
+    local found = nil
+    db.actor:iterate_inventory(function(_owner, item)
+        if found == nil and item:section() == section and item:id() ~= slotted_id then
+            found = item
+        end
+    end, db.actor)
+    return found or db.actor:object(section)
+end
+
+local function is_mounted_item_slotted()
+    local slotted = get_slotted_glowstick()
+    return slotted ~= nil and slotted:id() == owner.get_id()
+end
+
+local function unmount_on_slot_conflict()
+    if not is_mounted_item_slotted() then
+        unequip_grace_until = 0
+        return false
+    end
+    if time_global() < unequip_grace_until then
+        return false
+    end
+    wd_slots.unmount(SLOT)
+    return true
+end
+
+local function get_power(section)
+    local power = power_by_section[section]
+    if not power then
+        power = {
+            drain = ini_sys:r_float_ex(section, "power_drain", DEFAULT_DRAIN),
+            critical = ini_sys:r_float_ex(section, "power_critical", DEFAULT_CRITICAL),
+        }
+        power_by_section[section] = power
+    end
+    return power
+end
+
+local function is_charge_dead(item)
+    return item ~= nil and item:condition() < get_power(item:section()).critical
+end
+
+local function update_charge()
+    if not allow_drain_tick() then
+        return
+    end
+    local item = owner.get_object()
+    if not item then
+        return
+    end
+    if pending_charge ~= nil then
+        item:set_condition(clamp(pending_charge, CONDITION_FLOOR, CONDITION_CEILING))
+        pending_charge = nil
+    end
+    local drain = get_power(item:section()).drain
+    item:set_condition(clamp(item:condition() - drain, CONDITION_FLOOR, CONDITION_CEILING))
+    charge_dead = is_charge_dead(item)
+end
+
+local function save_mount_state(m_data)
+    local item = owner.get_object()
+    m_data[CHARGE_KEY] = (item and item:condition()) or pending_charge
+end
+
+local function load_mount_state(m_data)
+    local charge = m_data[CHARGE_KEY]
+    pending_charge = type(charge) == "number" and charge or nil
+end
+
+local CENTERED_DIR = "wd\\glowstick\\"
+local CENTERED_STEMS = {
+    dev_glowstick_glow = true,
+    dev_glowstick_glow_blue = true,
+    dev_glowstick_glow_orange = true,
+    dev_glowstick_glow_red = true,
+}
+
+local function get_attach_model(section)
+    local visual = wd_attach.get_visual_of(section)
+    local stem = visual and visual:match("([^\\]+)$")
+    return stem and CENTERED_STEMS[stem] and CENTERED_DIR .. stem .. "_centered"
+end
+
+local function get_desc(model)
+    return {
+        name = ATT_NAME,
+        model = model,
+        parent = d_bracer_config.SECTION,
+        transforms = transforms,
+    }
+end
+
+local function attach_glowstick(section)
+    local model = get_attach_model(section)
+    return model and wd_attach.attach(get_desc(model))
+end
+
+local function resync_attachment()
+    if not owner.is_attached() then
+        wd_attach.detach(ATT_NAME)
+        return nil
+    end
+    return attach_glowstick(owner.get_value())
+end
+
+local function parse_light_color(light_sec)
+    local red, green, blue, alpha = 0.0, 0.8, 0.6, 0.8
+    local color_str = light_sec and ini_sys:r_string_ex(light_sec, "color")
+    if color_str then
+        local parsed = str_explode(color_str, ",")
+        red = tonumber(parsed[1]) or red
+        green = tonumber(parsed[2]) or green
+        blue = tonumber(parsed[3]) or blue
+        alpha = tonumber(parsed[4]) or alpha
+    end
+    local color = fcolor()
+    color.r, color.g, color.b, color.a = red, green, blue, alpha
+    return color
+end
+
+local driven = wd_attach.new_driven_light({
+    bone = LIGHT_BONE,
+    camera_offset = CAMERA_OFFSET,
+    is_lit = function()
+        return not charge_dead and not wd_exo.is_exo()
+    end,
+    get_desc = function()
+        local light_sec = ini_sys:r_string_ex(owner.get_value(), "light_section")
+        return {
+            range = (light_sec and ini_sys:r_float_ex(light_sec, "range")) or 6,
+            color = parse_light_color(light_sec),
+            shadow = true,
+        }
+    end,
+})
+
+owner = wd_worn.new({
+    attach_label = "st_dev_glowstick_attach_arm",
+    detach_label = "st_dev_glowstick_detach_arm",
+    save_key = "wd_glowstick_section",
+    get_obj_value = function(obj)
+        return obj and obj:section()
+    end,
+    on_attach = function(obj)
+        if not obj then
+            return false
+        end
+        local sec = obj:section()
+        unequip_if_slotted(obj)
+        if attach_glowstick(sec) then
+            charge_dead = is_charge_dead(obj)
+            return sec
+        end
+        return false
+    end,
+    on_detach = function()
+        pending_charge = nil
+        charge_dead = false
+        wd_attach.detach(ATT_NAME)
+        driven.kill()
+    end,
+})
+
+function get_menu_text(obj)
+    return owner.get_menu_text(obj)
+end
+
+function toggle_attach(obj)
+    wd_slots.toggle(obj)
+end
+
+local reattach_throttle = 0
+
+local function poll_slot_conflict()
+    if owner.is_attached() then
+        unmount_on_slot_conflict()
+    end
+end
+
+function actor_on_update()
+    if not owner.is_attached() then
+        return
+    end
+    local section = owner.get_value()
+    local attachment = wd_attach.get(ATT_NAME)
+    if db.actor and not attachment then
+        if reattach_throttle <= 0 then
+            attachment = attach_glowstick(section)
+            if not attachment then
+                reattach_throttle = 30
+            end
+        else
+            reattach_throttle = reattach_throttle - 1
+        end
+    else
+        reattach_throttle = 0
+    end
+    update_charge()
+    driven.update(attachment)
+end
+
+local function register_gui()
+    wd_gui.register_device({
+        id = SECTION,
+        label = "Glowstick",
+        is_worn = function()
+            return owner.is_attached()
+        end,
+        store = function()
+            return transforms
+        end,
+        saved = function()
+            return saved
+        end,
+        defaults = function()
+            return DEFAULTS
+        end,
+        save = save_transforms,
+        on_apply = reapply_transforms,
+        fields = {
+            model_pos = wd_gui.new_slider(-0.3, 0.3),
+            model_rot = wd_gui.new_slider(-180, 180),
+            model_scale = wd_gui.new_slider(0.01, 3),
+        },
+    })
+    wd_gui.register_tab({
+        device = SECTION,
+        id = "glowstick",
+        label = "Glowstick",
+        dev = true,
+        rows = {
+            { "model_pos", 1, 0.002, "Position x" },
+            { "model_pos", 2, 0.002, "Position y" },
+            { "model_pos", 3, 0.002, "Position z" },
+            { "model_rot", 1, 1, "Yaw (Y)" },
+            { "model_rot", 2, 1, "Pitch (X)" },
+            { "model_rot", 3, 1, "Roll (Z)" },
+            { "model_scale", nil, 0.01, "Scale" },
+        },
+    })
+end
+
+function register()
+    wd_slots.register_device({
+        id = "glowstick",
+        slot = SLOT,
+        matches_section = is_glowstick_section,
+        get_object = get_unslotted_glowstick,
+        owner = owner,
+        is_present = is_attachment_present,
+        resync = resync_attachment,
+    })
+    wd_exo.register_device({
+        id = "glowstick",
+        names = { ATT_NAME },
+        resync = resync_attachment,
+    })
+    wd_core.register({
+        id = SECTION,
+        callbacks = {
+            actor_on_update = { { poll_slot_conflict, interval = SLOT_POLL_MS }, actor_on_update },
+            actor_on_net_destroy = { driven.kill },
+            save_state = { owner.save, save_mount_state },
+            load_state = { owner.load, load_mount_state },
+        },
+        on_start = load_transforms,
+    })
+    register_gui()
+end

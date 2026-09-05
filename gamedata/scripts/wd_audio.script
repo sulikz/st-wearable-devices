@@ -1,0 +1,110 @@
+local LTX_SECTION = "wd_audio"
+local DEF_VOLUME = 100
+local PREVIEW_GAP_MS = 200
+local GUI_RANK = 5
+local ROW_STEP = 5
+
+local CUES = {
+    { id = "anomaly_blink", label = "Anomaly", file = [[detectors\detector_8]] },
+    { id = "artefact_blink", label = "Artefact", file = [[wd\beep]] },
+    { id = "bleed_warning", label = "Bleeding", file = [[wd\monitor_beep]] },
+    { id = "ui_button", file = [[wd\button]] },
+}
+local CUE_BY_ID = {}
+local TUNABLE_CUES = {}
+local CUE_IDS = {}
+local DEFAULTS = {}
+for _, cue in ipairs(CUES) do
+    CUE_BY_ID[cue.id] = cue
+    if cue.label then
+        TUNABLE_CUES[#TUNABLE_CUES + 1] = cue
+        CUE_IDS[#CUE_IDS + 1] = cue.id
+        DEFAULTS[cue.id] = DEF_VOLUME
+    end
+end
+
+local settings = {}
+
+function get_tunable_cues()
+    return TUNABLE_CUES
+end
+
+function get_defaults()
+    return DEFAULTS
+end
+
+function get_saved()
+    return wd_store.load_fields(LTX_SECTION, CUE_IDS, DEFAULTS)
+end
+
+function save_settings()
+    return wd_store.save_fields(LTX_SECTION, CUE_IDS, settings)
+end
+
+function load_settings()
+    local saved = get_saved()
+    for _, cue in ipairs(TUNABLE_CUES) do
+        settings[cue.id] = saved[cue.id]
+    end
+end
+
+function get_cue_volume(cue_id)
+    return settings[cue_id] or DEF_VOLUME
+end
+
+function play(cue_id, opts)
+    local cue = CUE_BY_ID[cue_id]
+    if not (cue and db.actor) then
+        return nil
+    end
+    local volume = get_cue_volume(cue_id)
+    if volume <= 0 then
+        return nil
+    end
+    local sound = sound_object(cue.file)
+    sound:play(db.actor, opts and opts.delay or 0, opts and opts.mode or sound_object.s2d)
+    sound.volume = volume / 100
+    return sound
+end
+
+local function register_gui()
+    local fields = {}
+    local rows = {}
+    for _, cue in ipairs(TUNABLE_CUES) do
+        local slider = wd_gui.new_percent_slider()
+        local allow_preview = wd_core.throttle(PREVIEW_GAP_MS)
+        slider.on_change = function()
+            if allow_preview() then
+                play(cue.id)
+            end
+        end
+        fields[cue.id] = slider
+        rows[#rows + 1] = { cue.id, nil, ROW_STEP, cue.label }
+    end
+    wd_gui.register_device({
+        id = "audio",
+        label = "Audio",
+        rank = GUI_RANK,
+        store = function()
+            return settings
+        end,
+        saved = get_saved,
+        defaults = get_defaults,
+        save = save_settings,
+        fields = fields,
+    })
+    wd_gui.register_tab({
+        device = "audio",
+        id = "audio_volumes",
+        label = "Audio",
+        rows = rows,
+    })
+end
+
+function register()
+    register_gui()
+    wd_core.register({
+        id = "wd_audio",
+        on_start = load_settings,
+    })
+end

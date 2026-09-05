@@ -1,0 +1,20 @@
+local hud = wd_screen.new_static_hud({
+    class_name = "UIVektorRing",
+    xml_file = "ui_vektor_ring.xml",
+    window = "vektor_ring",
+    node = "vektor_ring:ring",
+    texture = "vektor_compass",
+    get_brightness = function()
+        return d_vektor_config.transforms.brightness
+    end,
+})
+
+apply_alpha = hud.apply_alpha
+
+function show_hud()
+    return hud.show()
+end
+
+function close_hud()
+    hud.close()
+end

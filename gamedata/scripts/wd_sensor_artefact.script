@@ -1,0 +1,18 @@
+local ARTEFACT = {
+    [clsid.artefact] = true,
+    [clsid.artefact_s] = true,
+}
+
+local function is_artefact(obj)
+    return ARTEFACT[obj:clsid()] == true
+end
+
+function new(cfg)
+    cfg.sense = wd_sensor_proximity.new({
+        predicate = is_artefact,
+        max_distance = cfg.max_distance or 30,
+        min_repeat = 1500,
+        max_repeat = 1500,
+    })
+    return wd_sensor_pulse.new(cfg)
+end

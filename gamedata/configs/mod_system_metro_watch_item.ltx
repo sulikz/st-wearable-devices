@@ -1,0 +1,24 @@
+[wd_metro_watch]:identity_immunities
+GroupControlSection  = spawn_group
+discovery_dependency =
+$spawn          = "devices\wd_metro_watch"
+class           = II_ATTCH
+kind            = i_device
+cform           = skeleton
+visual          = wd\world\vektor_world.ogf
+cost                		                        = 9800
+inv_name        		                            = st_metro_watch_name
+inv_name_short  		                            = st_metro_watch_name
+description    			                            = st_metro_watch_descr
+inv_weight        		                            = 0.4
+icons_texture                                       = wd\ui\metro\icon_metro
+inv_grid_width     = 1
+inv_grid_height    = 1
+inv_grid_x         = 0
+inv_grid_y         = 0
+repair_type                                         = scope
+can_trade                                           = false
+
+![wd_metro_watch]
+use1_functor = d_watch.get_menu_text
+use1_action_functor = d_watch.toggle_attach

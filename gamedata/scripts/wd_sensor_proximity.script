@@ -1,0 +1,37 @@
+function new(cfg)
+    local max_distance = cfg.max_distance
+    local min_distance = cfg.min_distance or 3
+    local min_repeat = cfg.min_repeat or 100
+    local max_repeat = cfg.max_repeat or 500
+    local ramp = cfg.ramp or 2.5
+    local origin
+    local nearest
+    local sensed = {}
+
+    local function take_nearest(obj)
+        if obj and cfg.predicate(obj) then
+            nearest = origin:distance_to(obj:position())
+            return true
+        end
+    end
+
+    return function()
+        if not db.actor then
+            return nil
+        end
+        origin = db.actor:position()
+        nearest = nil
+        level.iterate_nearest(origin, max_distance, take_nearest)
+        if not nearest then
+            return nil
+        end
+        local proximity
+        if max_distance <= min_distance then
+            proximity = 1
+        else
+            proximity = clamp(1 - normalize(nearest, min_distance, max_distance), 0, 1)
+        end
+        sensed.delay = wd_sensor_pulse.get_delay(proximity ^ ramp, min_repeat, max_repeat)
+        return sensed
+    end
+end

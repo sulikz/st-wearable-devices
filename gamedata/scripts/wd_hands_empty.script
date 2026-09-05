@@ -1,0 +1,139 @@
+local SLOT = 15
+local MELEE_ANM_SLOT = 14
+local MELEE_HOLD_MS = 1200
+local ITEM_SECTION = "wd_emptyhands"
+local SPAWN_COOLDOWN_MS = 3000
+local LOCK_SETTLE_MS = 1500
+local spawn_at = 0
+local melee_hold_until = 0
+local settle_until = 0
+local draw_hold_until = 0
+
+local function is_managed_section(section)
+    return section == ITEM_SECTION
+end
+
+local function release_strays()
+    local now = wd_core.get_time_ms()
+    if now < spawn_at then
+        return
+    end
+    local occupant = db.actor:item_in_slot(SLOT)
+    local occupant_id = occupant and occupant:id()
+    db.actor:iterate_inventory(function(_owner, item)
+        if item and is_managed_section(item:section()) and item:id() ~= occupant_id then
+            alife_release(item)
+        end
+    end, db.actor)
+end
+
+function ensure_item()
+    if not db.actor then
+        return
+    end
+    release_strays()
+    local occupant = db.actor:item_in_slot(SLOT)
+    if not occupant then
+        local now = wd_core.get_time_ms()
+        if now >= spawn_at then
+            alife_create_item(ITEM_SECTION, db.actor)
+            spawn_at = now + SPAWN_COOLDOWN_MS
+        end
+    end
+end
+
+local function on_item_take(item)
+    if not db.actor or not item or not is_managed_section(item:section()) then
+        return
+    end
+    local occupant = db.actor:item_in_slot(SLOT)
+    if occupant then
+        if occupant:id() ~= item:id() then
+            alife_release(item)
+        end
+        return
+    end
+    if wd_core.get_time_ms() >= spawn_at then
+        alife_release(item)
+    end
+end
+
+local function on_item_drop(item)
+    if item and is_managed_section(item:section()) then
+        alife_release(item)
+    end
+end
+
+function is_drawn()
+    local it = db.actor and db.actor:active_item()
+    return it ~= nil and it:section() == ITEM_SECTION
+end
+
+function is_available()
+    return db.actor ~= nil and db.actor:item_in_slot(SLOT) ~= nil
+end
+
+function hold_melee()
+    melee_hold_until = wd_core.get_time_ms() + MELEE_HOLD_MS
+end
+
+function hold_draw(ms)
+    draw_hold_until = wd_core.get_time_ms() + ms
+end
+
+local function is_melee_anm_active()
+    if db.actor and db.actor:item_in_slot(MELEE_ANM_SLOT) then
+        return true
+    end
+    return wd_core.get_time_ms() < melee_hold_until
+end
+
+local function is_foreign_hud_anim_active()
+    if lam2 and lam2.is_running and lam2.is_running() then
+        return true
+    end
+    return is_melee_anm_active()
+end
+
+local function refresh_input_lock(now)
+    if wd_blocking.is_hands_locked() then
+        settle_until = now + LOCK_SETTLE_MS
+    end
+end
+
+function try_draw()
+    if not db.actor then
+        return false
+    end
+    local now = wd_core.get_time_ms()
+    if now < draw_hold_until then
+        return false
+    end
+    refresh_input_lock(now)
+    if now < settle_until then
+        return false
+    end
+    if db.actor:active_detector() or is_foreign_hud_anim_active() then
+        return false
+    end
+    if not is_available() then
+        ensure_item()
+        return false
+    end
+    if not is_drawn() then
+        db.actor:activate_slot(SLOT)
+    end
+    return true
+end
+
+function register()
+    wd_core.register({
+        id = "wd_hands_empty",
+        callbacks = {
+            actor_on_first_update = { ensure_item },
+            on_option_change = { ensure_item },
+            actor_on_item_take = { on_item_take },
+            actor_on_item_drop = { on_item_drop },
+        },
+    })
+end

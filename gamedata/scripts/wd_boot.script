@@ -1,0 +1,32 @@
+function on_game_start()
+    wd_config.register()
+    wd_inspect.register_engine()
+    wd_hud.register()
+    wd_gui.register()
+    wd_audio.register()
+    wd_slots.register()
+    wd_exo.register()
+    wd_hands_empty.register()
+    wd_hands_left.register()
+    wd_hands_freelook.register()
+    wd_zoom.register()
+    wd_toxic.register()
+    wd_hands_highport.register()
+    wd_hands_bob.register()
+    wd_map_spots.register()
+    wd_debug_menu.register()
+    wd_glow_tune.register()
+    local devices = {
+        d_bracer,
+        d_glowstick,
+        d_promin,
+        d_watch,
+        d_vektor,
+        wd_corpse_spawn,
+        wd_hands_wipe,
+    }
+    for _, device in ipairs(devices) do
+        device.register()
+    end
+    wd_core.start()
+end

@@ -1,0 +1,36 @@
+local AUTO = "auto"
+
+local function find_index(catalog, name)
+    for index, entry in ipairs(catalog) do
+        if entry.name == name then
+            return index
+        end
+    end
+    return nil
+end
+
+function get_index(state, catalog, field)
+    return find_index(catalog, state[field]) or 1
+end
+
+function get_selected(state, field)
+    local value = state[field]
+    if not value or value == "none" then
+        return nil
+    end
+    return value
+end
+
+function get_faction(state, catalog, field)
+    local value = get_selected(state, field)
+    if value ~= AUTO then
+        return value
+    end
+    local actor = db.actor
+    local community = actor and actor:character_community()
+    local name = community and community:match("^actor_(.+)$")
+    if not (name and find_index(catalog, name)) then
+        return nil
+    end
+    return name
+end

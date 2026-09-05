@@ -1,0 +1,116 @@
+SLIM_VISUAL_DIR = "wd\\hands\\slim\\"
+
+local LEFT_VARIANT_SUFFIX = "_wd_left"
+local UNKNOWN = "_unknown"
+
+local items = {}
+local applied_section = UNKNOWN
+local variant_by_outfit = {}
+
+function register_item(id, is_worn)
+    items[id] = is_worn
+end
+
+local function is_any_item_worn()
+    for _, is_worn in pairs(items) do
+        if is_worn() then
+            return true
+        end
+    end
+    return false
+end
+
+local function get_slim_visual(sys, hands_section)
+    local base_visual = sys:r_string_ex(hands_section, "visual_2") or sys:r_string_ex(hands_section, "visual")
+    if not base_visual or base_visual == "" then
+        return nil
+    end
+    local stem = base_visual:match("([^\\/]+)$")
+    if not stem then
+        return nil
+    end
+    stem = stem:gsub("%.ogf$", "")
+    local slim_visual = SLIM_VISUAL_DIR .. stem
+    if not getFS():exist("$game_meshes$", slim_visual .. ".ogf") then
+        return nil
+    end
+    return slim_visual
+end
+
+local function build_left_variant_section(hands_section)
+    local sys = system_ini()
+    local left_variant = hands_section .. LEFT_VARIANT_SUFFIX
+    if sys:section_exist(left_variant) then
+        return left_variant
+    end
+    if not sys:section_exist(hands_section) then
+        return nil
+    end
+    local slim_visual = get_slim_visual(sys, hands_section)
+    if not slim_visual then
+        return nil
+    end
+    sys:set_readonly(false)
+    sys:set_override_names(true)
+    local line_total = sys:line_count(hands_section)
+    for line_index = 0, line_total - 1 do
+        local _, key, value = sys:r_line(hands_section, line_index, "", "")
+        if key and key ~= "" then
+            sys:w_string(left_variant, key, value or "")
+        end
+    end
+    sys:w_string(left_variant, "visual_2", slim_visual)
+    sys:set_override_names(false)
+    sys:set_readonly(true)
+    return left_variant
+end
+
+function get_base_hands_section()
+    return wd_outfit.get_hands_section(wd_outfit.get_key()) or wd_outfit.DEFAULT_HANDS
+end
+
+local function get_target_section()
+    if not is_any_item_worn() then
+        return nil
+    end
+    local outfit_key = wd_outfit.get_key()
+    local cached = variant_by_outfit[outfit_key]
+    if cached == nil then
+        local hands_section = wd_outfit.get_hands_section(outfit_key)
+        cached = (hands_section and build_left_variant_section(hands_section)) or false
+        variant_by_outfit[outfit_key] = cached
+    end
+    return cached or nil
+end
+
+function apply()
+    local target = get_target_section()
+    if target == applied_section then
+        return
+    end
+    local hud = get_player_hud()
+    if not hud then
+        return
+    end
+    if target then
+        hud:set_hands(target)
+    else
+        hud:set_hands(get_base_hands_section())
+        hud:reset_hands()
+    end
+    applied_section = target
+end
+
+function reset()
+    applied_section = UNKNOWN
+end
+
+function register()
+    wd_core.register({
+        id = "wd_hands_left",
+        callbacks = {
+            actor_on_update = { apply },
+        },
+        on_start = reset,
+    })
+end

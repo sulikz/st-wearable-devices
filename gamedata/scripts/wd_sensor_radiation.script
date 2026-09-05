@@ -1,0 +1,24 @@
+local MAX_RADS = 200
+local MIN_REPEAT = 10
+local MAX_REPEAT = 1000
+
+local function get_delay_for(rads)
+    return wd_sensor_pulse.get_delay(math.min(1, rads / MAX_RADS), MIN_REPEAT, MAX_REPEAT)
+end
+
+local function get_rad_sense()
+    if not db.actor then
+        return nil
+    end
+    local env = math.floor(level.get_env_rads() * 2500)
+    local rads = env > 0 and env or math.floor(db.actor.radiation * 10000 * 0.387)
+    if rads <= 0 then
+        return nil
+    end
+    return { delay = get_delay_for(rads) }
+end
+
+function new(cfg)
+    cfg.sense = get_rad_sense
+    return wd_sensor_pulse.new(cfg)
+end

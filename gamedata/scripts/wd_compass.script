@@ -1,0 +1,199 @@
+local VIEW_FACE_EPS = 0.0025
+local VIEW_YAW_EPS = 0.0009
+
+function normalize_angle(angle)
+    while angle > math.pi do
+        angle = angle - 2 * math.pi
+    end
+    while angle < -math.pi do
+        angle = angle + 2 * math.pi
+    end
+    return angle
+end
+
+function get_heading(dir)
+    return math.atan2(dir.x, dir.z)
+end
+
+function get_dial_angle(frame, cam, dir_x, dir_z)
+    if not (frame and cam) then
+        return nil
+    end
+    local forward = cam.dir
+    local yaw_x = forward.x
+    local yaw_z = forward.z
+    local yaw_len_sq = yaw_x * yaw_x + yaw_z * yaw_z
+    if yaw_len_sq < VIEW_YAW_EPS then
+        return nil
+    end
+    local dir_len_sq = dir_x * dir_x + dir_z * dir_z
+    if dir_len_sq < 1e-18 then
+        return nil
+    end
+    local bearing = math.atan2(dir_x * yaw_z - dir_z * yaw_x, dir_x * yaw_x + dir_z * yaw_z)
+    local right = cam.right
+    local top = cam.top
+    local face_i = frame.i
+    local face_j = frame.j
+    local i_r = face_i.x * right.x + face_i.y * right.y + face_i.z * right.z
+    local i_t = face_i.x * top.x + face_i.y * top.y + face_i.z * top.z
+    local j_r = face_j.x * right.x + face_j.y * right.y + face_j.z * right.z
+    local j_t = face_j.x * top.x + face_j.y * top.y + face_j.z * top.z
+    local face_area = i_r * j_t - i_t * j_r
+    if face_area >= 0 or face_area * face_area < VIEW_FACE_EPS then
+        return nil
+    end
+    return normalize_angle(math.atan2(j_r, i_r) + bearing)
+end
+
+local offset_by_gvid = {}
+
+local function get_level_offset(gvid)
+    if not gvid or gvid == 65535 then
+        return 0, 0
+    end
+    local offset = offset_by_gvid[gvid]
+    if not offset then
+        local vertex = game_graph():vertex(gvid)
+        local global_point = vertex:game_point()
+        local local_point = vertex:level_point()
+        offset = { x = global_point.x - local_point.x, z = global_point.z - local_point.z }
+        offset_by_gvid[gvid] = offset
+    end
+    return offset.x, offset.z
+end
+
+function get_actor_global_pos()
+    if not db.actor then
+        return nil
+    end
+    local local_pos = db.actor:position()
+    local offset_x, offset_z = get_level_offset(db.actor:game_vertex_id())
+    return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z)
+end
+
+function list_task_targets()
+    if not (db.actor and task_manager and task_manager.get_task_manager) then
+        return {}
+    end
+    local manager = task_manager.get_task_manager()
+    local task_info = manager and manager.task_info
+    if not task_info then
+        return {}
+    end
+    local targets = {}
+    for _, task in pairs(task_info) do
+        if task.t then
+            local target_id = tonumber(task.current_target)
+            if target_id then
+                targets[#targets + 1] = {
+                    id = target_id,
+                    storyline = task.storyline == true,
+                    active = db.actor:is_active_task(task.t) == true,
+                }
+            end
+        end
+    end
+    return targets
+end
+
+function list_active_tasks()
+    local active = {}
+    for _, target in ipairs(list_task_targets()) do
+        if target.active then
+            active[#active + 1] = target
+        end
+    end
+    return active
+end
+
+function list_active_task_target_ids()
+    local ids = {}
+    for _, target in ipairs(list_active_tasks()) do
+        ids[#ids + 1] = target.id
+    end
+    return ids
+end
+
+local level_id_by_gvid = {}
+
+function get_level_id_of(gvid)
+    if not gvid or gvid == 65535 then
+        return nil
+    end
+    local level_id = level_id_by_gvid[gvid]
+    if not level_id then
+        level_id = game_graph():vertex(gvid):level_id()
+        level_id_by_gvid[gvid] = level_id
+    end
+    return level_id
+end
+
+function get_active_task_target()
+    return list_active_tasks()[1]
+end
+
+function get_default_target_id()
+    local target = get_active_task_target()
+    return target and target.id
+end
+
+function get_target_pos_of(target_id)
+    if not target_id then
+        return nil
+    end
+    local local_pos, gvid
+    local online = (db.storage and db.storage[target_id] and db.storage[target_id].object)
+        or level.object_by_id(target_id)
+    if online then
+        local_pos = online:position()
+        gvid = online:game_vertex_id()
+    else
+        local server_object = alife_object(target_id)
+        if not server_object then
+            return nil
+        end
+        if server_object:clsid() == clsid.online_offline_group_s then
+            local commander = server_object:commander_id()
+            server_object = commander and alife_object(commander)
+            if not server_object then
+                return nil
+            end
+        end
+        local_pos = server_object.position
+        gvid = server_object.m_game_vertex_id
+    end
+    if not (local_pos and gvid) then
+        return nil
+    end
+    local offset_x, offset_z = get_level_offset(gvid)
+    return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z), gvid
+end
+
+function new(cfg)
+    local compass = {}
+    local actor_pos = cfg.actor_pos or get_actor_global_pos
+    local target_id = cfg.target_id or get_default_target_id
+    local target_pos = cfg.target_pos or get_target_pos_of
+
+    function compass.get_actor_pos()
+        return actor_pos()
+    end
+
+    function compass.get_target()
+        local id = target_id()
+        if not id then
+            return nil, nil
+        end
+        local here = actor_pos()
+        local there = target_pos(id)
+        if not (here and there) then
+            return nil, nil
+        end
+        local dx = there.x - here.x
+        local dz = there.z - here.z
+        return there, math.sqrt(dx * dx + dz * dz)
+    end
+
+    return compass
+end

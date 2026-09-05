@@ -1,0 +1,21 @@
+<w>
+<vektor>
+	<wrk_area/>
+	<bg x="0.00200" y="0.00150" width="0.04000" height="0.04000" stretch="1">
+		<texture shader="wd\crt_vektor">vektor_bg</texture>
+	</bg>
+	<bar_fill x="0.01684" y="0.01252" width="0.01492" height="0.00148" stretch="1">
+		<texture shader="wd\crt_vektor">vektor_bar_fill</texture>
+	</bar_fill>
+	<t_h10 x="0.01045" y="0.01846" width="0.00438" height="0.00591" stretch="1"/>
+	<t_h1 x="0.01507" y="0.01846" width="0.00438" height="0.00591" stretch="1"/>
+	<t_colon x="0.01969" y="0.01846" width="0.00438" height="0.00591" stretch="1">
+		<texture shader="wd\crt_vektor">vektor_t_colon</texture>
+	</t_colon>
+	<t_m10 x="0.02438" y="0.01846" width="0.00438" height="0.00591" stretch="1"/>
+	<t_m1 x="0.02900" y="0.01846" width="0.00438" height="0.00591" stretch="1"/>
+	<d0 x="0.02608" y="0.02868" width="0.00146" height="0.00197" stretch="1"/>
+	<d1 x="0.02757" y="0.02868" width="0.00146" height="0.00197" stretch="1"/>
+	<d2 x="0.02907" y="0.02868" width="0.00146" height="0.00197" stretch="1"/>
+</vektor>
+</w>

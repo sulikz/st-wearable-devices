@@ -1,0 +1,36 @@
+local phase = 0
+local last_time = nil
+local lit = false
+
+local function get_bleed()
+    return (db.actor and db.actor.bleeding) or 0
+end
+
+function is_lit()
+    return lit
+end
+
+function reset()
+    phase = 0
+    last_time = nil
+    lit = false
+end
+
+function update()
+    local bleed = get_bleed()
+    if bleed <= 0 then
+        reset()
+        return
+    end
+    local now = time_global()
+    local dt = clamp(last_time and (now - last_time) or 0, 0, 100)
+    last_time = now
+    local bleed_norm = bleed > 1.0 and 1.0 or bleed
+    local freq = 0.0011 + bleed_norm * 0.0029
+    phase = (phase + dt * freq) % 1.0
+    local now_lit = phase < 0.5
+    if now_lit and not lit then
+        wd_audio.play("bleed_warning")
+    end
+    lit = now_lit
+end

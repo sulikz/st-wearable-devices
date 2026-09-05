@@ -1,0 +1,7 @@
+<w>
+<vektor_ring>
+	<ring x="-0.02000" y="-0.02000" width="0.04000" height="0.04000" stretch="1">
+		<texture shader="wd\ui">vektor_compass</texture>
+	</ring>
+</vektor_ring>
+</w>

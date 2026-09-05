@@ -1,0 +1,128 @@
+local SHADER = "wd\\ui"
+
+GLOW_RANGE = 0.3
+GLOW_COLOR = { r = 0.16, g = 0.16, b = 0.16, a = 0.8 }
+
+function get_alpha(percent)
+    return clamp(math.floor((percent or 0) * 255 / 100 + 0.5), 0, 255)
+end
+
+function new_binder(shader)
+    local binder = {}
+
+    function binder.set(wnd, tex)
+        wnd:InitTextureEx(tex, shader)
+    end
+
+    function binder.bind(wnd, tex, prev)
+        if prev ~= tex then
+            wnd:InitTextureEx(tex, shader)
+            return tex
+        end
+        return prev
+    end
+
+    return binder
+end
+
+local default_binder = new_binder(SHADER)
+
+function set(wnd, tex)
+    return default_binder.set(wnd, tex)
+end
+
+function new_screen_glow(cfg)
+    local config = cfg.config
+    return wd_attach.new_glow({
+        name = cfg.name,
+        color = GLOW_COLOR,
+        range = GLOW_RANGE,
+        get_offset = function()
+            return config.LIGHT_OFFSET
+        end,
+        get_level = function()
+            return config.transforms.brightness / 100
+        end,
+        is_lit = cfg.is_lit,
+    })
+end
+
+function new_hud(cfg)
+    local hud = {}
+    local instance = nil
+
+    function hud.get()
+        return instance
+    end
+
+    function hud.clear()
+        instance = nil
+    end
+
+    function hud.apply_alpha()
+        if instance and cfg.get_brightness then
+            instance:set_alpha(get_alpha(cfg.get_brightness()))
+        end
+    end
+
+    function hud.show()
+        if instance == nil then
+            instance = cfg.create()
+            hud.apply_alpha()
+            if cfg.on_create then
+                cfg.on_create(instance)
+            end
+        end
+        return instance
+    end
+
+    function hud.close()
+        if instance and instance:IsShown() then
+            get_hud():RemoveDialogToRender(instance)
+            Unregister_UI(cfg.name)
+            instance = nil
+        end
+    end
+
+    return hud
+end
+
+function new_static_hud(cfg)
+    local hud
+    local UICls = class(cfg.class_name)(CUIScriptWnd) or _G[cfg.class_name]
+
+    function UICls:__init()
+        super()
+        self:Show(true)
+        self:Enable(true)
+        local xml = CScriptXmlInit()
+        xml:ParseFile(cfg.xml_file)
+        xml:InitWindow(cfg.window, 0, self)
+        self.static = xml:InitStatic(cfg.node, self)
+        default_binder.set(self.static, cfg.texture)
+    end
+
+    function UICls:set_alpha(alpha)
+        self.static:SetTextureColor(GetARGB(alpha, 255, 255, 255))
+    end
+
+    function UICls:__finalize()
+        hud.clear()
+    end
+
+    function UICls:set_shown(shown)
+        if self.static_shown ~= shown then
+            self.static_shown = shown
+            self.static:Show(shown)
+        end
+    end
+
+    hud = new_hud({
+        name = cfg.class_name,
+        create = function()
+            return UICls()
+        end,
+        get_brightness = cfg.get_brightness,
+    })
+    return hud
+end

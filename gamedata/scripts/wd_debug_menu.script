@@ -1,0 +1,30 @@
+local SPAWN_GROUPS = {
+    i_wearable_module = "Items (Device)",
+    i_wearable_kit = "Items (Upgrades)",
+}
+
+function add_spawn_kinds(groups)
+    if type(groups) ~= "table" then
+        return false
+    end
+    for kind, group in pairs(SPAWN_GROUPS) do
+        if groups[kind] == nil then
+            groups[kind] = group
+        end
+    end
+    return true
+end
+
+function install_spawn_kinds()
+    if not ui_debug_launcher then
+        return false
+    end
+    return add_spawn_kinds(ui_debug_launcher.itm_to_spawn_classes)
+end
+
+function register()
+    wd_core.register({
+        id = "wd_debug_menu",
+        on_start = install_spawn_kinds,
+    })
+end

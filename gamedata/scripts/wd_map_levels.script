@@ -1,0 +1,60 @@
+GLOBAL_TEXTURE = "ui\\ui_global_map"
+GLOBAL = { id = "wd_map_global", width = 4096, height = 8192 }
+
+LEVELS = {
+    ["map\\map_aes_1"] = { id = "wd_lvl_aes_1", width = 2048, height = 1024 },
+    ["map\\map_aes_2"] = { id = "wd_lvl_aes_2", width = 2048, height = 1024 },
+    ["map\\map_agroprom"] = { id = "wd_lvl_agroprom", width = 2048, height = 2048 },
+    ["map\\map_agroprom_underground"] = { id = "wd_lvl_agroprom_underground", width = 512, height = 1024 },
+    ["map\\map_bar"] = { id = "wd_lvl_bar", width = 1024, height = 2048 },
+    ["map\\map_darkvalley"] = { id = "wd_lvl_darkvalley", width = 1024, height = 2048 },
+    ["map\\map_escape"] = { id = "wd_lvl_escape", width = 2048, height = 4096 },
+    ["map\\map_fake_start"] = { id = "wd_lvl_fake_start", width = 1024, height = 1024 },
+    ["map\\map_garbage"] = { id = "wd_lvl_garbage", width = 2048, height = 2048 },
+    ["map\\map_grimwood"] = { id = "wd_lvl_grimwood", width = 2048, height = 2048 },
+    ["map\\map_hospital"] = { id = "wd_lvl_hospital", width = 512, height = 1024 },
+    ["map\\map_jupiter"] = { id = "wd_lvl_jupiter", width = 4096, height = 4096 },
+    ["map\\map_jupiter_underground"] = { id = "wd_lvl_jupiter_underground", width = 1024, height = 1024 },
+    ["map\\map_k01_darkscape"] = { id = "wd_lvl_k01_darkscape", width = 2048, height = 2048 },
+    ["map\\map_k02_trucks_cemetery"] = { id = "wd_lvl_k02_trucks_cemetery", width = 4096, height = 4096 },
+    ["map\\map_l03u_agr_underground"] = { id = "wd_lvl_l03u_agr_underground", width = 1024, height = 1024 },
+    ["map\\map_l04_darkvalley"] = { id = "wd_lvl_l04_darkvalley", width = 1024, height = 2048 },
+    ["map\\map_l04u_labx18"] = { id = "wd_lvl_l04u_labx18", width = 1024, height = 1024 },
+    ["map\\map_l05_bar"] = { id = "wd_lvl_l05_bar", width = 1024, height = 2048 },
+    ["map\\map_l06_rostok"] = { id = "wd_lvl_l06_rostok", width = 1024, height = 2048 },
+    ["map\\map_l07_military"] = { id = "wd_lvl_l07_military", width = 2048, height = 2048 },
+    ["map\\map_l08_yantar"] = { id = "wd_lvl_l08_yantar", width = 2048, height = 2048 },
+    ["map\\map_l08u_brainlab"] = { id = "wd_lvl_l08u_brainlab", width = 512, height = 256 },
+    ["map\\map_l09_deadcity"] = { id = "wd_lvl_l09_deadcity", width = 2048, height = 2048 },
+    ["map\\map_l10_radar"] = { id = "wd_lvl_l10_radar", width = 2048, height = 2048 },
+    ["map\\map_l11_pripyat"] = { id = "wd_lvl_l11_pripyat", width = 2048, height = 2048 },
+    ["map\\map_l12_stancia"] = { id = "wd_lvl_l12_stancia", width = 2048, height = 2048 },
+    ["map\\map_l12u_control_monolith"] = { id = "wd_lvl_l12u_control_monolith", width = 1024, height = 1024 },
+    ["map\\map_l12u_control_monolith_1"] = { id = "wd_lvl_l12u_control_monolith_1", width = 1024, height = 1024 },
+    ["map\\map_l13_generators"] = { id = "wd_lvl_l13_generators", width = 2048, height = 2048 },
+    ["map\\map_labx8"] = { id = "wd_lvl_labx8", width = 512, height = 512 },
+    ["map\\map_limansk"] = { id = "wd_lvl_limansk", width = 1024, height = 2048 },
+    ["map\\map_marsh"] = { id = "wd_lvl_marsh", width = 4096, height = 4096 },
+    ["map\\map_military"] = { id = "wd_lvl_military", width = 2048, height = 2048 },
+    ["map\\map_nomap"] = { id = "wd_lvl_nomap", width = 16, height = 16 },
+    ["map\\map_poselok_ug"] = { id = "wd_lvl_poselok_ug", width = 2048, height = 2048 },
+    ["map\\map_pripyat"] = { id = "wd_lvl_pripyat", width = 4096, height = 4096 },
+    ["map\\map_promzona"] = { id = "wd_lvl_promzona", width = 2048, height = 2048 },
+    ["map\\map_radar"] = { id = "wd_lvl_radar", width = 2048, height = 2048 },
+    ["map\\map_red_forest"] = { id = "wd_lvl_red_forest", width = 2048, height = 2048 },
+    ["map\\map_stancia_2"] = { id = "wd_lvl_stancia_2", width = 2048, height = 1024 },
+    ["map\\map_y04_pole"] = { id = "wd_lvl_y04_pole", width = 2048, height = 2048 },
+    ["map\\map_yantar"] = { id = "wd_lvl_yantar", width = 2048, height = 2048 },
+    ["map\\map_zaton"] = { id = "wd_lvl_zaton", width = 4096, height = 4096 },
+}
+
+function get_baked_global()
+    return GLOBAL
+end
+
+function get_baked_level_texture(texture_name)
+    if type(texture_name) ~= "string" then
+        return nil
+    end
+    return LEVELS[string.lower(texture_name)]
+end

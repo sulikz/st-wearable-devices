@@ -1,0 +1,76 @@
+SECTION = "wd_bracer"
+MODEL = "wd\\bracer_rigid\\bracer_rigid"
+
+PATCH_TEXTURE_PREFIX = "wd\\bracer_rigid\\customization\\faction_patches\\patch_"
+DEFAULT_PATCH = "loners"
+BAKED_PATCH_TEXTURE = PATCH_TEXTURE_PREFIX .. DEFAULT_PATCH
+PATCH_TEXTURE_NONE = PATCH_TEXTURE_PREFIX .. "none"
+
+PATCHES = {
+    stalker = "loners",
+    bandit = "bandits",
+    csky = "clearsky",
+    dolg = "duty",
+    freedom = "freedom",
+    killer = "merc",
+    army = "military",
+    ecolog = "ecolog",
+    monolith = "monolith",
+    greh = "sin",
+    renegade = "renegades",
+    isg = "isg",
+}
+
+DEFAULTS = {
+    model_pos = { 0.0578507975669, 0.0000962907679, 0.000420982957 },
+    model_rot = { 90.1812, -0.1302, 132.1815 },
+    model_scale = 0.86853166871047,
+}
+
+local FIELDS = {
+    { "model_pos", true },
+    { "model_rot", true },
+    { "model_scale", false },
+}
+
+local cfg = wd_config.new({
+    section = SECTION,
+    global_key = "bracer",
+    family_fields = FIELDS,
+    user_fields = "all",
+    defaults = DEFAULTS,
+})
+
+transforms = cfg.transforms
+saved = cfg.saved
+reset_transforms = cfg.reset_transforms
+resolve = cfg.resolve
+load_transforms = cfg.load_transforms
+save_global = cfg.save_global
+
+local function get_suit_community()
+    local suit = wd_outfit.get_item()
+    if not suit then
+        return nil
+    end
+    local community = ini_sys:r_string_ex(suit:section(), "community")
+    if not community or community == "" then
+        return nil
+    end
+    if se_load_var(suit:id(), nil, "unpatched") then
+        return nil
+    end
+    return community
+end
+
+function get_patch_stem()
+    return PATCHES[get_suit_community()]
+end
+
+function get_patch_texture()
+    local stem = get_patch_stem()
+    if not stem then
+        return PATCH_TEXTURE_NONE
+    end
+    return PATCH_TEXTURE_PREFIX .. stem
+end

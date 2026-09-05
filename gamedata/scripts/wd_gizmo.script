@@ -1,0 +1,636 @@
+local AXIS_LEN = 0.05
+local RING_RADIUS = 0.042
+local RING_SEGMENTS = 24
+local AXIS_THICKNESS = 3
+local RING_THICKNESS = 2
+local ICON_SIZE = 24
+local HIT_TOLERANCE_PX = 10
+local HIT_TOLERANCE_SQ = HIT_TOLERANCE_PX * HIT_TOLERANCE_PX
+local MIN_AXIS_PX = 30
+local MIN_SEGMENT_PX = 1
+local MIN_GRAB_RADIUS_PX = 15
+local EPS_DEG = 5
+local ALPHA_ARROW_IDLE = 220
+local ALPHA_RING_IDLE = 150
+local ALPHA_ACTIVE = 255
+local ALPHA_DIMMED = 60
+local LINE_TEXTURE = "wd_gizmo_line"
+local TIP_TEXTURE = "wd_map_player_arrow"
+local SCALE_HANDLE_PX = 12
+local SCALE_DRAG_RANGE_PX = 150
+local SCALE_TINT = { 255, 210, 64 }
+
+local AXES = {
+    { key = "i", tint = { 255, 64, 64 }, pos_comp = 1, rot_comp = 2, plane = { "j", "k" } },
+    { key = "j", tint = { 64, 255, 64 }, pos_comp = 2, rot_comp = 1, plane = { "k", "i" } },
+    { key = "k", tint = { 96, 160, 255 }, pos_comp = 3, rot_comp = 3, plane = { "i", "j" } },
+}
+local HALF_PI = math.pi * 0.5
+
+local RING_COS = {}
+local RING_SIN = {}
+for index = 0, RING_SEGMENTS do
+    local angle = index * 2 * math.pi / RING_SEGMENTS
+    RING_COS[index] = math.cos(angle)
+    RING_SIN[index] = math.sin(angle)
+end
+
+local specs = {}
+local host_id = 0
+local handles = nil
+local handles_hidden = true
+local geometry = nil
+local drag = nil
+local kx = 1
+local scratch_pos = vector2()
+local scratch_size = vector2()
+local scratch_cursor = vector2()
+local scratch_world = vector()
+local scratch_screen = vector()
+
+function register(spec)
+    specs[spec.tab] = spec
+end
+
+local function get_spec()
+    return specs[wd_gui.get_active_tab()]
+end
+
+local function get_length(delta_x, delta_y)
+    return math.sqrt(delta_x * delta_x + delta_y * delta_y)
+end
+
+local function project(pos_x, pos_y, pos_z)
+    scratch_world:set(pos_x, pos_y, pos_z)
+    if game.world2ui_with_depth then
+        local screen = game.world2ui_with_depth(scratch_world, true, true)
+        if screen.z < 0 then
+            return nil
+        end
+        return screen
+    end
+    -- AOE compatibilty - world2ui only
+    local dev = device()
+    local cam_pos = dev.cam_pos
+    local cam_dir = dev.cam_dir
+    local depth = (pos_x - cam_pos.x) * cam_dir.x + (pos_y - cam_pos.y) * cam_dir.y + (pos_z - cam_pos.z) * cam_dir.z
+    if depth <= 0 then
+        return nil
+    end
+    local flat = game.world2ui(scratch_world, true, true)
+    return scratch_screen:set(flat.x, flat.y, 1)
+end
+
+local function get_unit(basis)
+    local scale = math.sqrt(basis.x * basis.x + basis.y * basis.y + basis.z * basis.z)
+    if scale <= 0 then
+        return nil
+    end
+    return { x = basis.x / scale, y = basis.y / scale, z = basis.z / scale }, scale
+end
+
+local function new_static(window, texture, tint, alpha, size)
+    local static = CUIStatic()
+    static:SetAutoDelete(true)
+    static:InitTexture(texture)
+    static:SetStretchTexture(true)
+    static:SetTextureColor(GetARGB(alpha, tint[1], tint[2], tint[3]))
+    static:EnableHeading(true)
+    static:SetHeading(0)
+    if size then
+        static:SetWndSize(scratch_size:set(size, size))
+    end
+    static:Show(false)
+    window:AttachChild(static)
+    return static
+end
+
+local function new_ring(window, tint)
+    local ring = {}
+    for segment = 1, RING_SEGMENTS do
+        ring[segment] = new_static(window, LINE_TEXTURE, tint, ALPHA_RING_IDLE)
+    end
+    return ring
+end
+
+local function build_handles(window)
+    local built = {}
+    for index, axis in ipairs(AXES) do
+        local ring = new_ring(window, axis.tint)
+        local line = new_static(window, LINE_TEXTURE, axis.tint, ALPHA_ARROW_IDLE)
+        local arrow = new_static(window, TIP_TEXTURE, axis.tint, ALPHA_ARROW_IDLE, ICON_SIZE)
+        built[index] = {
+            ring = ring,
+            line = line,
+            arrow = arrow,
+            arrow_parts = { line, arrow },
+            arrow_alpha = ALPHA_ARROW_IDLE,
+            ring_alpha = ALPHA_RING_IDLE,
+        }
+    end
+    built.scale = new_static(window, LINE_TEXTURE, SCALE_TINT, ALPHA_ARROW_IDLE, SCALE_HANDLE_PX)
+    built.scale_parts = { built.scale }
+    built.scale_alpha = ALPHA_ARROW_IDLE
+    return built
+end
+
+local function hide_ring(handle)
+    for _, segment in ipairs(handle.ring) do
+        segment:Show(false)
+    end
+end
+
+local function hide_handles()
+    if handles_hidden then
+        return
+    end
+    handles_hidden = true
+    for _, handle in ipairs(handles) do
+        handle.line:Show(false)
+        handle.arrow:Show(false)
+        hide_ring(handle)
+    end
+    handles.scale:Show(false)
+end
+
+local function set_tint(owner, alpha_key, statics, tint, alpha)
+    if owner[alpha_key] == alpha then
+        return
+    end
+    owner[alpha_key] = alpha
+    local color = GetARGB(alpha, tint[1], tint[2], tint[3])
+    for _, static in ipairs(statics) do
+        static:SetTextureColor(color)
+    end
+end
+
+local function place_line(static, from_x, from_y, to_x, to_y, thickness, min_length)
+    local delta_x = to_x - from_x
+    local delta_y = to_y - from_y
+    local corrected_x = delta_x / kx
+    local length = get_length(corrected_x, delta_y)
+    if length < min_length then
+        static:Show(false)
+        return 0, 0
+    end
+    local heading = math.atan2(-corrected_x, -delta_y)
+    static:SetWndSize(scratch_size:set(length, thickness))
+    static:SetWndPos(scratch_pos:set(from_x + delta_x * 0.5 - length * 0.5, from_y + delta_y * 0.5 - thickness * 0.5))
+    static:SetHeading(heading + HALF_PI)
+    static:Show(true)
+    return length, heading
+end
+
+local function draw_arrow(handle, origin, center, unit)
+    local tip = project(center.x + unit.x * AXIS_LEN, center.y + unit.y * AXIS_LEN, center.z + unit.z * AXIS_LEN)
+    local delta_x = tip and (tip.x - origin.x) / kx or 0
+    local delta_y = tip and tip.y - origin.y or 0
+    local length = get_length(delta_x, delta_y)
+    local to_x = tip and tip.x
+    local to_y = tip and tip.y
+    if length < MIN_AXIS_PX then
+        if length < MIN_SEGMENT_PX then
+            delta_x, delta_y, length = 1, -1, math.sqrt(2)
+        end
+        local stretch = MIN_AXIS_PX / length
+        to_x = origin.x + delta_x * stretch * kx
+        to_y = origin.y + delta_y * stretch
+    end
+    local drawn, heading = place_line(handle.line, origin.x, origin.y, to_x, to_y, AXIS_THICKNESS, MIN_SEGMENT_PX)
+    if drawn <= 0 then
+        handle.arrow:Show(false)
+        return nil
+    end
+    handle.arrow:SetWndPos(scratch_pos:set(to_x - ICON_SIZE * 0.5, to_y - ICON_SIZE * 0.5))
+    handle.arrow:SetHeading(heading)
+    handle.arrow:Show(true)
+    return { to_x = to_x, to_y = to_y }
+end
+
+local function draw_ring(handle, center, units, axis)
+    local first = units[axis.plane[1]]
+    local second = units[axis.plane[2]]
+    local points = {}
+    for index = 0, RING_SEGMENTS do
+        local sweep_first = RING_COS[index] * RING_RADIUS
+        local sweep_second = RING_SIN[index] * RING_RADIUS
+        local screen = project(
+            center.x + first.x * sweep_first + second.x * sweep_second,
+            center.y + first.y * sweep_first + second.y * sweep_second,
+            center.z + first.z * sweep_first + second.z * sweep_second
+        )
+        if screen then
+            points[index] = { x = screen.x, y = screen.y }
+        end
+    end
+    local drawn = {}
+    local shown = false
+    for index = 1, RING_SEGMENTS do
+        local from = points[index - 1]
+        local to = points[index]
+        if from and to then
+            local length = place_line(handle.ring[index], from.x, from.y, to.x, to.y, RING_THICKNESS, MIN_SEGMENT_PX)
+            if length > 0 then
+                drawn[index] = true
+                shown = true
+            end
+        else
+            handle.ring[index]:Show(false)
+        end
+    end
+    if not shown then
+        return nil
+    end
+    return { points = points, drawn = drawn }
+end
+
+local function get_rotation_values(spec)
+    local yaw = wd_gui.get_field(spec.rot_field, 1)
+    local pitch = wd_gui.get_field(spec.rot_field, 2)
+    local roll = wd_gui.get_field(spec.rot_field, 3)
+    if not (yaw and pitch and roll) then
+        return nil
+    end
+    return yaw, pitch, roll
+end
+
+local function draw(spec, frame)
+    local center = frame.c
+    local screen = project(center.x, center.y, center.z)
+    if not screen then
+        hide_handles()
+        return nil
+    end
+    handles_hidden = false
+    kx = utils_xml.screen_ratio()
+    local origin = { x = screen.x, y = screen.y }
+    local units = {}
+    local scales = {}
+    for _, axis in ipairs(AXES) do
+        units[axis.key], scales[axis.key] = get_unit(frame[axis.key])
+    end
+    local axes = {}
+    for index, axis in ipairs(AXES) do
+        local handle = handles[index]
+        local unit = units[axis.key]
+        local entry = {}
+        if unit then
+            entry.arrow = draw_arrow(handle, origin, center, unit)
+        else
+            handle.line:Show(false)
+            handle.arrow:Show(false)
+        end
+        axes[index] = entry
+    end
+    local rings = {}
+    if get_rotation_values(spec) and units.i and units.j and units.k then
+        for index, axis in ipairs(AXES) do
+            rings[index] = draw_ring(handles[index], center, units, axis)
+        end
+    else
+        for index = 1, #AXES do
+            hide_ring(handles[index])
+        end
+    end
+    local has_scale = false
+    if spec.scale_field and wd_gui.get_field(spec.scale_field) ~= nil then
+        handles.scale:SetWndPos(scratch_pos:set(origin.x - SCALE_HANDLE_PX * 0.5, origin.y - SCALE_HANDLE_PX * 0.5))
+        handles.scale:Show(true)
+        has_scale = true
+    else
+        handles.scale:Show(false)
+    end
+    return {
+        tab = spec.tab,
+        origin = origin,
+        center = center,
+        units = units,
+        scales = scales,
+        axes = axes,
+        rings = rings,
+        has_scale = has_scale,
+    }
+end
+
+local function get_segment_distance_sq(point_x, point_y, from_x, from_y, to_x, to_y)
+    local span_x = to_x - from_x
+    local span_y = to_y - from_y
+    local span_sq = span_x * span_x + span_y * span_y
+    local ratio = 0
+    if span_sq > 0 then
+        ratio = clamp(((point_x - from_x) * span_x + (point_y - from_y) * span_y) / span_sq, 0, 1)
+    end
+    local gap_x = point_x - (from_x + span_x * ratio)
+    local gap_y = point_y - (from_y + span_y * ratio)
+    return gap_x * gap_x + gap_y * gap_y, ratio
+end
+
+local function find_handle_at(cursor_x, cursor_y)
+    if not geometry then
+        return nil
+    end
+    local point_x = cursor_x / kx
+    local origin_x = geometry.origin.x / kx
+    local origin_y = geometry.origin.y
+    if geometry.has_scale then
+        local delta_x = point_x - origin_x
+        local delta_y = cursor_y - origin_y
+        if delta_x * delta_x + delta_y * delta_y <= HIT_TOLERANCE_SQ then
+            return { kind = "scale" }
+        end
+    end
+    local best = nil
+    local best_distance = HIT_TOLERANCE_SQ
+    for index = 1, #AXES do
+        local arrow = geometry.axes[index].arrow
+        if arrow then
+            local distance = get_segment_distance_sq(point_x, cursor_y, origin_x, origin_y, arrow.to_x / kx, arrow.to_y)
+            if distance <= best_distance then
+                best_distance = distance
+                best = { kind = "arrow", axis_index = index }
+            end
+        end
+    end
+    if best then
+        return best
+    end
+    for index = 1, #AXES do
+        local ring = geometry.rings[index]
+        if ring then
+            for segment = 1, RING_SEGMENTS do
+                if ring.drawn[segment] then
+                    local from = ring.points[segment - 1]
+                    local to = ring.points[segment]
+                    local distance, ratio =
+                        get_segment_distance_sq(point_x, cursor_y, from.x / kx, from.y, to.x / kx, to.y)
+                    if distance <= best_distance then
+                        best_distance = distance
+                        best = { kind = "ring", axis_index = index, segment = segment, ratio = ratio }
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function set_drag(spec, field, comp, hit, cursor, screen_x, screen_y, value_per_probe)
+    local length = get_length(screen_x, screen_y)
+    if length <= 0 then
+        return false
+    end
+    drag = {
+        tab = spec.tab,
+        field = field,
+        comp = comp,
+        kind = hit.kind,
+        axis_index = hit.axis_index,
+        anchor_x = cursor.x,
+        anchor_y = cursor.y,
+        dir_x = screen_x / length,
+        dir_y = screen_y / length,
+        value_per_px = value_per_probe / length,
+    }
+    return true
+end
+
+local function start_arrow_drag(spec, hit, cursor)
+    local axis = AXES[hit.axis_index]
+    local comp = axis.pos_comp
+    if wd_gui.get_field(spec.pos_field, comp) == nil then
+        return false
+    end
+    local arrow = geometry.axes[hit.axis_index].arrow
+    local scale = geometry.scales[axis.key] or 1
+    return set_drag(
+        spec,
+        spec.pos_field,
+        comp,
+        hit,
+        cursor,
+        (arrow.to_x - geometry.origin.x) / kx,
+        arrow.to_y - geometry.origin.y,
+        AXIS_LEN / scale
+    )
+end
+
+local function start_scale_drag(spec, hit, cursor)
+    local current = wd_gui.get_field(spec.scale_field)
+    if not current or current <= 0 then
+        return false
+    end
+    return set_drag(spec, spec.scale_field, nil, hit, cursor, 0, -SCALE_DRAG_RANGE_PX, current)
+end
+
+local function project_rotated_offset(center, units, offset_x, offset_y, offset_z, rotation)
+    local rotated_x = offset_x * rotation.i.x + offset_y * rotation.j.x + offset_z * rotation.k.x
+    local rotated_y = offset_x * rotation.i.y + offset_y * rotation.j.y + offset_z * rotation.k.y
+    local rotated_z = offset_x * rotation.i.z + offset_y * rotation.j.z + offset_z * rotation.k.z
+    return project(
+        center.x + units.i.x * rotated_x + units.j.x * rotated_y + units.k.x * rotated_z,
+        center.y + units.i.y * rotated_x + units.j.y * rotated_y + units.k.y * rotated_z,
+        center.z + units.i.z * rotated_x + units.j.z * rotated_y + units.k.z * rotated_z
+    )
+end
+
+local function get_axis_rotation(axis_index, degrees)
+    local delta_angles = { 0, 0, 0 }
+    delta_angles[AXES[axis_index].rot_comp] = math.rad(degrees)
+    return matrix():setHPB(delta_angles[1], delta_angles[2], delta_angles[3])
+end
+
+local function get_ring_sweep(segment, ratio)
+    local previous = segment - 1
+    local cos = RING_COS[previous] + (RING_COS[segment] - RING_COS[previous]) * ratio
+    local sin = RING_SIN[previous] + (RING_SIN[segment] - RING_SIN[previous]) * ratio
+    return cos * RING_RADIUS, sin * RING_RADIUS
+end
+
+local function start_ring_drag(spec, hit, cursor)
+    local axis = AXES[hit.axis_index]
+    local ring = geometry.rings[hit.axis_index]
+    local from = ring.points[hit.segment - 1]
+    local to = ring.points[hit.segment]
+    local ratio = hit.ratio
+    local grab_screen_x = from.x + (to.x - from.x) * ratio
+    local grab_screen_y = from.y + (to.y - from.y) * ratio
+    if get_length((grab_screen_x - geometry.origin.x) / kx, grab_screen_y - geometry.origin.y) < MIN_GRAB_RADIUS_PX then
+        return false
+    end
+    local units = geometry.units
+    local first = units[axis.plane[1]]
+    local second = units[axis.plane[2]]
+    local sweep_first, sweep_second = get_ring_sweep(hit.segment, ratio)
+    local grab_x = first.x * sweep_first + second.x * sweep_second
+    local grab_y = first.y * sweep_first + second.y * sweep_second
+    local grab_z = first.z * sweep_first + second.z * sweep_second
+    local probe = project_rotated_offset(
+        geometry.center,
+        units,
+        grab_x * units.i.x + grab_y * units.i.y + grab_z * units.i.z,
+        grab_x * units.j.x + grab_y * units.j.y + grab_z * units.j.z,
+        grab_x * units.k.x + grab_y * units.k.y + grab_z * units.k.z,
+        get_axis_rotation(hit.axis_index, EPS_DEG)
+    )
+    if not probe then
+        return false
+    end
+    return set_drag(
+        spec,
+        spec.rot_field,
+        nil,
+        hit,
+        cursor,
+        (probe.x - grab_screen_x) / kx,
+        probe.y - grab_screen_y,
+        EPS_DEG
+    )
+end
+
+local function stop_drag(window)
+    drag = nil
+    window:refresh_values()
+end
+
+local function apply_ring_rotation(spec, axis_index, degrees)
+    local yaw, pitch, roll = get_rotation_values(spec)
+    if yaw == nil then
+        return false
+    end
+    local current = matrix():setHPB(math.rad(yaw), math.rad(pitch), math.rad(roll))
+    local composed = matrix():mul_43(get_axis_rotation(axis_index, degrees), current)
+    local out = composed:getHPB()
+    wd_gui.set_field_vector(spec.rot_field, { math.deg(out.x), math.deg(out.y), math.deg(out.z) })
+    return true
+end
+
+local function apply_drag_value(spec, moved)
+    if drag.kind == "ring" then
+        return apply_ring_rotation(spec, drag.axis_index, moved)
+    end
+    return wd_gui.nudge_field(drag.field, drag.comp, moved) ~= nil
+end
+
+local function advance_drag(window, spec)
+    if key_state(DIK_keys.MOUSE_1) == 0 then
+        stop_drag(window)
+        return
+    end
+    local cursor = GetCursorPosition()
+    local delta_x = (cursor.x - drag.anchor_x) / kx
+    local delta_y = cursor.y - drag.anchor_y
+    local moved = (delta_x * drag.dir_x + delta_y * drag.dir_y) * drag.value_per_px * wd_gui.get_step_scale()
+    if moved ~= 0 then
+        if not apply_drag_value(spec, moved) then
+            stop_drag(window)
+            return
+        end
+        window:refresh_values()
+    end
+    SetCursorPosition(scratch_cursor:set(drag.anchor_x, drag.anchor_y))
+end
+
+local function get_handle_alpha(hover, kind, axis_index, idle)
+    if drag then
+        return (drag.kind == kind and drag.axis_index == axis_index) and ALPHA_ACTIVE or ALPHA_DIMMED
+    end
+    if hover and hover.kind == kind and hover.axis_index == axis_index then
+        return ALPHA_ACTIVE
+    end
+    return idle
+end
+
+local function apply_tints(hover)
+    for index, axis in ipairs(AXES) do
+        local handle = handles[index]
+        local arrow_alpha = get_handle_alpha(hover, "arrow", index, ALPHA_ARROW_IDLE)
+        local ring_alpha = get_handle_alpha(hover, "ring", index, ALPHA_RING_IDLE)
+        set_tint(handle, "arrow_alpha", handle.arrow_parts, axis.tint, arrow_alpha)
+        set_tint(handle, "ring_alpha", handle.ring, axis.tint, ring_alpha)
+    end
+    set_tint(
+        handles,
+        "scale_alpha",
+        handles.scale_parts,
+        SCALE_TINT,
+        get_handle_alpha(hover, "scale", nil, ALPHA_ARROW_IDLE)
+    )
+end
+
+function reset()
+    handles = nil
+    handles_hidden = true
+    geometry = nil
+    drag = nil
+end
+
+local function run_update(window, spec)
+    if drag then
+        advance_drag(window, spec)
+    end
+    local frame = spec.get_frame()
+    if not frame then
+        if drag then
+            stop_drag(window)
+        end
+        geometry = nil
+        hide_handles()
+        return
+    end
+    geometry = draw(spec, frame)
+    if not geometry and drag then
+        stop_drag(window)
+    end
+    local hover = nil
+    if not drag and geometry then
+        local cursor = GetCursorPosition()
+        hover = find_handle_at(cursor.x, cursor.y)
+    end
+    apply_tints(hover)
+end
+
+function update(window)
+    if window.gizmo_host_id ~= host_id or not handles then
+        host_id = host_id + 1
+        window.gizmo_host_id = host_id
+        reset()
+        handles = build_handles(window)
+    end
+    local spec = get_spec()
+    if drag and not (spec and spec.tab == drag.tab) then
+        stop_drag(window)
+    end
+    if not spec then
+        geometry = nil
+        hide_handles()
+        return
+    end
+    wd_gui.run_in_tab(spec.tab, run_update, window, spec)
+end
+
+function on_mouse_press()
+    if drag then
+        return true
+    end
+    if not geometry then
+        return false
+    end
+    local spec = get_spec()
+    if not (spec and geometry.tab == spec.tab) then
+        return false
+    end
+    local cursor = GetCursorPosition()
+    local hit = find_handle_at(cursor.x, cursor.y)
+    if not hit then
+        return false
+    end
+    return wd_gui.run_in_tab(spec.tab, function()
+        if hit.kind == "scale" then
+            return start_scale_drag(spec, hit, cursor)
+        end
+        if hit.kind == "arrow" then
+            return start_arrow_drag(spec, hit, cursor)
+        end
+        return start_ring_drag(spec, hit, cursor)
+    end)
+end

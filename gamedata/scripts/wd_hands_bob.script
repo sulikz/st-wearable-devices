@@ -1,0 +1,239 @@
+local LAYER_SECTION = "wd_bob_layers"
+local STATE_KEYS = { "walk", "run", "crouch", "sprint", "idle" }
+local CMD_BLEND_MOVE = "blend_move_anims"
+local WPN_STATE_IDLE = 0
+local WPN_STATE_HIDDEN = 3
+local PART_LEFT = 1
+local PART_RIGHT = 0
+local PART_BOTH = 2
+local POWER_SLEW_PER_MS = 0.004
+RAISED_SCALE = { walk = 0.4, run = 0.4, crouch = 0.4, sprint = 0.3, idle = 1.0 }
+
+local defs = nil
+local clip_pairs = nil
+local updated_at = 0
+
+local function to_engine_float(text)
+    local value = tonumber(text) or 0
+    if value == 0 then
+        return 1.0
+    end
+    return value
+end
+
+function parse_layer_def(def)
+    if type(def) ~= "string" then
+        return nil
+    end
+    local path, speed, power = def:match("^([^,]*),?([^,]*),?([^,]*)")
+    path = path:match("^%s*(.-)%s*$")
+    if path == "" then
+        return nil
+    end
+    return path, to_engine_float(speed), to_engine_float(power)
+end
+
+local function new_pair(stem, pair_defs, always_def)
+    return {
+        defs = pair_defs,
+        always_def = always_def,
+        live = false,
+        speed = nil,
+        right = { path = stem .. [[_r.anm]], part = PART_RIGHT, power = 0, speed = nil },
+        left = { path = stem .. [[_l.anm]], part = PART_LEFT, power = 0, speed = nil },
+    }
+end
+
+function load_layers()
+    defs = {}
+    for _, key in ipairs(STATE_KEYS) do
+        local stem, speed, power = parse_layer_def(ini_sys:r_string_ex(LAYER_SECTION, key))
+        if not stem then
+            defs = nil
+            return false
+        end
+        defs[key] = { stem = stem, speed = speed, power = power, raised_scale = RAISED_SCALE[key] }
+    end
+    clip_pairs = {
+        new_pair(defs.walk.stem, { walk = defs.walk, run = defs.run, crouch = defs.crouch }),
+        new_pair(defs.sprint.stem, { sprint = defs.sprint }),
+        new_pair(defs.idle.stem, nil, defs.idle),
+    }
+    return true
+end
+
+local function is_accelerated()
+    local without_accel = not IsMoveState("mcAccel")
+    if IsMoveState("mcClimb") or IsMoveState("mcJump") or IsMoveState("mcLanding") or IsMoveState("mcLanding2") then
+        return without_accel
+    end
+    if IsMoveState("mcLookout") then
+        return false
+    end
+    return without_accel
+end
+
+local function get_move_state()
+    local zoomed = axr_main.weapon_is_zoomed and db.actor and db.actor:active_item() ~= nil
+    if zoomed then
+        return nil
+    end
+    if not IsMoveState("mcAnyMove") then
+        return nil
+    end
+    if IsMoveState("mcCrouch") then
+        return "crouch"
+    end
+    if IsMoveState("mcSprint") then
+        return "sprint"
+    end
+    if not is_accelerated() then
+        return "walk"
+    end
+    return "run"
+end
+
+local function get_engine_delta_ms(now)
+    local render = device()
+    local engine_ms = render and render.f_time_delta and render.f_time_delta * 1000
+    if engine_ms then
+        return engine_ms
+    end
+    return updated_at ~= 0 and now - updated_at or 0
+end
+
+local function is_blendless_class(item)
+    local item_clsid = item:clsid()
+    return item_clsid == clsid.wpn_binocular_s or item_clsid == clsid.wpn_knife_s
+end
+
+local function is_weapon_blending(item, item_state)
+    if is_blendless_class(item) then
+        return false
+    end
+    if item_state == WPN_STATE_HIDDEN then
+        return false
+    end
+    if item_state ~= WPN_STATE_IDLE then
+        return true
+    end
+    if not item:is_weapon() then
+        return false
+    end
+    if game.actor_weapon_lowered() then
+        return true
+    end
+    return get_console_cmd(1, CMD_BLEND_MOVE) == true
+end
+
+local function get_need()
+    local item = db.actor and db.actor:active_item()
+    local detector = db.actor and db.actor:active_detector()
+    local item_state = item and item:get_state()
+    local detector_state = detector and detector:get_state()
+    local hud_part = wd_inspect.get_hud_part()
+    local script_anim_held = not game.hud_motion_allowed()
+    local need_right = script_anim_held or hud_part == PART_RIGHT or hud_part == PART_BOTH
+    local need_left = script_anim_held or hud_part == PART_LEFT or hud_part == PART_BOTH
+    if not need_right and item then
+        need_right = is_weapon_blending(item, item_state)
+    end
+    local attached_left = detector_state ~= nil and detector_state ~= WPN_STATE_HIDDEN
+    if not need_left and attached_left then
+        need_left = detector_state ~= WPN_STATE_IDLE
+    end
+    local attached_right = item_state ~= nil and item_state ~= WPN_STATE_HIDDEN
+    if not attached_left and need_right then
+        need_left = true
+    end
+    if not attached_right and need_left then
+        need_right = true
+    end
+    return need_right, need_left
+end
+
+local function slew(current, target, delta)
+    local step = delta * POWER_SLEW_PER_MS
+    if current < target then
+        return math.min(current + step, target)
+    end
+    return math.max(current - step, target)
+end
+
+local function play_side(side, speed, power, keep_clock)
+    side.speed = speed
+    side.power = power
+    game.play_hud_anm(side.path, side.part, speed, power, true, keep_clock)
+end
+
+local function drive_side(side, speed, power)
+    if side.power == power and side.speed == speed then
+        return
+    end
+    play_side(side, speed, power, true)
+end
+
+local function step_pair(pair, state, need_right, need_left, raised, delta)
+    local def = pair.always_def or (state and pair.defs[state])
+    local base = def and def.power or 0
+    local left_base = raised and base * (def and def.raised_scale or 0) or base
+    local next_right = slew(pair.right.power, need_right and base or 0, delta)
+    local next_left = slew(pair.left.power, need_left and left_base or 0, delta)
+    if not pair.live then
+        if not def or (next_right == 0 and next_left == 0) then
+            return
+        end
+        pair.live = true
+        play_side(pair.right, def.speed, 0, false)
+        play_side(pair.left, def.speed, 0, false)
+    end
+    if def then
+        pair.speed = def.speed
+    end
+    drive_side(pair.right, pair.speed, next_right)
+    drive_side(pair.left, pair.speed, next_left)
+end
+
+function actor_on_update()
+    if not clip_pairs then
+        return
+    end
+    local now = time_global()
+    local delta = get_engine_delta_ms(now)
+    updated_at = now
+    local state = get_move_state()
+    local need_right, need_left = get_need()
+    local raised = wd_inspect.is_pose_up()
+    for pair_index = 1, #clip_pairs do
+        step_pair(clip_pairs[pair_index], state, need_right, need_left, raised, delta)
+    end
+end
+
+function on_first_update()
+    updated_at = 0
+    if not clip_pairs then
+        return
+    end
+    for pair_index = 1, #clip_pairs do
+        local pair = clip_pairs[pair_index]
+        if pair.live then
+            game.stop_hud_anm(pair.right.path, true)
+            game.stop_hud_anm(pair.left.path, true)
+        end
+        pair.live = false
+        pair.speed = nil
+        pair.right.power, pair.right.speed = 0, nil
+        pair.left.power, pair.left.speed = 0, nil
+    end
+end
+
+function register()
+    wd_core.register({
+        id = "wd_hands_bob",
+        on_start = load_layers,
+        callbacks = {
+            actor_on_first_update = { on_first_update },
+            actor_on_update = { actor_on_update },
+        },
+    })
+end

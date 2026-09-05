@@ -1,0 +1,15 @@
+#include "common.h"
+
+static const float WD_LED_GAIN = 1.5;
+static const float WD_LED_OPACITY = 0.6;
+
+struct v2p_led
+{
+	float2 tc0 : TEXCOORD0;
+};
+
+float4 main(v2p_led I) : SV_Target
+{
+	float4 base = s_base.Sample(smp_base, I.tc0);
+	return float4(base.rgb * WD_LED_GAIN, WD_LED_OPACITY);
+}

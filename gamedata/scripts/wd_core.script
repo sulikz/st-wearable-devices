@@ -1,0 +1,103 @@
+local registry = {}
+local order = {}
+local wired = false
+
+function register(spec)
+    if type(spec) ~= "table" or not spec.id then
+        return false
+    end
+    if not registry[spec.id] then
+        order[#order + 1] = spec.id
+    end
+    registry[spec.id] = spec
+    return true
+end
+
+function get(id)
+    return registry[id]
+end
+
+function get_devices()
+    local out = {}
+    for device_index = 1, #order do
+        out[device_index] = registry[order[device_index]]
+    end
+    return out
+end
+
+function clear()
+    registry = {}
+    order = {}
+    wired = false
+end
+
+function get_time_ms()
+    return time_global()
+end
+
+function throttle(interval_ms)
+    local next_at = 0
+    return function()
+        local now = time_global()
+        if now < next_at then
+            return false
+        end
+        next_at = now + interval_ms
+        return true
+    end
+end
+
+local function new_wired_handler(handler)
+    local fn = handler[1]
+    if handler.unless_captured then
+        local inner = fn
+        fn = function(...)
+            if wd_blocking.is_input_captured() then
+                return
+            end
+            return inner(...)
+        end
+    end
+    if not handler.interval then
+        return fn
+    end
+    local allow = throttle(handler.interval)
+    return function(...)
+        if allow() then
+            fn(...)
+        end
+    end
+end
+
+function wire(spec)
+    local callbacks = spec and spec.callbacks
+    if not callbacks then
+        return
+    end
+    for event, handlers in pairs(callbacks) do
+        for handler_index = 1, #handlers do
+            local handler = handlers[handler_index]
+            if type(handler) == "table" then
+                RegisterScriptCallback(event, new_wired_handler(handler))
+            else
+                RegisterScriptCallback(event, handler)
+            end
+        end
+    end
+end
+
+function start()
+    local list = get_devices()
+    if not wired then
+        for device_index = 1, #list do
+            wire(list[device_index])
+        end
+        wired = true
+    end
+    for device_index = 1, #list do
+        local spec = list[device_index]
+        if spec.on_start then
+            spec.on_start()
+        end
+    end
+end

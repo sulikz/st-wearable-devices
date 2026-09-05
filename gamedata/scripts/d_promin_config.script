@@ -1,0 +1,252 @@
+SECTION = "wd_promin"
+LIGHT_OFFSET = { 0.001, 0.016, 0.034 }
+ANIM_SECTION = "anim_promin_hud"
+BATTERY_MA = 0.024
+SCREEN_SHADER = "wd\\crt"
+
+EMBLEMS = {
+    { name = "none", label = "None" },
+    { name = "auto", label = "Actor Faction" },
+    { name = "stalker", label = "Loners" },
+    { name = "bandit", label = "Bandits" },
+    { name = "csky", label = "Clear Sky" },
+    { name = "dolg", label = "Duty" },
+    { name = "freedom", label = "Freedom" },
+    { name = "killer", label = "Mercenaries" },
+    { name = "army", label = "Military" },
+    { name = "ecolog", label = "Ecologists" },
+    { name = "monolith", label = "Monolith" },
+    { name = "greh", label = "Sin" },
+    { name = "renegade", label = "Renegades" },
+    { name = "isg", label = "ISG" },
+}
+
+COLOR_GROUPS = {
+    { id = "hp", label = "HP BAR", key = "hp_color" },
+    { id = "psy", label = "PSY BAR", key = "psy_color" },
+    { id = "stam", label = "STAM BAR", key = "stam_color" },
+    { id = "rad", label = "RAD BAR", key = "rad_color" },
+    { id = "faction", label = "FACTION ICON", key = "faction_color" },
+    { id = "buff", label = "STATUS ICONS", key = "buff_color" },
+}
+
+HAND_STEP = 0.005
+HAND_RANGE = 0.32
+RAD_FULL = 0.35
+
+DEFAULTS = {
+    hand_pos = { -0.069999990463257, 0, 0 },
+    hand_rot = { -1, -2.5, 0 },
+    model_pos = { 0, 0.041, 0.0315 },
+    model_rot = { -0.25, -2.425, 0 },
+    model_scale = 1,
+    ui_pos = { -0.0195, -0.0005, -0.0575 },
+    ui_rot = { 0, 90, 90 },
+    ui_scale = 1.3399999713898,
+    emblem = "auto",
+    hp_color = { 255, 0, 0 },
+    psy_color = { 255, 135, 0 },
+    stam_color = { 35, 165, 255 },
+    rad_color = { 180, 255, 0 },
+    faction_color = { 255, 255, 255 },
+    buff_color = { 255, 135, 0 },
+    saturation = 65,
+    brightness = 80,
+    map_zoom = 500,
+    map_x = 0,
+    map_y = 0.0010000020265579,
+    map_scale = 1,
+}
+
+TIERS = {
+    {
+        id = "t1",
+        section = SECTION,
+        model = "wd\\promin\\promin_t1",
+        ui = "d_promin_ui",
+        pages = { "health" },
+        consumption = BATTERY_MA,
+        sensors = {},
+        bays = { "map" },
+        defaults = {},
+    },
+    {
+        id = "t2",
+        section = "wd_promin_2",
+        model = "wd\\promin\\promin_t2",
+        ui = "d_promin_ui",
+        pages = { "health" },
+        consumption = 0.016,
+        sensors = {},
+        bays = { "map", "conn", "side" },
+        defaults = {},
+    },
+}
+
+BAYS = {
+    { id = "map", null_model = "wd\\promin\\promin_s_m_map_null" },
+    { id = "conn", null_model = "wd\\promin\\promin_s_m_conn_null" },
+    { id = "side", null_model = "wd\\promin\\promin_t2_m_null" },
+}
+
+MODULES = {
+    {
+        name = "map",
+        section = "wd_promin_module_map",
+        model = "wd\\promin\\promin_s_m_map",
+        bay = "map",
+        pages = { "main", "map_small" },
+        hides = { "health" },
+        consumption = 0.004,
+    },
+    {
+        name = "conn",
+        section = "wd_promin_module_conn",
+        model = "wd\\promin\\promin_s_m_conn",
+        bay = "conn",
+    },
+    {
+        name = "side",
+        section = "wd_promin_module_side",
+        bay = "side",
+    },
+}
+
+function get_bay(bay_id)
+    for _, bay in ipairs(BAYS) do
+        if bay.id == bay_id then
+            return bay
+        end
+    end
+    return nil
+end
+
+function get_module(name)
+    for _, module in ipairs(MODULES) do
+        if module.name == name then
+            return module
+        end
+    end
+    return nil
+end
+
+function get_module_of_section(section)
+    for _, module in ipairs(MODULES) do
+        if module.section == section then
+            return module
+        end
+    end
+    return nil
+end
+
+local TIER_FIELDS = {}
+
+local FAMILY_FIELDS = {
+    { "hand_pos", true },
+    { "hand_rot", true },
+    { "model_pos", true },
+    { "model_rot", true },
+    { "model_scale", false },
+    { "ui_pos", true },
+    { "ui_rot", true },
+    { "ui_scale", false },
+    { "emblem", false },
+    { "hp_color", true },
+    { "psy_color", true },
+    { "stam_color", true },
+    { "rad_color", true },
+    { "faction_color", true },
+    { "buff_color", true },
+    { "saturation", false },
+    { "brightness", false },
+    { "map_zoom", false },
+    { "map_x", false },
+    { "map_y", false },
+    { "map_scale", false },
+}
+
+local VARIANT_FIELDS = {
+    "hand_pos",
+    "hand_rot",
+    "model_pos",
+    "model_rot",
+    "model_scale",
+    "ui_pos",
+    "ui_rot",
+    "ui_scale",
+}
+
+local USER_FIELDS = {
+    "hand_pos",
+    "hand_rot",
+    "hp_color",
+    "psy_color",
+    "stam_color",
+    "rad_color",
+    "faction_color",
+    "buff_color",
+    "saturation",
+    "brightness",
+    "map_zoom",
+}
+
+VARIANT_EXO = "exo"
+
+local VARIANT_DEFAULTS = {
+    exo = {
+        hand_pos = { -0.09999999940395, 0.11999997973442, 0.019999980926514 },
+        hand_rot = { 22, -3, 4 },
+        model_pos = { -0.21400000560284, -0.020000004291534, 0.012999984025955 },
+        model_rot = { -89, 177.75, -34 },
+        model_scale = 0.99999994039536,
+        ui_pos = { -0.0185, 0.0165, -0.071 },
+        ui_rot = { 0, 90, 90 },
+        ui_scale = 1.3,
+    },
+}
+
+local cfg = wd_config.new({
+    section = SECTION,
+    global_key = "promin",
+    tiers = TIERS,
+    tier_fields = TIER_FIELDS,
+    family_fields = FAMILY_FIELDS,
+    variant_fields = VARIANT_FIELDS,
+    variant_defaults = VARIANT_DEFAULTS,
+    user_fields = USER_FIELDS,
+    defaults = DEFAULTS,
+    emblems = EMBLEMS,
+})
+
+transforms = cfg.transforms
+saved = cfg.saved
+snapshot_saved = cfg.snapshot_saved
+load_transforms = cfg.load_transforms
+save_global = cfg.save_global
+set_variant = cfg.set_variant
+get_variant = cfg.get_variant
+get_defaults = cfg.get_defaults
+get_tier_of = cfg.get_tier_of
+set_active_tier = cfg.set_active_tier
+reset_active_tier = cfg.reset_active_tier
+get_ui_module = cfg.get_ui_module
+get_pages = cfg.get_pages
+get_model = cfg.get_model
+get_emblem_index = cfg.get_emblem_index
+get_emblem_faction = cfg.get_emblem_faction
+
+function get_hand_section()
+    return ANIM_SECTION
+end
+
+function set_map_zoom(value)
+    cfg.transforms.map_zoom = value
+end
+
+function get_active_bays()
+    return cfg.get_active_tier().bays or {}
+end
+
+function get_battery_consumption()
+    return cfg.get_active_tier().consumption or BATTERY_MA
+end

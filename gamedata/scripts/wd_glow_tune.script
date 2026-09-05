@@ -1,0 +1,221 @@
+PARAMS = {
+    glow = d_watch_config.LIGHT_COLOR,
+    glow_range = d_watch_config.LIGHT_RANGE,
+    glow_offset = d_watch_config.LIGHT_OFFSET,
+    led = d_watch_config.LED_COLOR,
+    led_range = d_watch_config.LED_RANGE,
+    led_rad_offset = d_watch_config.LED_RAD_OFFSET,
+    led_anomaly_offset = d_watch_config.LED_ANOMALY_OFFSET,
+    screen = wd_screen.GLOW_COLOR,
+    screen_range = wd_screen.GLOW_RANGE,
+    promin_offset = d_promin_config.LIGHT_OFFSET,
+    vektor_offset = d_vektor_config.LIGHT_OFFSET,
+    vektor_led_anomaly_offset = d_vektor_config.LED_ANOMALY_OFFSET,
+    vektor_led_artefact_offset = d_vektor_config.LED_ARTEFACT_OFFSET,
+}
+
+local DEFAULTS = {
+    glow = { r = PARAMS.glow.r, g = PARAMS.glow.g, b = PARAMS.glow.b },
+    glow_range = PARAMS.glow_range,
+    glow_offset = { PARAMS.glow_offset[1], PARAMS.glow_offset[2], PARAMS.glow_offset[3] },
+    led = { r = PARAMS.led.r, g = PARAMS.led.g, b = PARAMS.led.b },
+    led_range = PARAMS.led_range,
+    led_rad_offset = { PARAMS.led_rad_offset[1], PARAMS.led_rad_offset[2], PARAMS.led_rad_offset[3] },
+    led_anomaly_offset = {
+        PARAMS.led_anomaly_offset[1],
+        PARAMS.led_anomaly_offset[2],
+        PARAMS.led_anomaly_offset[3],
+    },
+    screen = { r = PARAMS.screen.r, g = PARAMS.screen.g, b = PARAMS.screen.b },
+    screen_range = PARAMS.screen_range,
+    promin_offset = { PARAMS.promin_offset[1], PARAMS.promin_offset[2], PARAMS.promin_offset[3] },
+    vektor_offset = { PARAMS.vektor_offset[1], PARAMS.vektor_offset[2], PARAMS.vektor_offset[3] },
+    vektor_led_anomaly_offset = {
+        PARAMS.vektor_led_anomaly_offset[1],
+        PARAMS.vektor_led_anomaly_offset[2],
+        PARAMS.vektor_led_anomaly_offset[3],
+    },
+    vektor_led_artefact_offset = {
+        PARAMS.vektor_led_artefact_offset[1],
+        PARAMS.vektor_led_artefact_offset[2],
+        PARAMS.vektor_led_artefact_offset[3],
+    },
+}
+
+local SCREENS = {
+    {
+        name = "wd_promin",
+        offset_key = "promin_offset",
+        get_level = function()
+            return d_promin_config.transforms.brightness / 100
+        end,
+    },
+    {
+        name = "wd_vektor",
+        offset_key = "vektor_offset",
+        get_level = function()
+            return d_vektor_config.transforms.brightness / 100
+        end,
+    },
+}
+
+local LEDS = {
+    { name = "watch_led_rad", offset_key = "led_rad_offset" },
+    { name = "watch_led_anomaly", offset_key = "led_anomaly_offset" },
+}
+
+local function get_light_of(name)
+    local attachment = wd_attach.get(name)
+    return attachment and attachment:get_light()
+end
+
+local function push_light(light, tint, range, offset, level)
+    if not light then
+        return
+    end
+    level = level or 1
+    local color = fcolor()
+    color.r, color.g, color.b, color.a = tint.r * level, tint.g * level, tint.b * level, tint.a
+    light.color = color
+    wd_attach.set_light_range(light, range)
+    light:set_position(offset[1], offset[2], offset[3])
+end
+
+function push_lights()
+    d_watch_config.LIGHT_RANGE = PARAMS.glow_range
+    d_watch_config.LED_RANGE = PARAMS.led_range
+    wd_screen.GLOW_RANGE = PARAMS.screen_range
+    push_light(get_light_of(d_watch_config.SECTION), PARAMS.glow, PARAMS.glow_range, PARAMS.glow_offset)
+    for _, led in ipairs(LEDS) do
+        push_light(get_light_of(led.name), PARAMS.led, PARAMS.led_range, PARAMS[led.offset_key])
+    end
+    for _, screen in ipairs(SCREENS) do
+        local light = get_light_of(screen.name)
+        push_light(light, PARAMS.screen, PARAMS.screen_range, PARAMS[screen.offset_key], screen.get_level())
+    end
+    push_light(
+        get_light_of("vektor_ring"),
+        d_vektor_config.LED_ANOMALY_COLOR,
+        d_vektor_config.LED_RANGE,
+        PARAMS.vektor_led_anomaly_offset
+    )
+    push_light(
+        get_light_of("vektor_arrow"),
+        d_vektor_config.LED_ARTEFACT_COLOR,
+        d_vektor_config.LED_RANGE,
+        PARAMS.vektor_led_artefact_offset
+    )
+end
+
+function register()
+    wd_gui.register_device({
+        id = "glow",
+        label = "Glow",
+        store = function()
+            return PARAMS
+        end,
+        saved = function()
+            return DEFAULTS
+        end,
+        defaults = function()
+            return DEFAULTS
+        end,
+        on_apply = push_lights,
+        fields = {
+            glow = wd_gui.new_slider(0, 2),
+            glow_range = wd_gui.new_slider(0, 3),
+            glow_offset = wd_gui.new_slider(-0.2, 0.2),
+            led = wd_gui.new_slider(0, 2),
+            led_range = wd_gui.new_slider(0, 3),
+            led_rad_offset = wd_gui.new_slider(-0.2, 0.2),
+            led_anomaly_offset = wd_gui.new_slider(-0.2, 0.2),
+            screen = wd_gui.new_slider(0, 2),
+            screen_range = wd_gui.new_slider(0, 3),
+            promin_offset = wd_gui.new_slider(-0.2, 0.2),
+            vektor_offset = wd_gui.new_slider(-0.2, 0.2),
+            vektor_led_anomaly_offset = wd_gui.new_slider(-0.2, 0.2),
+            vektor_led_artefact_offset = wd_gui.new_slider(-0.2, 0.2),
+        },
+    })
+    wd_gui.register_tab({
+        device = "glow",
+        id = "glow_watch",
+        dev = true,
+        label = "Watch Glow",
+        rows = {
+            { "glow", "r", 0.005, "Red" },
+            { "glow", "g", 0.005, "Green" },
+            { "glow", "b", 0.005, "Blue" },
+            { "glow_range", nil, 0.01, "Range" },
+            { "glow_offset", 1, 0.001, "Offset x" },
+            { "glow_offset", 2, 0.001, "Offset y" },
+            { "glow_offset", 3, 0.001, "Offset z" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "glow",
+        id = "glow_led_rad",
+        dev = true,
+        label = "Rad LED",
+        rows = {
+            { "led", "r", 0.005, "Red" },
+            { "led", "g", 0.005, "Green" },
+            { "led", "b", 0.005, "Blue" },
+            { "led_range", nil, 0.01, "Range" },
+            { "led_rad_offset", 1, 0.001, "Offset x" },
+            { "led_rad_offset", 2, 0.001, "Offset y" },
+            { "led_rad_offset", 3, 0.001, "Offset z" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "glow",
+        id = "glow_led_anomaly",
+        dev = true,
+        label = "Anomaly LED",
+        rows = {
+            { "led_anomaly_offset", 1, 0.001, "Offset x" },
+            { "led_anomaly_offset", 2, 0.001, "Offset y" },
+            { "led_anomaly_offset", 3, 0.001, "Offset z" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "glow",
+        id = "glow_screen",
+        dev = true,
+        label = "Screen Glow",
+        rows = {
+            { "screen", "r", 0.005, "Red" },
+            { "screen", "g", 0.005, "Green" },
+            { "screen", "b", 0.005, "Blue" },
+            { "screen_range", nil, 0.01, "Range" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "glow",
+        id = "glow_screen_offset",
+        dev = true,
+        label = "Screen Offset",
+        rows = {
+            { "promin_offset", 1, 0.001, "Promin x" },
+            { "promin_offset", 2, 0.001, "Promin y" },
+            { "promin_offset", 3, 0.001, "Promin z" },
+            { "vektor_offset", 1, 0.001, "Vektor x" },
+            { "vektor_offset", 2, 0.001, "Vektor y" },
+            { "vektor_offset", 3, 0.001, "Vektor z" },
+        },
+    })
+    wd_gui.register_tab({
+        device = "glow",
+        id = "glow_vektor_led",
+        dev = true,
+        label = "Vektor LEDs",
+        rows = {
+            { "vektor_led_anomaly_offset", 1, 0.001, "Anomaly x" },
+            { "vektor_led_anomaly_offset", 2, 0.001, "Anomaly y" },
+            { "vektor_led_anomaly_offset", 3, 0.001, "Anomaly z" },
+            { "vektor_led_artefact_offset", 1, 0.001, "Artefact x" },
+            { "vektor_led_artefact_offset", 2, 0.001, "Artefact y" },
+            { "vektor_led_artefact_offset", 3, 0.001, "Artefact z" },
+        },
+    })
+end

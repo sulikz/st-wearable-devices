@@ -1,0 +1,138 @@
+local CATEGORY_BY_SPOT = {
+    ui_pda2_trader_location = "trader",
+    ui_pda2_mechanic_location = "mechanic",
+    ui_pda2_medic_location = "medic",
+    ui_pda2_scout_location = "guide",
+    ui_pda2_barman_location = "barman",
+    ui_pda2_special_location = "special",
+    ui_pda2_quest_npc_location = "quest_npc",
+    storyline_task_location = "quest",
+    storyline_task_location_complex_timer = "quest",
+    warfare_selected_target = "quest",
+    primary_task_location = "quest_secondary",
+    secondary_task_location = "quest_secondary",
+    third_task_location = "quest_secondary",
+    campfire_lit = "campfire",
+    campfire_unlit = "campfire_unlit",
+    treasure = "stash",
+    treasure_all = "stash",
+    treasure_player = "stash",
+    treasure_searched = "stash",
+    treasure_unique = "stash",
+    level_changer_up = "transition_up",
+    level_changer_up_right = "transition_up_right",
+    level_changer_right = "transition_right",
+    level_changer_right_down = "transition_right_down",
+    level_changer_down = "transition_down",
+    level_changer_down_left = "transition_down_left",
+    level_changer_left = "transition_left",
+    level_changer_left_up = "transition_left_up",
+}
+local MAX_MARKS = 64
+local RESCAN_MS = 1000
+
+function new(deps)
+    deps = deps or {}
+    local get_time = deps.get_time or time_global
+    local get_entries = deps.get_entries or function()
+        return wd_map_spots.get_registry().get_entries()
+    end
+    local get_icon = deps.get_icon or function(spot_type)
+        return wd_map_spots.get_icon(spot_type)
+    end
+    local get_position = deps.get_position
+        or function(object_id)
+            return wd_compass.get_target_pos_of(object_id)
+        end
+    local get_level_id = deps.get_level_id or function(gvid)
+        return wd_compass.get_level_id_of(gvid)
+    end
+    local max_marks = deps.max_marks or MAX_MARKS
+    local rescan_ms = deps.rescan_ms or RESCAN_MS
+
+    local collector = {}
+    local marks = {}
+    local next_scan = 0
+    local scanned_level = nil
+    local scanned_range = 0
+
+    local function get_distance_sq(view, object_id)
+        local pos, gvid = get_position(object_id)
+        if not pos or get_level_id(gvid) ~= view.level_id then
+            return nil
+        end
+        local dx = pos.x - view.pos.x
+        local dz = pos.z - view.pos.z
+        return dx * dx + dz * dz, pos.x, pos.z
+    end
+
+    local function rescan(view, entries)
+        local range_sq = view.range * view.range
+        local found = {}
+        local order = {}
+        local distances = {}
+        local pos_x_by_id = {}
+        local pos_z_by_id = {}
+        for _, entry in ipairs(entries) do
+            local held = found[entry.id]
+            if not (held and held.category) then
+                local category = CATEGORY_BY_SPOT[entry.spot_type]
+                local icon = (not category) and get_icon(entry.spot_type) or nil
+                if category or icon then
+                    local distance_sq = distances[entry.id]
+                    if distance_sq == nil then
+                        local computed, pos_x, pos_z = get_distance_sq(view, entry.id)
+                        distance_sq = computed or false
+                        distances[entry.id] = distance_sq
+                        pos_x_by_id[entry.id] = pos_x
+                        pos_z_by_id[entry.id] = pos_z
+                    end
+                    if distance_sq and distance_sq <= range_sq then
+                        if not held then
+                            order[#order + 1] = entry.id
+                        end
+                        found[entry.id] = {
+                            id = entry.id,
+                            spot_type = entry.spot_type,
+                            category = category,
+                            icon = icon,
+                            distance_sq = distance_sq,
+                            pos_x = pos_x_by_id[entry.id],
+                            pos_z = pos_z_by_id[entry.id],
+                        }
+                    end
+                end
+            end
+        end
+        marks = {}
+        for _, object_id in ipairs(order) do
+            marks[#marks + 1] = found[object_id]
+        end
+        table.sort(marks, function(left, right)
+            if left.distance_sq ~= right.distance_sq then
+                return left.distance_sq < right.distance_sq
+            end
+            return left.id < right.id
+        end)
+        for index = #marks, max_marks + 1, -1 do
+            marks[index] = nil
+        end
+    end
+
+    function collector.get_marks(view)
+        if not (view and view.pos and view.level_id and view.range) then
+            return {}
+        end
+        local entries = get_entries()
+        local now = get_time()
+        if now >= next_scan or view.level_id ~= scanned_level or view.range > scanned_range then
+            next_scan = now + rescan_ms
+            scanned_level = view.level_id
+            scanned_range = view.range
+            rescan(view, entries)
+        end
+        return marks
+    end
+
+    return collector
+end

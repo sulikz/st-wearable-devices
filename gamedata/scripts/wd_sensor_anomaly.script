@@ -1,0 +1,54 @@
+local SKIP = {
+    [clsid.zone_campfire] = true,
+    [clsid.zone_radioactive] = true,
+    [clsid.zone_radio_s] = true,
+}
+
+local function is_enabled(obj)
+    local level_name = level.name()
+    local id = obj:id()
+    local dao_levels = drx_da_main and drx_da_main.updated_anomaly_levels
+    local dao_level = dao_levels and dao_levels[level_name]
+    local tracked = dao_level and dao_level.anomalies_properties
+    local props = tracked and tracked[id]
+    if props and props.active == false then
+        return false
+    end
+    local pool = bind_anomaly_field and bind_anomaly_field.dyn_anomalies
+    local states = pool and pool[level_name]
+    if states and states[id] == false then
+        return false
+    end
+    return true
+end
+
+local function is_anomaly(obj)
+    return obj:is_anomaly() and not SKIP[obj:clsid()] and is_enabled(obj)
+end
+
+local DEFAULT_RANGE = 6
+
+local shared_sense
+local last_sense_at
+local last_sensed
+
+local function sense_shared()
+    local now = time_global()
+    if now ~= last_sense_at then
+        last_sense_at = now
+        if not shared_sense then
+            shared_sense = wd_sensor_proximity.new({ predicate = is_anomaly, max_distance = DEFAULT_RANGE })
+        end
+        last_sensed = shared_sense()
+    end
+    return last_sensed
+end
+
+function new(cfg)
+    if cfg.max_distance then
+        cfg.sense = wd_sensor_proximity.new({ predicate = is_anomaly, max_distance = cfg.max_distance })
+    else
+        cfg.sense = sense_shared
+    end
+    return wd_sensor_pulse.new(cfg)
+end

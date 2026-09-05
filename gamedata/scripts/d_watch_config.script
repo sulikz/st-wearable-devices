@@ -1,0 +1,164 @@
+SECTION = "wd_metro_watch"
+
+BODY_TEXTURE = "wd\\metro\\metro_watch_body"
+STRAP_TEXTURE = "wd\\metro\\metro_strap"
+BULB_TEXTURE = "wd\\metro\\metro_bulb_unlit"
+BULB_LIT_TEXTURE = "wd\\metro\\metro_bulb_lit"
+BULBS = { "rad", "anomaly" }
+NIXIE_TEXTURE = "wd\\metro\\nixie_digits_lit"
+HALO_TEXTURE = "wd\\metro\\nixie_halo"
+NIXIE_COLORS = d_watch_nixie_colors.COLORS
+local amber_light = NIXIE_COLORS[1].light_color
+LIGHT_COLOR = { r = amber_light.r, g = amber_light.g, b = amber_light.b, a = amber_light.a }
+
+LIGHT_RANGE = 0.3
+LIGHT_OFFSET = { 0, 0.065, 0 }
+LED_COLOR = { r = 0.07, g = 0.17, b = 0.34, a = 0.8 }
+LED_RANGE = 0.25
+LED_RAD_OFFSET = { 0.003, 0.045, 0.01 }
+LED_ANOMALY_OFFSET = { -0.005, 0.045, 0.019 }
+
+SKINS = {
+    {
+        name = "regular",
+        model = "wd\\metro\\metro_watch_hud",
+        texture = "wd\\metro\\metro_watch_body",
+        label = "Regular",
+    },
+}
+
+OPTIONAL_SKINS = {
+    {
+        name = "black",
+        model = "wd\\metro\\metro_watch_hud",
+        texture = "wd\\metro\\metro_watch_blackbody",
+        strap_texture = "wd\\metro\\metro_strap_black",
+        bulb_texture = "wd\\metro\\metro_bulb_black_unlit",
+        bulb_lit_texture = "wd\\metro\\metro_bulb_black_lit",
+        label = "Black",
+        led_color = { r = 0.34, g = 0.24, b = 0.06, a = 0.8 },
+    },
+}
+
+CLOCKS = {
+    { name = "dynamic", label = "Dynamic" },
+    { name = "time", label = "Time" },
+    { name = "filter", label = "Filter time" },
+}
+
+local function has_skin(name)
+    for _, skin in ipairs(SKINS) do
+        if skin.name == name then
+            return true
+        end
+    end
+    return false
+end
+
+function load_optional_skins()
+    for _, skin in ipairs(OPTIONAL_SKINS) do
+        if not has_skin(skin.name) and getFS():exist("$game_textures$", skin.texture .. ".dds") then
+            SKINS[#SKINS + 1] = skin
+        end
+    end
+end
+
+local TIER_FIELDS = {
+    { "model_pos", true },
+    { "model_rot", true },
+    { "model_scale", false },
+}
+
+local FAMILY_FIELDS = {
+    { "skin", false },
+    { "nixie", false },
+    { "clock", false },
+    { "hand_pos", true },
+    { "hand_rot", true },
+}
+
+local USER_FIELDS = {
+    "skin",
+    "nixie",
+    "clock",
+    "hand_pos",
+    "hand_rot",
+}
+
+DEFAULTS = {
+    model_pos = { 0.0002, -0.0077, 0.1237 },
+    model_rot = { -89.099, 0.587, -177.99 },
+    model_scale = 1.5600000314713,
+    skin = "regular",
+    nixie = "amber",
+    clock = "dynamic",
+    hand_pos = { -0.075000011920929, 0, -0.045000016689301 },
+    hand_rot = { -3.5, 3, -6.5 },
+}
+
+local cfg = wd_config.new({
+    section = SECTION,
+    global_key = "watch",
+    tier_fields = TIER_FIELDS,
+    family_fields = FAMILY_FIELDS,
+    user_fields = USER_FIELDS,
+    defaults = DEFAULTS,
+    skins = SKINS,
+})
+
+transforms = cfg.transforms
+saved = cfg.saved
+reset_transforms = cfg.reset_transforms
+resolve = cfg.resolve
+load_transforms = cfg.load_transforms
+save_global = cfg.save_global
+get_skin_index = cfg.get_skin_index
+get_skin_model = cfg.get_skin_model
+
+local function get_skin()
+    return SKINS[get_skin_index()]
+end
+
+function get_nixie_index()
+    return wd_appearance.get_index(transforms, NIXIE_COLORS, "nixie")
+end
+
+function get_nixie_color()
+    return NIXIE_COLORS[get_nixie_index()]
+end
+
+function get_nixie_light_color()
+    return get_nixie_color().light_color
+end
+
+function get_clock_index()
+    return wd_appearance.get_index(transforms, CLOCKS, "clock")
+end
+
+function get_clock()
+    local name = transforms.clock
+    if name == "filter" and not wd_toxic.is_installed() then
+        return "dynamic"
+    end
+    return name
+end
+
+function get_skin_texture()
+    return get_skin().texture
+end
+
+function get_skin_strap_texture()
+    return get_skin().strap_texture or STRAP_TEXTURE
+end
+
+function get_skin_led_color()
+    return get_skin().led_color or LED_COLOR
+end
+
+function get_bulb_texture(lit)
+    local skin = get_skin()
+    if lit then
+        return skin.bulb_lit_texture or BULB_LIT_TEXTURE
+    end
+    return skin.bulb_texture or BULB_TEXTURE
+end

@@ -1,0 +1,77 @@
+local DDS_MAGIC = 0x20534444
+local DDS_HEIGHT_OFFSET = 12
+local DDS_MIPS_OFFSET = 28
+
+local headers = {}
+
+local function get_lod_skip()
+    local console = get_console()
+    local lod = console and console:get_integer("texture_lod") or 0
+    if lod < 2 then
+        return 0
+    end
+    if lod < 4 then
+        return 1
+    end
+    return 2
+end
+
+local function read_header(texture_name)
+    local cached = headers[texture_name]
+    if cached ~= nil then
+        return cached
+    end
+    local header = false
+    local reader = getFS():r_open("$game_textures$", texture_name .. ".dds")
+    if reader and reader:r_u32() == DDS_MAGIC then
+        reader:r_seek(DDS_HEIGHT_OFFSET)
+        local height = reader:r_u32()
+        local width = reader:r_u32()
+        reader:r_seek(DDS_MIPS_OFFSET)
+        local mips = reader:r_u32()
+        if width > 0 and height > 0 then
+            header = { width = width, height = height, mips = mips > 0 and mips or 1 }
+        end
+    end
+    headers[texture_name] = header
+    return header
+end
+
+local function get_loaded_size(texture_name)
+    local header = read_header(texture_name)
+    if not header then
+        return nil
+    end
+    local width, height, mips = header.width, header.height, header.mips
+    local skip = get_lod_skip()
+    while mips > 1 and skip > 0 do
+        width = math.floor(width / 2)
+        height = math.floor(height / 2)
+        mips = mips - 1
+        skip = skip - 1
+    end
+    return math.max(width, 1), math.max(height, 1)
+end
+
+local function resolve(texture_name, baked)
+    if not baked then
+        return nil
+    end
+    local width, height = get_loaded_size(texture_name)
+    if not width then
+        return baked
+    end
+    return { id = baked.id, width = width, height = height }
+end
+
+function get_global()
+    return resolve(wd_map_levels.GLOBAL_TEXTURE, wd_map_levels.get_baked_global())
+end
+
+function get_level_texture(texture_name)
+    if type(texture_name) ~= "string" then
+        return nil
+    end
+    local name = string.lower(texture_name)
+    return resolve(name, wd_map_levels.get_baked_level_texture(name))
+end

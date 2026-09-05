@@ -1,0 +1,190 @@
+local TICK_MS = 1000
+local PERIOD_MIN_MS = 500
+local PERIOD_MAX_MS = 1100
+local WARMUP_TICKS = 10
+local STALL_TICKS = 4
+local PERIOD_NOISE_MS = 10
+local DEADBAND_MIN_MS = 2000
+local SOURCE_REFRESH_MS = 250
+
+local stats_by_section = {}
+
+local function new_edge_tracker()
+    return { partial = true, span_ticks = 0, span_ms = 0 }
+end
+
+local filter_edges = new_edge_tracker()
+local tank_edges = new_edge_tracker()
+local observed_ms
+local allow_source_refresh = wd_core.throttle(SOURCE_REFRESH_MS)
+local source_tracker
+local source_hit
+
+local function get_stats(section)
+    local stats = stats_by_section[section]
+    if not stats then
+        stats = {
+            air_immunity = ini_sys:r_float_ex(section, "air_immunity") or 0,
+            flow_rate = ini_sys:r_float_ex(section, "flow_rate") or 0,
+            flow_factor = ini_sys:r_float_ex(section, "flow_factor") or 0,
+        }
+        stats_by_section[section] = stats
+    end
+    return stats
+end
+
+local function get_config_mult(key)
+    if toxic_air_mcm and toxic_air_mcm.get_config then
+        return toxic_air_mcm.get_config(key)
+    end
+    return nil
+end
+
+function is_installed()
+    return toxic_air ~= nil
+end
+
+local function get_filter()
+    return toxic_air.filters and toxic_air.filters[toxic_air.cached_filter_id]
+end
+
+function get_filter_capacity()
+    if not toxic_air then
+        return nil
+    end
+    local filter = get_filter()
+    if filter then
+        return filter.cond
+    end
+    return toxic_air.cached_tank_cond
+end
+
+local function get_drain_source()
+    local toxic = toxic_air.toxic_dmg or 0
+    local flow_mult = get_config_mult("flow_rate_mult") or 1
+    local filter = get_filter()
+    if filter and toxic > 0 and filter.cond and filter.cond > 0 then
+        local stats = get_stats(filter.name)
+        if
+            stats.air_immunity > toxic
+            and stats.flow_rate > 0
+            and not (toxic_air.actor_in_safe_zone and toxic_air.actor_in_safe_zone())
+        then
+            local hit = stats.flow_rate * (toxic / stats.air_immunity) ^ stats.flow_factor * flow_mult
+            if hit > 0 then
+                return filter_edges, hit
+            end
+        end
+    end
+
+    local tanks = toxic_air.tanks
+    local tank_cond = toxic_air.cached_tank_cond
+    if not (tanks and next(tanks) and tank_cond and tank_cond > 0) then
+        return nil
+    end
+    local sprint_mult = IsMoveState("mcSprint") and (get_config_mult("tank_sprint_mult") or 1) or 1
+    local hit
+    db.actor:iterate_belt(function(owner, tank)
+        if not hit and tanks[tank:id()] then
+            local tank_hit = get_stats(tank:section()).flow_rate * flow_mult * sprint_mult
+            if tank_hit > 0 then
+                hit = tank_hit
+            end
+        end
+    end)
+    if not hit then
+        return nil
+    end
+    return tank_edges, hit
+end
+
+local function observe_cond(tracker, cond, now)
+    local previous = tracker.last_cond
+    tracker.last_cond = cond
+    if cond == nil then
+        return
+    end
+    if previous == nil then
+        local frame_ms = device().time_delta
+        if frame_ms > PERIOD_MAX_MS - TICK_MS then
+            frame_ms = 0
+        end
+        tracker.frame_ms = frame_ms
+        tracker.edge_ms = now
+        tracker.partial = true
+        return
+    end
+    if cond >= previous then
+        return
+    end
+    local gap = now - tracker.edge_ms
+    if gap < PERIOD_MIN_MS then
+        return
+    end
+    if tracker.partial or gap > PERIOD_MAX_MS then
+        tracker.partial = false
+    else
+        tracker.span_ms = tracker.span_ms + gap
+        tracker.span_ticks = tracker.span_ticks + 1
+    end
+    tracker.edge_ms = now
+end
+
+local function get_period_ms(tracker)
+    if tracker.span_ticks < WARMUP_TICKS then
+        return TICK_MS
+    end
+    return tracker.span_ms / tracker.span_ticks
+end
+
+function observe_drain_edges()
+    if not toxic_air then
+        return
+    end
+    local now = wd_core.get_time_ms()
+    if now == observed_ms then
+        return
+    end
+    observed_ms = now
+    local filter = get_filter()
+    observe_cond(filter_edges, filter and filter.cond, now)
+    observe_cond(tank_edges, toxic_air.cached_tank_cond, now)
+end
+
+function get_filter_time_left()
+    if not (db.actor and toxic_air and toxic_air_mcm) then
+        return nil
+    end
+    observe_drain_edges()
+    if allow_source_refresh() then
+        source_tracker, source_hit = get_drain_source()
+    end
+    local tracker = source_tracker
+    if not tracker then
+        return nil
+    end
+
+    local now = wd_core.get_time_ms()
+    local period_ms = get_period_ms(tracker)
+    local ticks_left = tracker.last_cond / source_hit
+    local noise_ms = math.max(PERIOD_NOISE_MS, tracker.frame_ms)
+    local deadband_ms = math.max(DEADBAND_MIN_MS, noise_ms * ticks_left / math.sqrt(math.max(tracker.span_ticks, 1)))
+    if not tracker.shown_period_ms or math.abs(period_ms - tracker.shown_period_ms) * ticks_left > deadband_ms then
+        tracker.shown_period_ms = period_ms
+    end
+
+    local edge_ms = now
+    if not tracker.partial then
+        edge_ms = tracker.edge_ms
+    end
+    local ref_ms = math.min(now, edge_ms + STALL_TICKS * tracker.shown_period_ms)
+    local left_ms = math.floor(edge_ms + ticks_left * tracker.shown_period_ms - ref_ms + 0.5)
+    return math.max(0, math.ceil(left_ms / 1000))
+end
+
+function register()
+    wd_core.register({
+        id = "wd_toxic",
+        callbacks = { actor_on_update = { observe_drain_edges } },
+    })
+end

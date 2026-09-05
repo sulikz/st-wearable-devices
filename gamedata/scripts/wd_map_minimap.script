@@ -1,0 +1,193 @@
+local MIN_GLOBAL_RECT_UNITS = 8
+
+local function parse_bound_rect(raw)
+    if type(raw) ~= "string" then
+        return nil
+    end
+    local x1, z1, x2, z2 = string.match(raw, "^%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)")
+    x1, z1, x2, z2 = tonumber(x1), tonumber(z1), tonumber(x2), tonumber(z2)
+    if not (x1 and z1 and x2 and z2) then
+        return nil
+    end
+    if x2 <= x1 or z2 <= z1 then
+        return nil
+    end
+    return { x1 = x1, z1 = z1, x2 = x2, z2 = z2 }
+end
+
+local function new_layer(id, placement, bounds, texture_width, texture_height)
+    return {
+        id = id,
+        texture_width = texture_width,
+        texture_height = texture_height,
+        origin_x = placement.x1,
+        origin_y = placement.y1,
+        pixels_per_meter_x = (placement.x2 - placement.x1) / (bounds.x2 - bounds.x1),
+        pixels_per_meter_z = (placement.y2 - placement.y1) / (bounds.z2 - bounds.z1),
+    }
+end
+
+local function get_layer_window(layer, bounds, pos, span_x_m, span_y_m)
+    local center_x = layer.origin_x + (pos.x - bounds.x1) * layer.pixels_per_meter_x
+    local center_y = layer.origin_y + (bounds.z2 - pos.z) * layer.pixels_per_meter_z
+    local half_x = span_x_m / 2 * layer.pixels_per_meter_x
+    local half_y = span_y_m / 2 * layer.pixels_per_meter_z
+    return {
+        left = center_x - half_x,
+        top = center_y - half_y,
+        right = center_x + half_x,
+        bottom = center_y + half_y,
+    }
+end
+
+local function clamp_to_texture(window, texture_width, texture_height)
+    local span_x = window.right - window.left
+    local span_y = window.bottom - window.top
+    if span_x <= 0 or span_y <= 0 then
+        return nil
+    end
+    local left = math.max(window.left, 0)
+    local top = math.max(window.top, 0)
+    local right = math.min(window.right, texture_width)
+    local bottom = math.min(window.bottom, texture_height)
+    if right <= left or bottom <= top then
+        return nil
+    end
+    return {
+        window = { left = left, top = top, right = right, bottom = bottom },
+        frac = {
+            x1 = (left - window.left) / span_x,
+            y1 = (top - window.top) / span_y,
+            x2 = (right - window.left) / span_x,
+            y2 = (bottom - window.top) / span_y,
+        },
+    }
+end
+
+function get_heading(dir)
+    if not dir then
+        return 0
+    end
+    return wd_compass.get_heading(dir)
+end
+
+function project_mark(player_pos, target_pos, zoom_m, screen_w, screen_h)
+    if not (player_pos and target_pos and zoom_m and zoom_m > 0 and screen_w and screen_h and screen_h > 0) then
+        return nil
+    end
+    local scale = screen_h / zoom_m
+    local offset_x = (target_pos.x - player_pos.x) * scale
+    local offset_y = -(target_pos.z - player_pos.z) * scale
+    local half_w = screen_w / 2
+    local half_h = screen_h / 2
+    return {
+        x = offset_x,
+        y = offset_y,
+        inside = math.abs(offset_x) <= half_w and math.abs(offset_y) <= half_h,
+        pin_x = clamp(offset_x, -half_w, half_w),
+        pin_y = clamp(offset_y, -half_h, half_h),
+    }
+end
+
+function new(deps)
+    deps = deps or {}
+    local get_level_name = deps.get_level_name or function()
+        return level.name()
+    end
+    local get_level_ini = deps.get_level_ini
+        or function(level_name)
+            local reader = getFS():r_open("$game_levels$", level_name .. "\\level.ltx")
+            if not reader then
+                return nil
+            end
+            return ini_file(reader, "$game_levels$")
+        end
+    local get_maps_ini = deps.get_maps_ini or function()
+        return ini_file("game_maps_single.ltx")
+    end
+    local view = {}
+    local bounds = nil
+    local layers = {}
+    local function add_global_layer(level_name)
+        local maps_ini = get_maps_ini()
+        local canvas = parse_bound_rect(maps_ini and maps_ini:r_string_ex("global_map", "bound_rect"))
+        local rect = parse_bound_rect(maps_ini and maps_ini:r_string_ex(level_name, "global_rect"))
+        if not (canvas and rect) then
+            return
+        end
+        if (rect.x2 - rect.x1) < MIN_GLOBAL_RECT_UNITS or (rect.z2 - rect.z1) < MIN_GLOBAL_RECT_UNITS then
+            return
+        end
+        local global_map = wd_map_textures.get_global()
+        local scale_x = global_map.width / (canvas.x2 - canvas.x1)
+        local scale_y = global_map.height / (canvas.z2 - canvas.z1)
+        layers[#layers + 1] = new_layer(global_map.id, {
+            x1 = (rect.x1 - canvas.x1) * scale_x,
+            y1 = (rect.z1 - canvas.z1) * scale_y,
+            x2 = (rect.x2 - canvas.x1) * scale_x,
+            y2 = (rect.z2 - canvas.z1) * scale_y,
+        }, bounds, global_map.width, global_map.height)
+    end
+    local function add_level_layer(level_ini)
+        local detail = wd_map_textures.get_level_texture(level_ini:r_string_ex("level_map", "texture"))
+        if not detail then
+            return
+        end
+        layers[#layers + 1] = new_layer(
+            detail.id,
+            { x1 = 0, y1 = 0, x2 = detail.width, y2 = detail.height },
+            bounds,
+            detail.width,
+            detail.height
+        )
+    end
+    function view.refresh()
+        bounds = nil
+        layers = {}
+        local level_name = get_level_name()
+        if not level_name then
+            return
+        end
+        local level_ini = get_level_ini(level_name)
+        if not level_ini then
+            return
+        end
+        bounds = parse_bound_rect(level_ini:r_string_ex("level_map", "bound_rect"))
+        if not bounds then
+            return
+        end
+        add_global_layer(level_name)
+        add_level_layer(level_ini)
+        if #layers == 0 then
+            bounds = nil
+        end
+    end
+    function view.has_map()
+        return bounds ~= nil and #layers > 0
+    end
+    function view.get_layers(pos, span_x_m, span_y_m)
+        if not (bounds and pos and span_x_m and span_x_m > 0 and span_y_m and span_y_m > 0) then
+            return nil
+        end
+        local visible = {}
+        for _, layer in ipairs(layers) do
+            local clamped = clamp_to_texture(
+                get_layer_window(layer, bounds, pos, span_x_m, span_y_m),
+                layer.texture_width,
+                layer.texture_height
+            )
+            if clamped then
+                visible[#visible + 1] = {
+                    texture_id = layer.id,
+                    window = clamped.window,
+                    frac = clamped.frac,
+                }
+            end
+        end
+        if #visible == 0 then
+            return nil
+        end
+        return visible
+    end
+    return view
+end

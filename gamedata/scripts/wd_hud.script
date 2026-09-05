@@ -1,0 +1,291 @@
+local PARK_OFF = 4000
+local PARKED_X = -1000
+
+local function get_npc_id_module()
+    return rawget(_G, "factionid_hud_mcm") or rawget(_G, "factionID_hud_mcm")
+end
+
+local function get_sidhud_module()
+    return rawget(_G, "ui_sidhud_mcm")
+end
+
+local FLAGS = {
+    {
+        key = "hud_minimap",
+        label = "Minimap",
+        get = function()
+            return ui_options.get("video/hud/show_minimap") and true or false
+        end,
+        set = function(on)
+            ui_options.set("video/hud/show_minimap", on and true or false)
+            local mgui = ActorMenu.get_maingame()
+            if mgui and mgui.UIZoneMap then
+                mgui.UIZoneMap.disabled = not on
+                mgui.UIMotionIcon:Show(on and true or false)
+            end
+        end,
+    },
+    { key = "hud_psy", label = "Psy bar" },
+    {
+        key = "hud_rad",
+        label = "Radiation bar",
+        is_available = function()
+            return get_sidhud_module() ~= nil and ui_mcm ~= nil
+        end,
+        get = function()
+            return get_sidhud_module().get_setting("radhealthshow") and true or false
+        end,
+        set = function(on)
+            ui_mcm.set("sidhud/radhealthshow", on and true or false)
+            get_sidhud_module().loadsetting()
+        end,
+    },
+    { key = "hud_fire", label = "Fire mode" },
+    { key = "hud_status", label = "Status Icons" },
+    { key = "hud_companions", label = "Companions" },
+    { key = "hud_bhs", label = "BHS HUD", default = 1 },
+    { key = "hud_bhs_inv", label = "BHS inventory only", invert = true },
+    {
+        key = "hud_npc_info",
+        label = "NPC Identification",
+        is_available = function()
+            return get_npc_id_module() ~= nil
+        end,
+    },
+    { key = "hud_radio", label = "Radio Messages" },
+    {
+        key = "hud_toxic",
+        label = "Air filter condition",
+        is_available = function()
+            return toxic_air ~= nil
+        end,
+    },
+}
+
+local function is_stored_flag(flag)
+    return flag.get == nil
+end
+
+local FLAG_KEYS = {}
+for _, flag in ipairs(FLAGS) do
+    if is_stored_flag(flag) then
+        FLAG_KEYS[#FLAG_KEYS + 1] = flag.key
+    end
+end
+
+local LTX_SECTION = "wd_hud"
+
+local flags
+local prev = {}
+local forced_psy = false
+local npc_id_module
+
+local function get_default_flags()
+    local out = {}
+    for _, flag in ipairs(FLAGS) do
+        if is_stored_flag(flag) then
+            out[flag.key] = flag.default or 0
+        end
+    end
+    return out
+end
+
+flags = get_default_flags()
+
+function reset()
+    prev = {}
+end
+
+function get(name)
+    return flags[name] or 0
+end
+
+function set(name, value)
+    flags[name] = value
+end
+
+function is_visible(name)
+    return get(name) < 0.5
+end
+
+function set_visible(name, on)
+    set(name, on and 0 or 1)
+    save()
+end
+
+local function is_hidden(name)
+    return not is_visible(name)
+end
+
+function is_mode_on(name)
+    return is_hidden(name)
+end
+
+function set_mode(name, on)
+    set_visible(name, not on)
+end
+
+function load()
+    flags = wd_store.load_fields(LTX_SECTION, FLAG_KEYS, flags)
+end
+
+function save()
+    return wd_store.save_fields(LTX_SECTION, FLAG_KEYS, flags)
+end
+
+function apply(wnd, hide)
+    if not wnd then
+        return
+    end
+    local pos = wnd:GetWndPos()
+    local parked = pos.x < PARKED_X
+    if hide then
+        if not parked then
+            pos.x = pos.x - PARK_OFF
+            pos.y = pos.y - PARK_OFF
+            wnd:SetWndPos(pos)
+        end
+        wnd:Show(false)
+    elseif parked then
+        pos.x = pos.x + PARK_OFF
+        pos.y = pos.y + PARK_OFF
+        wnd:SetWndPos(pos)
+        wnd:Show(true)
+    end
+end
+
+local function park(wnd, name)
+    apply(wnd, is_hidden(name))
+end
+
+local function apply_module(mod, name)
+    if not mod then
+        return
+    end
+    local hide = is_hidden(name)
+    if hide then
+        if mod.HUD ~= nil and mod.deactivate_hud then
+            mod.deactivate_hud()
+        end
+    elseif prev[name] and mod.activate_hud then
+        mod.activate_hud()
+    end
+    prev[name] = hide
+end
+
+local function is_bhs_hidden()
+    if is_hidden("hud_bhs") then
+        return true
+    end
+    if not is_mode_on("hud_bhs_inv") then
+        return false
+    end
+    return not (db.actor and db.actor:has_info("inventory_wnd_open"))
+end
+
+local function apply_bhs()
+    if not zzz_player_injuries then
+        return
+    end
+    local hide = is_bhs_hidden()
+    if hide and not prev.hud_bhs then
+        zzz_player_injuries.show_hud_type = 0
+    elseif not hide and prev.hud_bhs then
+        zzz_player_injuries.show_hud_type = 2
+    end
+    prev.hud_bhs = hide
+end
+
+local function apply_radio()
+    local get_menu = ActorMenu.get_messages_menu
+    local menu = get_menu and get_menu()
+    if not menu then
+        return
+    end
+    local hide = is_hidden("hud_radio")
+    if hide then
+        menu:Show(false)
+    elseif prev.hud_radio then
+        menu:Show(true)
+    end
+    prev.hud_radio = hide
+end
+
+function actor_on_update()
+    local mgui = ActorMenu.get_maingame()
+    if mgui and mgui.m_ui_hud_states then
+        local st = mgui.m_ui_hud_states
+        if is_hidden("hud_psy") then
+            st.m_ui_psy_bar_show = false
+            forced_psy = true
+        elseif forced_psy then
+            st.m_ui_psy_bar_show = true
+        end
+        park(st.m_fire_mode, "hud_fire")
+    end
+    apply_radio()
+    apply_module(actor_status, "hud_status")
+    apply_module(npc_id_module, "hud_npc_info")
+    apply_module(axr_companions, "hud_companions")
+    apply_module(toxic_air, "hud_toxic")
+    apply_bhs()
+end
+
+local function register_flag_toggle(flag)
+    local key = flag.key
+    if not is_stored_flag(flag) then
+        wd_gui.register_global_toggle({
+            id = key,
+            label = flag.label,
+            get = flag.get,
+            set = flag.set,
+        })
+        return
+    end
+    local get = flag.invert and is_mode_on or is_visible
+    local set = flag.invert and set_mode or set_visible
+    wd_gui.register_global_toggle({
+        id = key,
+        label = flag.label,
+        get = function()
+            return get(key)
+        end,
+        set = function(on)
+            set(key, on)
+        end,
+    })
+end
+
+local function register_gui()
+    wd_gui.register_device({
+        id = "hud",
+        label = "HUD",
+        rank = 1,
+    })
+    wd_gui.register_tab({
+        device = "hud",
+        id = "hud_globals",
+        label = "HUD",
+        globals = true,
+    })
+end
+
+function register()
+    register_gui()
+    for _, flag in ipairs(FLAGS) do
+        if not flag.is_available or flag.is_available() then
+            register_flag_toggle(flag)
+        end
+    end
+    wd_core.register({
+        id = "wd_hud",
+        callbacks = {
+            actor_on_update = { { actor_on_update, interval = 200 } },
+        },
+        on_start = function()
+            npc_id_module = get_npc_id_module()
+            load()
+            reset()
+        end,
+    })
+end

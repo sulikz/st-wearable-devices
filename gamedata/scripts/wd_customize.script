@@ -1,0 +1,404 @@
+SLOT_BY_INDEX = { "wrist", "forearm", "side" }
+REFRESH_SYNC_MS = 1500
+REFRESH_STEP_MS = 300
+
+function decide_drop(from_id, from_idx, to_id, to_idx, item_slot, is_module)
+    if from_id == "modules" then
+        if to_id == "modules" then
+            return { act = "none" }
+        end
+        return { act = "remove", index = from_idx }
+    end
+    if is_module then
+        if from_id ~= "devices" then
+            return { act = "none" }
+        end
+        if to_id == "modules" then
+            return { act = "install" }
+        end
+        if to_id == "slots" then
+            return { act = "reject", reason = "wrong_slot" }
+        end
+        return { act = "none" }
+    end
+    if item_slot == nil then
+        return { act = "none" }
+    end
+    if from_id == "devices" then
+        if to_id == "modules" then
+            return { act = "reject", reason = "wrong_slot" }
+        end
+        if to_id ~= "slots" then
+            return { act = "none" }
+        end
+        if SLOT_BY_INDEX[to_idx] ~= item_slot then
+            return { act = "reject", reason = "wrong_slot" }
+        end
+        return { act = "mount" }
+    end
+    if from_id == "slots" then
+        if to_id == "slots" then
+            if SLOT_BY_INDEX[to_idx] == item_slot then
+                return { act = "none" }
+            end
+            return { act = "reject", reason = "wrong_slot" }
+        end
+        return { act = "unmount", slot = item_slot }
+    end
+    return { act = "none" }
+end
+
+function decide_activate(from_id, from_idx, item_slot, is_module)
+    if from_id == "modules" then
+        return { act = "remove", index = from_idx }
+    end
+    if is_module then
+        return { act = "install" }
+    end
+    if item_slot == nil then
+        return { act = "none" }
+    end
+    if from_id == "slots" then
+        return { act = "unmount", slot = item_slot }
+    end
+    return { act = "mount" }
+end
+
+function get_bay_ids()
+    local bay_ids = {}
+    for index, bay in ipairs(d_promin_config.BAYS) do
+        bay_ids[index] = bay.id
+    end
+    return bay_ids
+end
+
+function get_module_cell_sections(installed, bay_ids)
+    local section_by_bay = {}
+    for _, name in ipairs(installed) do
+        local module = d_promin_config.get_module(name)
+        if module then
+            section_by_bay[module.bay] = module.section
+        end
+    end
+    local sections = {}
+    for index, bay_id in ipairs(bay_ids) do
+        sections[index] = section_by_bay[bay_id] or false
+    end
+    return sections
+end
+
+function get_module_cell_restricted(bay_ids, active_bay_ids)
+    local active = {}
+    for _, bay_id in ipairs(active_bay_ids) do
+        active[bay_id] = true
+    end
+    local restricted = {}
+    for index, bay_id in ipairs(bay_ids) do
+        restricted[index] = not active[bay_id]
+    end
+    return restricted
+end
+
+function get_install_reject_reason(installed, active_bay_ids, module)
+    for _, name in ipairs(installed) do
+        if name == module.name then
+            return "module_installed"
+        end
+    end
+    for _, bay_id in ipairs(active_bay_ids) do
+        if bay_id == module.bay then
+            return nil
+        end
+    end
+    return "module_locked"
+end
+
+local function get_installed_name_at_bay(bay_id)
+    for _, name in ipairs(d_promin.get_installed_modules()) do
+        local module = d_promin_config.get_module(name)
+        if module and module.bay == bay_id then
+            return name
+        end
+    end
+    return nil
+end
+
+function list_backpack_objects()
+    local result = wd_slots.list_unmounted_objects()
+    if db and db.actor then
+        db.actor:iterate_inventory(function(_owner, item)
+            if d_promin_config.get_module_of_section(item:section()) then
+                result[#result + 1] = item
+            end
+        end, db.actor)
+    end
+    return result
+end
+
+local function get_item_traits(bag_id, obj)
+    if not obj then
+        return bag_id == "modules", nil
+    end
+    local section = obj:section()
+    local is_module = bag_id == "modules" or d_promin_config.get_module_of_section(section) ~= nil
+    return is_module, wd_slots.get_slot_of(section)
+end
+
+function apply_decision(win, decision, obj)
+    if decision.act == "mount" then
+        wd_inspect.run_swap(function()
+            local ok, reason = wd_slots.mount(obj, true)
+            if win.closed then
+                return
+            end
+            if not ok then
+                win:set_status(game.translate_string("st_wd_customize_" .. reason))
+            end
+            win:refresh()
+        end)
+    elseif decision.act == "unmount" then
+        wd_inspect.run_swap(function()
+            wd_slots.unmount(decision.slot)
+            if win.closed then
+                return
+            end
+            win:refresh()
+        end)
+    elseif decision.act == "install" then
+        local module = d_promin_config.get_module_of_section(obj:section())
+        local reason =
+            get_install_reject_reason(d_promin.get_installed_modules(), d_promin.get_active_bay_ids(), module)
+        if reason then
+            win:set_status(game.translate_string("st_wd_customize_" .. reason))
+            return
+        end
+        wd_inspect.run_swap(function()
+            d_promin.install_module(obj)
+            if win.closed then
+                return
+            end
+            win:schedule_sync_refresh()
+            win:refresh()
+        end)
+    elseif decision.act == "remove" then
+        local name = get_installed_name_at_bay(get_bay_ids()[decision.index])
+        if not name then
+            return
+        end
+        wd_inspect.run_swap(function()
+            local installed = d_promin.get_installed_modules()
+            for index = 1, #installed do
+                if installed[index] == name then
+                    d_promin.remove_module_at(index)
+                    break
+                end
+            end
+            if win.closed then
+                return
+            end
+            win:schedule_sync_refresh()
+            win:refresh()
+        end)
+    elseif decision.act == "reject" then
+        win:set_status(game.translate_string("st_wd_customize_" .. decision.reason))
+    end
+end
+
+local GUI = nil
+
+class("UIWdCustomize")(CUIScriptWnd)
+
+function UIWdCustomize:__init()
+    super()
+    self:InitControls()
+end
+
+function UIWdCustomize:__finalize()
+    self.closed = true
+    Unregister_UI("UIWdCustomize")
+    GUI = nil
+end
+
+function UIWdCustomize:InitControls()
+    self:SetWndRect(Frect():set(0, 0, 1024, 768))
+    self:SetAutoDelete(true)
+    self:AllowMovement(true)
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_wd_customize.xml")
+    self.xml = xml
+    self.back = xml:InitStatic("back", self)
+    for index = 1, #SLOT_BY_INDEX do
+        xml:InitStatic("device_open_" .. index, self)
+        xml:InitStatic("accessory_restricted_" .. index, self)
+    end
+    self.module_restricted = {}
+    for index = 1, #get_bay_ids() do
+        xml:InitStatic("module_open_" .. index, self)
+        self.module_restricted[index] = xml:InitStatic("module_restricted_" .. index, self)
+    end
+    self.status = xml:InitTextWnd("status", self)
+    self.btn_gui = xml:Init3tButton("btn_gui", self)
+    self:Register(self.btn_gui, "btn_gui")
+    self:AddCallback("btn_gui", ui_events.BUTTON_CLICKED, self.on_open_gui, self)
+    self.btn_close = xml:Init3tButton("btn_close", self)
+    self:Register(self.btn_close, "btn_close")
+    self:AddCallback("btn_close", ui_events.BUTTON_CLICKED, self.on_close, self)
+    self.CC = {}
+    self.CC.slots = utils_ui.UICellContainer("slots", self, "cont_slots", "cont_slots", self, true)
+    self.CC.slots.disable_callback["On_CC_Add"] = true
+    self.CC.slots.disable_callback["On_CC_Remove"] = true
+    for index = 1, #SLOT_BY_INDEX do
+        self.CC.slots:AddItemManual(nil, nil, index)
+    end
+    self.CC.devices = utils_ui.UICellContainer("devices", self, nil, "cont_devices", self)
+    self.CC.devices.disable_scroll_dragdrop = true
+    self.CC.modules = utils_ui.UICellContainer("modules", self, "cont_modules", "cont_modules", self, true)
+    self.CC.modules.showcase = true
+    self.CC.modules.disable_callback["On_CC_Add"] = true
+    self.CC.modules.disable_callback["On_CC_Remove"] = true
+    for index = 1, #get_bay_ids() do
+        self.CC.modules:AddItemManual(nil, nil, index)
+    end
+    self.CC.slots:Scroll_Reinit(true)
+    self.CC.modules:Scroll_Reinit(true)
+    self.item_info = utils_ui.UIInfoItem(self)
+    self:refresh()
+end
+
+function UIWdCustomize:on_open_gui()
+    self:on_close()
+    if not wd_gui.is_open() then
+        wd_gui.toggle()
+    end
+end
+
+function UIWdCustomize:refresh()
+    for index, slot in ipairs(SLOT_BY_INDEX) do
+        local obj = wd_slots.get_mounted_object(slot)
+        if obj then
+            self.CC.slots:AddItemManual(obj, nil, index)
+        else
+            self.CC.slots:RemoveItemManual(index)
+        end
+    end
+    local bay_ids = get_bay_ids()
+    local cell_sections = get_module_cell_sections(d_promin.get_installed_modules(), bay_ids)
+    local cell_restricted = get_module_cell_restricted(bay_ids, d_promin.get_active_bay_ids())
+    for index = 1, #bay_ids do
+        self.CC.modules:AddItemManual(nil, cell_sections[index] or nil, index)
+        self.module_restricted[index]:Show(cell_restricted[index])
+    end
+    self.CC.devices:Reinit(list_backpack_objects())
+end
+
+function UIWdCustomize:Update()
+    CUIScriptWnd.Update(self)
+    local found_cell = self.CC.slots:Update(self.item_info)
+    found_cell = self.CC.devices:Update(self.item_info) or found_cell
+    found_cell = self.CC.modules:Update(self.item_info) or found_cell
+    if not found_cell then
+        self.item_info:Update()
+    end
+    if self.refresh_until then
+        local now = time_global()
+        if now >= (self.refresh_next or 0) then
+            self.refresh_next = now + REFRESH_STEP_MS
+            self:refresh()
+        end
+        if now >= self.refresh_until then
+            self.refresh_until = nil
+        end
+    end
+end
+
+function UIWdCustomize:schedule_sync_refresh()
+    self.refresh_until = time_global() + REFRESH_SYNC_MS
+    self.refresh_next = 0
+end
+
+function UIWdCustomize:set_status(text)
+    self.status:SetText(text or "")
+end
+
+function UIWdCustomize:On_CC_DragDrop(bag_from, idx_from)
+    local obj = self.CC[bag_from]:GetObj(idx_from)
+    if bag_from ~= "modules" and not obj then
+        return
+    end
+    local to_id, to_idx
+    for _, container in pairs(self.CC) do
+        local focused_bag, focused_idx = container:GetCell_Focused()
+        if focused_bag then
+            to_id, to_idx = focused_bag, focused_idx
+            break
+        end
+    end
+    if not to_id and self.CC.modules:IsShown() and self.CC.modules:IsCursorOverWindow() then
+        to_id = "modules"
+    end
+    local is_module, item_slot = get_item_traits(bag_from, obj)
+    local decision = decide_drop(bag_from, idx_from, to_id, to_idx, item_slot, is_module)
+    apply_decision(self, decision, obj)
+end
+
+function UIWdCustomize:On_CC_Mouse1_DB(bag_from, idx_from)
+    local obj = self.CC[bag_from]:GetObj(idx_from)
+    if bag_from ~= "modules" and not obj then
+        return
+    end
+    local is_module, item_slot = get_item_traits(bag_from, obj)
+    local decision = decide_activate(bag_from, idx_from, item_slot, is_module)
+    apply_decision(self, decision, obj)
+end
+
+function UIWdCustomize:on_close()
+    self.closed = true
+    if self:IsShown() then
+        self:HideDialog()
+    end
+    GUI = nil
+    Unregister_UI("UIWdCustomize")
+end
+
+function UIWdCustomize:OnKeyboard(dik, action)
+    local result = CUIScriptWnd.OnKeyboard(self, dik, action)
+    if result == false then
+        for _, container in pairs(self.CC) do
+            if container:IsShown() then
+                container:OnKeyboard(dik, action)
+            end
+        end
+    end
+    if action == ui_events.WINDOW_KEY_PRESSED then
+        if dik == DIK_keys.DIK_ESCAPE then
+            self:on_close()
+            return true
+        end
+    end
+    return result
+end
+
+function is_open()
+    return GUI ~= nil and GUI:IsShown()
+end
+
+function toggle()
+    if is_open() then
+        GUI:on_close()
+        return
+    end
+    if GUI == nil then
+        GUI = UIWdCustomize()
+    end
+    GUI:set_status("")
+    GUI:ShowDialog(false)
+    Unregister_UI("UIWdCustomize")
+    Register_UI("UIWdCustomize", "wd_customize")
+end
+
+function open_from_inventory()
+    hide_hud_inventory()
+    if not is_open() then
+        toggle()
+    end
+end

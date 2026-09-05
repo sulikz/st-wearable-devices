@@ -1,0 +1,27 @@
+local RARE_SPOT = "treasure_searched"
+local DROPS = {
+    { section = "wd_promin_module_map", chance = 0.15, rare_only = true },
+    { section = "wd_promin_upgrade_kit", chance = 0.05 },
+}
+
+local function inject_stash_loot(box)
+    local box_id = box:id()
+    if type(treasure_manager.caches[box_id]) ~= "string" then
+        return
+    end
+    local rare = level.map_has_object_spot(box_id, RARE_SPOT) ~= 0
+    for _, drop in ipairs(DROPS) do
+        if (rare or not drop.rare_only) and math.random() < drop.chance then
+            alife_create_item(drop.section, box)
+        end
+    end
+end
+
+if treasure_manager and not _G.wd_stash_wrapped then
+    local prev_spawn = treasure_manager.try_spawn_treasure
+    function treasure_manager.try_spawn_treasure(box)
+        inject_stash_loot(box)
+        prev_spawn(box)
+    end
+    _G.wd_stash_wrapped = true
+end

@@ -1,0 +1,43 @@
+local BINOC_CLASS = "WP_BINOC"
+
+local hidden = false
+
+local function is_texture_zoom_weapon(weapon)
+    if not weapon then
+        return false
+    end
+    return ini_sys:r_string_ex(weapon:section(), "class") == BINOC_CLASS
+end
+
+function on_binoc_zoom_in()
+    if hidden then
+        return
+    end
+    if is_texture_zoom_weapon(db.actor and db.actor:active_item()) then
+        hidden = true
+        wd_attach.hide_screens()
+    end
+end
+
+function on_binoc_zoom_out()
+    if hidden then
+        hidden = false
+        wd_attach.show_screens()
+    end
+end
+
+function on_first_update()
+    hidden = false
+    wd_attach.show_screens()
+end
+
+function register()
+    wd_core.register({
+        id = "wd_zoom",
+        callbacks = {
+            actor_on_first_update = { on_first_update },
+            actor_on_weapon_zoom_in = { on_binoc_zoom_in },
+            actor_on_weapon_zoom_out = { on_binoc_zoom_out },
+        },
+    })
+end

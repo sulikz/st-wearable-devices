@@ -1,0 +1,63 @@
+function copy_axes(values)
+    return { values and values[1] or 0, values and values[2] or 0, values and values[3] or 0 }
+end
+
+function parse_axes(text)
+    if text == nil then
+        return nil
+    end
+    local raw_x, raw_y, raw_z = tostring(text):match("^%s*([^,]+),%s*([^,]+),%s*([^,]+)%s*$")
+    local axis_x, axis_y, axis_z = tonumber(raw_x), tonumber(raw_y), tonumber(raw_z)
+    if axis_x and axis_y and axis_z then
+        return { axis_x, axis_y, axis_z }
+    end
+    return nil
+end
+
+function serialize_axes(values)
+    return string.format("%s,%s,%s", values[1], values[2], values[3])
+end
+
+function copy(fields, src)
+    local result = {}
+    for _, field in ipairs(fields) do
+        local name, is_vec3 = field[1], field[2]
+        local value = src[name]
+        result[name] = is_vec3 and { value[1], value[2], value[3] } or value
+    end
+    return result
+end
+
+function apply(dst, source, fields)
+    for _, field in ipairs(fields) do
+        local name, is_vec3 = field[1], field[2]
+        local text = source[name]
+        if text and is_vec3 then
+            local axes = parse_axes(text)
+            if axes then
+                dst[name] = axes
+            end
+        elseif text ~= nil then
+            local number_value = tonumber(text)
+            if number_value ~= nil then
+                dst[name] = number_value
+            elseif type(dst[name]) ~= "number" then
+                dst[name] = text
+            end
+        end
+    end
+    return dst
+end
+
+function serialize(section, src, fields)
+    for _, field in ipairs(fields) do
+        local name, is_vec3 = field[1], field[2]
+        local value = src[name]
+        if is_vec3 then
+            section[name] = serialize_axes(value)
+        else
+            section[name] = tostring(value)
+        end
+    end
+    return section
+end
