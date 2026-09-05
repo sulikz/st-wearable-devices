@@ -17,8 +17,10 @@ def build(output: str | Path):
     core = stage / "src" / "core" / "gamedata"
     core.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(ROOT / "gamedata", core)
-    for option in sorted((ROOT / "options").iterdir()):
-        shutil.copytree(option / "gamedata", stage / "src" / option.name / "gamedata")
+    options = ROOT / "options"
+    if options.is_dir():
+        for option in sorted(options.iterdir()):
+            shutil.copytree(option / "gamedata", stage / "src" / option.name / "gamedata")
     shutil.copytree(ROOT / "fomod", stage / "fomod")
     shutil.copy2(ROOT / "README.md", stage / "README.md")
 
