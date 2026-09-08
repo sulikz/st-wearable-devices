@@ -1,14 +1,15 @@
-local SPAWN_GROUPS = {
-    i_wearable_module = "Items (Device)",
-    i_wearable_kit = "Items (Upgrades)",
+local SPAWN_GROUP_SOURCES = {
+    i_wearable_module = "i_device",
+    i_wearable_kit = "i_upgrade",
 }
 
 function add_spawn_kinds(groups)
     if type(groups) ~= "table" then
         return false
     end
-    for kind, group in pairs(SPAWN_GROUPS) do
-        if groups[kind] == nil then
+    for kind, source_kind in pairs(SPAWN_GROUP_SOURCES) do
+        local group = groups[source_kind]
+        if group and groups[kind] == nil then
             groups[kind] = group
         end
     end

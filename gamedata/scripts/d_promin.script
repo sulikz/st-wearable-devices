@@ -10,6 +10,7 @@ local EXO_UI_BONE = "wpn_body"
 local PAGE_KEY = "wd_promin_page"
 local CHARGE_KEY = "wd_promin_charge"
 local IDLE_UPDATE_MS = 1000
+local QUEST_REFRESH_MS = 1000
 local MAP_ZOOM_MIN = 50
 local MAP_ZOOM_MAX = 500
 local WHEEL_ZOOM_FACTOR = 1.15
@@ -20,6 +21,15 @@ local map_view = nil
 local last_level_name = nil
 local marks_collector = nil
 local next_idle_update = 0
+local allow_quest_refresh = wd_core.throttle(QUEST_REFRESH_MS)
+local quest_target = nil
+local quest_category = nil
+local map_frame = nil
+local map_state = { has_map = false, heading = 0 }
+local map_view_scratch = {}
+local mark_pool = {}
+local projected_marks = {}
+local quest_scratch = {}
 local modules_installed = {}
 local owner
 
@@ -317,38 +327,53 @@ end
 
 local mark_pos_scratch = { x = 0, y = 0, z = 0 }
 
-local function project_same_level_mark(player_pos, mark, zoom, screen)
+local function project_same_level_mark(player_pos, mark, zoom, screen, out)
     mark_pos_scratch.x = mark.pos_x
     mark_pos_scratch.z = mark.pos_z
-    return wd_map_minimap.project_mark(player_pos, mark_pos_scratch, zoom, screen.w, screen.h)
+    return wd_map_minimap.project_mark_into(out, player_pos, mark_pos_scratch, zoom, screen.w, screen.h)
 end
 
 local function collect_marks(zoom, layout, player_pos, actor_level, range, tracked_id)
-    local marks = {}
-    local view = { pos = player_pos, level_id = actor_level, range = range }
-    for _, mark in ipairs(get_marks_collector().get_marks(view)) do
-        if #marks >= layout.max_marks then
+    local count = 0
+    map_view_scratch.pos = player_pos
+    map_view_scratch.level_id = actor_level
+    map_view_scratch.range = range
+    for _, mark in ipairs(get_marks_collector().get_marks(map_view_scratch)) do
+        if count >= layout.max_marks then
             break
         end
         if mark.id ~= tracked_id then
-            local projected = project_same_level_mark(player_pos, mark, zoom, layout.screen)
+            local slot = mark_pool[count + 1]
+            if not slot then
+                slot = {}
+                mark_pool[count + 1] = slot
+            end
+            local projected = project_same_level_mark(player_pos, mark, zoom, layout.screen, slot)
             if projected and projected.inside then
                 projected.category = mark.category
                 projected.icon = mark.icon
-                marks[#marks + 1] = projected
+                projected.dy = player_pos.y - mark.pos_y
+                count = count + 1
+                projected_marks[count] = projected
             end
         end
     end
-    return marks
+    for index = #projected_marks, count + 1, -1 do
+        projected_marks[index] = nil
+    end
+    return projected_marks
 end
 
 local function get_map_frame()
     local layout = d_promin_map_ui.get_layout()
-    local screen = layout.screen
     local zoom = clamp(d_promin_config.transforms.map_zoom, MAP_ZOOM_MIN, MAP_ZOOM_MAX)
+    if map_frame and map_frame.layout == layout and map_frame.zoom == zoom then
+        return map_frame
+    end
+    local screen = layout.screen
     local span_y = zoom
     local span_x = zoom * screen.w / screen.h
-    return {
+    map_frame = {
         layout = layout,
         screen = screen,
         zoom = zoom,
@@ -356,6 +381,7 @@ local function get_map_frame()
         span_y = span_y,
         range = math.sqrt(span_x * span_x + span_y * span_y) / 2,
     }
+    return map_frame
 end
 
 local function prefetch_attach_models()
@@ -388,22 +414,33 @@ local function project_quest_mark(player_pos, actor_level, target_id, zoom, scre
     if not target_pos then
         return nil
     end
-    local projected = wd_map_minimap.project_mark(player_pos, target_pos, zoom, screen.w, screen.h)
-    if projected and wd_compass.get_level_id_of(target_gvid) ~= actor_level then
-        projected.inside = false
+    local projected = wd_map_minimap.project_mark_into(quest_scratch, player_pos, target_pos, zoom, screen.w, screen.h)
+    if projected then
+        projected.dy = player_pos.y - target_pos.y
+        if wd_compass.get_level_id_of(target_gvid) ~= actor_level then
+            projected.inside = false
+        end
     end
     return projected
 end
 
-local function collect_quest(target, zoom, screen, player_pos, actor_level)
+local function collect_quest(target, category, zoom, screen, player_pos, actor_level)
     if not target then
         return nil
     end
     local projected = project_quest_mark(player_pos, actor_level, target.id, zoom, screen)
     if projected then
-        projected.category = get_quest_category(target)
+        projected.category = category
     end
     return projected
+end
+
+local function refresh_quest_target()
+    if allow_quest_refresh() then
+        quest_target = wd_compass.get_active_task_target()
+        quest_category = quest_target and get_quest_category(quest_target) or nil
+    end
+    return quest_target, quest_category
 end
 
 local function is_map_page(page_id)
@@ -445,10 +482,8 @@ function update_screen()
     if not (owner.is_attached() and is_map_page(page)) then
         return
     end
-    local raised = is_promin_raised()
-    if raised then
-        wd_map_spots.get_registry().request_sweep()
-    else
+    wd_map_spots.request_refresh()
+    if not is_promin_raised() then
         local now = time_global()
         if now < next_idle_update then
             return
@@ -461,8 +496,11 @@ function update_screen()
     local screen = frame.screen
     local zoom = frame.zoom
     local render_device = device()
-    local heading = wd_map_minimap.get_heading(render_device and render_device.cam_dir)
-    local state = { has_map = false, heading = heading }
+    local state = map_state
+    state.heading = wd_map_minimap.get_heading(render_device and render_device.cam_dir)
+    state.has_map = false
+    state.layers = nil
+    state.quest = nil
     local actor_pos = db.actor and db.actor:position()
     if view.has_map() and actor_pos then
         state.layers = view.get_layers(actor_pos, frame.span_x, frame.span_y)
@@ -471,11 +509,11 @@ function update_screen()
     local player_pos = wd_compass.get_actor_global_pos()
     if db.actor and player_pos then
         local actor_level = wd_compass.get_level_id_of(db.actor:game_vertex_id())
-        local target = wd_compass.get_active_task_target()
+        local target, category = refresh_quest_target()
         state.marks = collect_marks(zoom, frame.layout, player_pos, actor_level, frame.range, target and target.id)
-        state.quest = collect_quest(target, zoom, screen, player_pos, actor_level)
+        state.quest = collect_quest(target, category, zoom, screen, player_pos, actor_level)
     else
-        state.marks = {}
+        state.marks = collect_marks(zoom, frame.layout, nil, nil, 0, nil)
     end
     get_ui().update_map(state)
 end

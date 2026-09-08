@@ -1,0 +1,15 @@
+local SPOT_FILES = {
+    ["ui\\map_spots.xml"] = true,
+    ["ui\\map_spots_16.xml"] = true,
+    ["ui\\map_spots_21.xml"] = true,
+}
+
+local function load_spot_declarations(xml_file_name, xml_obj)
+    if SPOT_FILES[xml_file_name] then
+        wd_map_spots.load_declarations(xml_obj)
+    end
+end
+
+function on_xml_read()
+    RegisterScriptCallback("on_xml_read", load_spot_declarations)
+end

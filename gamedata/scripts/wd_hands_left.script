@@ -1,11 +1,11 @@
 SLIM_VISUAL_DIR = "wd\\hands\\slim\\"
+LEFT_SECTION = "wd_hands_left"
 
-local LEFT_VARIANT_SUFFIX = "_wd_left"
 local UNKNOWN = "_unknown"
 
 local items = {}
-local applied_section = UNKNOWN
-local variant_by_outfit = {}
+local applied_key = UNKNOWN
+local visuals_by_outfit = {}
 
 function register_item(id, is_worn)
     items[id] = is_worn
@@ -37,55 +37,51 @@ local function get_slim_visual(sys, hands_section)
     return slim_visual
 end
 
-local function build_left_variant_section(hands_section)
+local function resolve_visuals(hands_section)
     local sys = system_ini()
-    local left_variant = hands_section .. LEFT_VARIANT_SUFFIX
-    if sys:section_exist(left_variant) then
-        return left_variant
-    end
-    if not sys:section_exist(hands_section) then
+    if not sys:section_exist(LEFT_SECTION) or not sys:section_exist(hands_section) then
         return nil
     end
+    local visual = sys:r_string_ex(hands_section, "visual")
     local slim_visual = get_slim_visual(sys, hands_section)
-    if not slim_visual then
+    if not visual or not slim_visual then
         return nil
     end
+    return { visual = visual, visual_2 = slim_visual, key = visual .. "|" .. slim_visual }
+end
+
+local function write_left_section(visuals)
+    local sys = system_ini()
     sys:set_readonly(false)
     sys:set_override_names(true)
-    local line_total = sys:line_count(hands_section)
-    for line_index = 0, line_total - 1 do
-        local _, key, value = sys:r_line(hands_section, line_index, "", "")
-        if key and key ~= "" then
-            sys:w_string(left_variant, key, value or "")
-        end
-    end
-    sys:w_string(left_variant, "visual_2", slim_visual)
+    sys:w_string(LEFT_SECTION, "visual", visuals.visual)
+    sys:w_string(LEFT_SECTION, "visual_2", visuals.visual_2)
     sys:set_override_names(false)
     sys:set_readonly(true)
-    return left_variant
 end
 
 function get_base_hands_section()
     return wd_outfit.get_hands_section(wd_outfit.get_key()) or wd_outfit.DEFAULT_HANDS
 end
 
-local function get_target_section()
+local function get_target_visuals()
     if not is_any_item_worn() then
         return nil
     end
     local outfit_key = wd_outfit.get_key()
-    local cached = variant_by_outfit[outfit_key]
+    local cached = visuals_by_outfit[outfit_key]
     if cached == nil then
         local hands_section = wd_outfit.get_hands_section(outfit_key)
-        cached = (hands_section and build_left_variant_section(hands_section)) or false
-        variant_by_outfit[outfit_key] = cached
+        cached = (hands_section and resolve_visuals(hands_section)) or false
+        visuals_by_outfit[outfit_key] = cached
     end
     return cached or nil
 end
 
 function apply()
-    local target = get_target_section()
-    if target == applied_section then
+    local target = get_target_visuals()
+    local key = target and target.key
+    if key == applied_key then
         return
     end
     local hud = get_player_hud()
@@ -93,16 +89,17 @@ function apply()
         return
     end
     if target then
-        hud:set_hands(target)
+        write_left_section(target)
+        hud:set_hands(LEFT_SECTION)
     else
         hud:set_hands(get_base_hands_section())
         hud:reset_hands()
     end
-    applied_section = target
+    applied_key = key
 end
 
 function reset()
-    applied_section = UNKNOWN
+    applied_key = UNKNOWN
 end
 
 function register()

@@ -160,7 +160,7 @@ function get_filter_time_left()
         source_tracker, source_hit = get_drain_source()
     end
     local tracker = source_tracker
-    if not tracker then
+    if not (tracker and tracker.last_cond) then
         return nil
     end
 

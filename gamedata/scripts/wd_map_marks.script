@@ -1,39 +1,104 @@
-local CATEGORY_BY_SPOT = {
-    ui_pda2_trader_location = "trader",
-    ui_pda2_mechanic_location = "mechanic",
-    ui_pda2_medic_location = "medic",
-    ui_pda2_scout_location = "guide",
-    ui_pda2_barman_location = "barman",
-    ui_pda2_special_location = "special",
-    ui_pda2_quest_npc_location = "quest_npc",
-    storyline_task_location = "quest",
-    storyline_task_location_complex_timer = "quest",
-    warfare_selected_target = "quest",
-    primary_task_location = "quest_secondary",
-    secondary_task_location = "quest_secondary",
-    third_task_location = "quest_secondary",
-    campfire_lit = "campfire",
+TRANSITION_DIRECTIONS = { "up", "up_right", "right", "right_down", "down", "down_left", "left", "left_up" }
+SPOT_BY_CATEGORY = {
+    trader = "ui_pda2_trader_location",
+    mechanic = "ui_pda2_mechanic_location",
+    medic = "ui_pda2_medic_location",
+    guide = "ui_pda2_scout_location",
+    barman = "ui_pda2_barman_location",
+    special = "ui_pda2_special_location",
+    quest_npc = "ui_pda2_quest_npc_location",
+    quest = "storyline_task_location",
+    quest_secondary = "secondary_task_location",
+    campfire = "campfire_lit",
     campfire_unlit = "campfire_unlit",
-    treasure = "stash",
-    treasure_all = "stash",
-    treasure_player = "stash",
-    treasure_searched = "stash",
-    treasure_unique = "stash",
-    level_changer_up = "transition_up",
-    level_changer_up_right = "transition_up_right",
-    level_changer_right = "transition_right",
-    level_changer_right_down = "transition_right_down",
-    level_changer_down = "transition_down",
-    level_changer_down_left = "transition_down_left",
-    level_changer_left = "transition_left",
-    level_changer_left_up = "transition_left_up",
+    stash = "treasure",
+    stash_player = "treasure_player",
+    stash_rare = "treasure_searched",
+    stash_unique = "treasure_unique",
 }
+for _, direction in ipairs(TRANSITION_DIRECTIONS) do
+    SPOT_BY_CATEGORY["transition_" .. direction] = "level_changer_" .. direction
+end
+local CATEGORY_BY_SPOT = { warfare_selected_target = "quest", treasure_all = "stash" }
+for category, spot in pairs(SPOT_BY_CATEGORY) do
+    CATEGORY_BY_SPOT[spot] = category
+end
+local CAMPFIRE_CATEGORIES = { campfire = true, campfire_unlit = true }
+local RELATION_SPOTS = {
+    friend_location = true,
+    neutral_location = true,
+    enemy_location = true,
+    deadbody_location = true,
+}
+local RELATION_SPOT_BY_STATUS = {
+    friend = "friend_location",
+    neutral = "neutral_location",
+    enemy = "enemy_location",
+    dead = "deadbody_location",
+}
+local CORPSE_DY = 3
+local PRIORITY_RELATION = 0
+local PRIORITY_ICON = 1
+local PRIORITY_CATEGORY = 2
+local IMMOBILE_CATEGORIES = {
+    stash = true,
+    stash_rare = true,
+    stash_player = true,
+    stash_unique = true,
+    campfire = true,
+    campfire_unlit = true,
+}
+for _, direction in ipairs(TRANSITION_DIRECTIONS) do
+    IMMOBILE_CATEGORIES["transition_" .. direction] = true
+end
 local MAX_MARKS = 64
 local RESCAN_MS = 1000
+local POSITION_REFRESH_MS = 250
+local PHASE_OFFSET_MS = 500
+
+local function is_engine_campfire_lit(object_id)
+    local binder = bind_campfire.campfires_all[object_id]
+    local campfire = binder and binder.campfire
+    if campfire then
+        return campfire:is_on()
+    end
+    return nil
+end
+
+local function get_engine_relation_status(object_id)
+    local online = level.object_by_id(object_id)
+    if not online then
+        return nil
+    end
+    if not online:alive() then
+        return "dead"
+    end
+    local relation = online:relation(db.actor)
+    if relation >= game_object.enemy then
+        return "enemy"
+    end
+    if relation == game_object.friend then
+        return "friend"
+    end
+    return "neutral"
+end
+
+local function get_live_category(category, object_id, is_campfire_lit)
+    if not CAMPFIRE_CATEGORIES[category] then
+        return category
+    end
+    local lit = is_campfire_lit(object_id)
+    if lit == nil then
+        return category
+    end
+    return lit and "campfire" or "campfire_unlit"
+end
 
 function new(deps)
     deps = deps or {}
     local get_time = deps.get_time or time_global
+    local is_campfire_lit = deps.is_campfire_lit or is_engine_campfire_lit
+    local get_relation_status = deps.get_relation_status or get_engine_relation_status
     local get_entries = deps.get_entries or function()
         return wd_map_spots.get_registry().get_entries()
     end
@@ -49,21 +114,46 @@ function new(deps)
     end
     local max_marks = deps.max_marks or MAX_MARKS
     local rescan_ms = deps.rescan_ms or RESCAN_MS
+    local position_refresh_ms = deps.position_refresh_ms or POSITION_REFRESH_MS
+    local phase_ms = deps.phase_ms or PHASE_OFFSET_MS
 
     local collector = {}
     local marks = {}
+    local immobile = {}
     local next_scan = 0
+    local next_position_refresh = 0
+    local phased = false
     local scanned_level = nil
     local scanned_range = 0
 
-    local function get_distance_sq(view, object_id)
+    local function read_position(object_id)
         local pos, gvid = get_position(object_id)
-        if not pos or get_level_id(gvid) ~= view.level_id then
+        if not pos then
             return nil
         end
-        local dx = pos.x - view.pos.x
-        local dz = pos.z - view.pos.z
-        return dx * dx + dz * dz, pos.x, pos.z
+        return get_level_id(gvid), pos.x, pos.z, pos.y
+    end
+
+    local function get_distance_sq(view, level_id, pos_x, pos_z)
+        if level_id ~= view.level_id then
+            return nil
+        end
+        local dx = pos_x - view.pos.x
+        local dz = pos_z - view.pos.z
+        return dx * dx + dz * dz
+    end
+
+    local function locate(category, object_id)
+        local immobile_category = IMMOBILE_CATEGORIES[category]
+        local cached = immobile_category and immobile[object_id]
+        if cached then
+            return cached.level_id, cached.pos_x, cached.pos_z, cached.pos_y
+        end
+        local level_id, pos_x, pos_z, pos_y = read_position(object_id)
+        if level_id and immobile_category then
+            immobile[object_id] = { level_id = level_id, pos_x = pos_x, pos_z = pos_z, pos_y = pos_y }
+        end
+        return level_id, pos_x, pos_z, pos_y
     end
 
     local function rescan(view, entries)
@@ -73,35 +163,55 @@ function new(deps)
         local distances = {}
         local pos_x_by_id = {}
         local pos_z_by_id = {}
+        local pos_y_by_id = {}
         for _, entry in ipairs(entries) do
             local held = found[entry.id]
-            if not (held and held.category) then
-                local category = CATEGORY_BY_SPOT[entry.spot_type]
-                local icon = (not category) and get_icon(entry.spot_type) or nil
-                if category or icon then
-                    local distance_sq = distances[entry.id]
-                    if distance_sq == nil then
-                        local computed, pos_x, pos_z = get_distance_sq(view, entry.id)
-                        distance_sq = computed or false
-                        distances[entry.id] = distance_sq
-                        pos_x_by_id[entry.id] = pos_x
-                        pos_z_by_id[entry.id] = pos_z
-                    end
-                    if distance_sq and distance_sq <= range_sq then
-                        if not held then
-                            order[#order + 1] = entry.id
-                        end
-                        found[entry.id] = {
-                            id = entry.id,
-                            spot_type = entry.spot_type,
-                            category = category,
-                            icon = icon,
-                            distance_sq = distance_sq,
-                            pos_x = pos_x_by_id[entry.id],
-                            pos_z = pos_z_by_id[entry.id],
-                        }
-                    end
+            local spot_type = entry.spot_type
+            local relation = RELATION_SPOTS[spot_type]
+            local status = nil
+            if relation then
+                status = get_relation_status(entry.id)
+                spot_type = status and RELATION_SPOT_BY_STATUS[status]
+            end
+            local category = spot_type and get_live_category(CATEGORY_BY_SPOT[spot_type], entry.id, is_campfire_lit)
+            local icon = (spot_type and not category) and get_icon(spot_type) or nil
+            local priority = category and PRIORITY_CATEGORY or (relation and PRIORITY_RELATION or PRIORITY_ICON)
+            if (category or icon) and not (held and held.priority >= priority) then
+                local distance_sq = distances[entry.id]
+                if distance_sq == nil then
+                    local level_id, pos_x, pos_z, pos_y = locate(category, entry.id)
+                    distance_sq = (level_id and get_distance_sq(view, level_id, pos_x, pos_z)) or false
+                    distances[entry.id] = distance_sq
+                    pos_x_by_id[entry.id] = pos_x
+                    pos_z_by_id[entry.id] = pos_z
+                    pos_y_by_id[entry.id] = pos_y
                 end
+                local pos_y = pos_y_by_id[entry.id]
+                if
+                    distance_sq
+                    and distance_sq <= range_sq
+                    and not (status == "dead" and math.abs(pos_y - view.pos.y) >= CORPSE_DY)
+                then
+                    if not held then
+                        order[#order + 1] = entry.id
+                    end
+                    found[entry.id] = {
+                        id = entry.id,
+                        spot_type = spot_type,
+                        category = category,
+                        icon = icon,
+                        priority = priority,
+                        distance_sq = distance_sq,
+                        pos_x = pos_x_by_id[entry.id],
+                        pos_z = pos_z_by_id[entry.id],
+                        pos_y = pos_y,
+                    }
+                end
+            end
+        end
+        for object_id in pairs(immobile) do
+            if distances[object_id] == nil then
+                immobile[object_id] = nil
             end
         end
         marks = {}
@@ -119,6 +229,21 @@ function new(deps)
         end
     end
 
+    local function refresh_positions(view)
+        for _, mark in ipairs(marks) do
+            if not IMMOBILE_CATEGORIES[mark.category] then
+                local level_id, pos_x, pos_z, pos_y = read_position(mark.id)
+                local distance_sq = level_id and get_distance_sq(view, level_id, pos_x, pos_z)
+                if distance_sq then
+                    mark.distance_sq = distance_sq
+                    mark.pos_x = pos_x
+                    mark.pos_z = pos_z
+                    mark.pos_y = pos_y
+                end
+            end
+        end
+    end
+
     function collector.get_marks(view)
         if not (view and view.pos and view.level_id and view.range) then
             return {}
@@ -126,10 +251,15 @@ function new(deps)
         local entries = get_entries()
         local now = get_time()
         if now >= next_scan or view.level_id ~= scanned_level or view.range > scanned_range then
-            next_scan = now + rescan_ms
+            next_scan = now + rescan_ms + (phased and 0 or phase_ms)
+            phased = true
+            next_position_refresh = now + position_refresh_ms
             scanned_level = view.level_id
             scanned_range = view.range
             rescan(view, entries)
+        elseif now >= next_position_refresh then
+            next_position_refresh = now + position_refresh_ms
+            refresh_positions(view)
         end
         return marks
     end

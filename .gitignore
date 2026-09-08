@@ -1,4 +1,9 @@
+.env
 dist/
+luacov.stats.out
+luacov.report.out
 __pycache__/
 *.pyc
-.env
+stubs/
+.luacheckrc
+.luarc.json

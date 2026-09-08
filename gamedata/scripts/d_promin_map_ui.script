@@ -1,5 +1,6 @@
 local MAX_MARKS = 64
 local ICON_H = 0.0035
+local PDA_ICON_PX = 19
 local ARROW_H = 0.0018
 
 local scratch_pos = vector2()
@@ -19,20 +20,10 @@ local ARROW_GRID = 8
 local ARROW_CELL = 48
 local ARROW_ART_H = 29
 
+local TRANSITION_ART_PX = 128
+
 ICONS = {
     arrow = { id = "wd_map_arrow_frames", scale = ARROW_CELL / ARROW_ART_H },
-    quest = { id = "ui_AlphaLion_PrimaryMission", px_w = 23, px_h = 23 },
-    quest_secondary = { id = "ui_AlphaLion_SecondaryMission", px_w = 23, px_h = 23 },
-    trader = { id = "ui_AlphaLion_Trader-small", px_w = 16, px_h = 16 },
-    mechanic = { id = "ui_AlphaLion_Mechanic-small", px_w = 15, px_h = 14 },
-    medic = { id = "ui_AlphaLion_Medic-small", px_w = 15, px_h = 14 },
-    guide = { id = "ui_AlphaLion_Important-small", px_w = 15, px_h = 14 },
-    barman = { id = "ui_AlphaLion_Barman-small", px_w = 16, px_h = 16 },
-    special = { id = "ui_AlphaLion_Special-small", px_w = 15, px_h = 14 },
-    quest_npc = { id = "ui_AlphaLion_Important-large", px_w = 19, px_h = 19 },
-    campfire = { id = "ui_campfire_icon_lit", px_w = 32, px_h = 32, scale = 25 / 19 },
-    campfire_unlit = { id = "ui_campfire_icon_unlit", px_w = 32, px_h = 32, scale = 25 / 19 },
-    stash = { id = "ui_AlphaLion_Stash-regular", px_w = 27, px_h = 27, scale = 12 / 19 },
     quest_arrow = {
         id = "wd_map_arrow_frames",
         px_w = ARROW_CELL,
@@ -40,14 +31,11 @@ ICONS = {
         scale = ARROW_CELL / ARROW_ART_H / 2,
     },
 }
-
-local TRANSITION_FRAME_SCALE = 32 / 19
-for _, direction in ipairs({ "up", "up_right", "right", "right_down", "down", "down_left", "left", "left_up" }) do
+for _, direction in ipairs(wd_map_marks.TRANSITION_DIRECTIONS) do
     ICONS["transition_" .. direction] = {
         id = "wd_map_transition_" .. direction,
-        px_w = 128,
-        px_h = 128,
-        scale = TRANSITION_FRAME_SCALE,
+        px_w = TRANSITION_ART_PX,
+        px_h = TRANSITION_ART_PX,
     }
 end
 
@@ -63,34 +51,75 @@ local function set_arrow_frame(widget, frame)
 end
 
 local frame_alpha = 0
+local arrow_tint, arrow_tint_alpha = nil, nil
+local white_tint, white_tint_alpha = nil, nil
+local storyline_pin_tint, storyline_pin_tint_alpha = nil, nil
 
 local function get_icon_alpha()
     return d_promin_health_ui.get_ui_alpha()
 end
 
 local function get_player_arrow_tint()
-    return GetARGB(get_icon_alpha(), 106, 255, 89)
+    local alpha = get_icon_alpha()
+    if arrow_tint_alpha ~= alpha then
+        arrow_tint_alpha = alpha
+        arrow_tint = GetARGB(alpha, 106, 255, 89)
+    end
+    return arrow_tint
 end
 
-local function get_screen_rect()
-    local transforms = d_promin_config.transforms
-    local width = VIEW.w * transforms.map_scale
-    local height = VIEW.h * transforms.map_scale
-    return {
-        x = VIEW.x + (VIEW.w - width) / 2 + transforms.map_x,
-        y = VIEW.y + (VIEW.h - height) / 2 + transforms.map_y,
-        w = width,
-        h = height,
-    }
+local function get_white_tint()
+    if white_tint_alpha ~= frame_alpha then
+        white_tint_alpha = frame_alpha
+        white_tint = GetARGB(frame_alpha, 255, 255, 255)
+    end
+    return white_tint
 end
+
+local function get_storyline_pin_tint()
+    if storyline_pin_tint_alpha ~= frame_alpha then
+        storyline_pin_tint_alpha = frame_alpha
+        storyline_pin_tint = GetARGB(frame_alpha, 242, 231, 11)
+    end
+    return storyline_pin_tint
+end
+
+local function get_icon_tint(icon)
+    if icon.tint_alpha ~= frame_alpha then
+        icon.tint_alpha = frame_alpha
+        icon.tint = GetARGB(frame_alpha, icon.r or 255, icon.g or 255, icon.b or 255)
+    end
+    return icon.tint
+end
+
+local layout_cache = nil
+local layout_scale, layout_x, layout_y = nil, nil, nil
 
 function get_layout()
-    return {
-        screen = get_screen_rect(),
+    local transforms = d_promin_config.transforms
+    if
+        layout_cache
+        and layout_scale == transforms.map_scale
+        and layout_x == transforms.map_x
+        and layout_y == transforms.map_y
+    then
+        return layout_cache
+    end
+    layout_scale, layout_x, layout_y = transforms.map_scale, transforms.map_x, transforms.map_y
+    local width = VIEW.w * transforms.map_scale
+    local height = VIEW.h * transforms.map_scale
+    layout_cache = {
+        screen = {
+            x = VIEW.x + (VIEW.w - width) / 2 + transforms.map_x,
+            y = VIEW.y + (VIEW.h - height) / 2 + transforms.map_y,
+            w = width,
+            h = height,
+        },
         icon_h = ICON_H,
         arrow_h = ARROW_H,
         max_marks = MAX_MARKS,
     }
+    return layout_cache
 end
 
 local function set_tint(slot, tint)
@@ -100,24 +129,61 @@ local function set_tint(slot, tint)
     end
 end
 
-local function bind_icon(slot, icon, tint_override)
-    slot.icon_id = binder.bind(slot.widget, icon.id, slot.icon_id)
-    set_tint(slot, tint_override or GetARGB(frame_alpha, icon.r or 255, icon.g or 255, icon.b or 255))
+local function set_shown(slot, flag)
+    if slot.shown ~= flag then
+        slot.shown = flag
+        slot.widget:Show(flag)
+    end
 end
 
-local function get_icon_size(icon)
-    local height = ICON_H * (icon.scale or 1)
+local VARIANT_DY = 1.8
+
+local function get_variant_id(icon, dy)
+    if dy and icon.above and icon.below then
+        if dy > VARIANT_DY then
+            return icon.below
+        elseif dy < -VARIANT_DY then
+            return icon.above
+        end
+    end
+    return icon.id
+end
+
+local function bind_icon(slot, icon, tint_override, dy)
+    slot.icon_id = binder.bind(slot.widget, get_variant_id(icon, dy), slot.icon_id)
+    set_tint(slot, tint_override or get_icon_tint(icon))
+end
+
+local function get_declared_scale(icon)
+    return icon.px_h / PDA_ICON_PX
+end
+
+function get_category_icon(category)
+    local spot = wd_map_marks.SPOT_BY_CATEGORY[category]
+    local declared = spot and wd_map_spots.get_icon(spot)
+    if not declared then
+        return nil
+    end
+    return ICONS[category] or declared, get_declared_scale(declared)
+end
+
+local function resolve_mark_icon(mark)
+    local icon = mark.icon
+    if icon then
+        return icon, get_declared_scale(icon)
+    end
+    return get_category_icon(mark.category)
+end
+
+local function get_icon_size(icon, scale)
+    local height = ICON_H * scale
     return height * icon.px_w / icon.px_h, height
 end
 
 local EDGE_EPSILON = 1e-6
 
-local function place_icon_inside(slot, category, center_x, center_y, screen, icon_override, tint_override)
-    local icon = icon_override or ICONS[category]
-    if not icon then
-        return false
-    end
-    local icon_w, icon_h = get_icon_size(icon)
+local function place_icon_inside(slot, icon, scale, center_x, center_y, screen, tint_override, dy)
+    local icon_w, icon_h = get_icon_size(icon, scale)
     local left = center_x - icon_w / 2
     local top = center_y - icon_h / 2
     if
@@ -128,7 +194,7 @@ local function place_icon_inside(slot, category, center_x, center_y, screen, ico
     then
         return false
     end
-    bind_icon(slot, icon, tint_override)
+    bind_icon(slot, icon, tint_override, dy)
     slot.widget:SetWndPos(scratch_pos:set(left, top))
     slot.widget:SetWndSize(scratch_size:set(icon_w, icon_h))
     return true
@@ -136,7 +202,7 @@ end
 
 local function apply_map_layer(slot, layer, screen)
     slot.tex_id = binder.bind(slot.widget, layer.texture_id, slot.tex_id)
-    set_tint(slot, GetARGB(frame_alpha, 255, 255, 255))
+    set_tint(slot, get_white_tint())
     local width = screen.x2 - screen.x1
     local height = screen.y2 - screen.y1
     local frac = layer.frac
@@ -144,19 +210,19 @@ local function apply_map_layer(slot, layer, screen)
     slot.widget:SetWndPos(scratch_pos:set(screen.x1 + frac.x1 * width, screen.y1 + frac.y1 * height))
     slot.widget:SetWndSize(scratch_size:set((frac.x2 - frac.x1) * width, (frac.y2 - frac.y1) * height))
     slot.widget:SetTextureRect(scratch_rect:set(window.left, window.top, window.right, window.bottom))
-    slot.widget:Show(true)
+    set_shown(slot, true)
 end
 
 local function hide_all(page)
     page.chrome.set_visible(false)
     page.bio.set_visible(false)
     for _, slot in ipairs(page.map_slots) do
-        slot.widget:Show(false)
+        set_shown(slot, false)
     end
     page.arrow:Show(false)
-    page.quest.widget:Show(false)
+    set_shown(page.quest, false)
     for _, slot in ipairs(page.marks) do
-        slot.widget:Show(false)
+        set_shown(slot, false)
     end
 end
 
@@ -193,7 +259,7 @@ function build(ctx)
     page.quest.widget:SetTextureColor(icon_tint)
     page.arrow = ctx.init("arrow")
     local arrow_icon = ICONS.arrow
-    local arrow_side = ARROW_H * (arrow_icon.scale or 1)
+    local arrow_side = ARROW_H * arrow_icon.scale
     page.arrow:SetWndSize(scratch_size:set(arrow_side, arrow_side))
     page.arrow:SetStretchTexture(true)
     binder.set(page.arrow, arrow_icon.id)
@@ -203,7 +269,7 @@ function build(ctx)
     page.arrow:SetTextureColor(page.arrow_tint)
 
     local function reposition()
-        local screen = get_screen_rect()
+        local screen = get_layout().screen
         local x2 = screen.x + screen.w
         local y2 = screen.y + screen.h
         if
@@ -262,7 +328,7 @@ function build(ctx)
             if layer then
                 apply_map_layer(slot, layer, page.screen)
             else
-                slot.widget:Show(false)
+                set_shown(slot, false)
             end
         end
         local player_heading = (state and state.heading) or 0
@@ -279,51 +345,57 @@ function build(ctx)
         local marks = (state and state.marks) or {}
         for index, slot in ipairs(page.marks) do
             local mark = marks[index]
-            if
-                mark
-                and mark.inside
-                and place_icon_inside(
-                    slot,
-                    mark.category,
-                    page.center.x + mark.x,
-                    page.center.y + mark.y,
-                    page.screen,
-                    mark.icon
-                )
-            then
-                slot.widget:Show(true)
-            else
-                slot.widget:Show(false)
+            local shown = false
+            if mark and mark.inside then
+                local icon, scale = resolve_mark_icon(mark)
+                if icon then
+                    shown = place_icon_inside(
+                        slot,
+                        icon,
+                        scale,
+                        page.center.x + mark.x,
+                        page.center.y + mark.y,
+                        page.screen,
+                        nil,
+                        mark.dy
+                    )
+                end
             end
+            set_shown(slot, shown)
         end
         local quest = state and state.quest
         if quest then
             local storyline = quest.category ~= "quest_secondary"
-            local icon, raw_x, raw_y, tint, arrow_frame
+            local icon, scale, raw_x, raw_y, tint, arrow_frame
             if quest.inside then
-                icon = ICONS[storyline and "quest" or "quest_secondary"]
+                icon, scale = get_category_icon(storyline and "quest" or "quest_secondary")
                 raw_x, raw_y = quest.x, quest.y
                 page.quest_frame = nil
             else
                 icon = ICONS.quest_arrow
+                scale = icon.scale
                 raw_x, raw_y = quest.pin_x, quest.pin_y
-                tint = storyline and GetARGB(frame_alpha, 242, 231, 11) or nil
+                tint = storyline and get_storyline_pin_tint() or nil
                 arrow_frame = get_arrow_frame(quest.x, quest.y)
             end
-            local icon_w, icon_h = get_icon_size(icon)
+            if not icon then
+                set_shown(page.quest, false)
+                return
+            end
+            local icon_w, icon_h = get_icon_size(icon, scale)
             local center_x =
                 math.max(page.screen.x1 + icon_w / 2, math.min(page.screen.x2 - icon_w / 2, page.center.x + raw_x))
             local center_y =
                 math.max(page.screen.y1 + icon_h / 2, math.min(page.screen.y2 - icon_h / 2, page.center.y + raw_y))
-            local shown = place_icon_inside(page.quest, nil, center_x, center_y, page.screen, icon, tint)
+            local shown = place_icon_inside(page.quest, icon, scale, center_x, center_y, page.screen, tint, quest.dy)
             if arrow_frame and page.quest_frame ~= arrow_frame then
                 page.quest_frame = arrow_frame
                 set_arrow_frame(page.quest.widget, arrow_frame)
             end
-            page.quest.widget:Show(shown)
+            set_shown(page.quest, shown)
         else
             page.quest_frame = nil
-            page.quest.widget:Show(false)
+            set_shown(page.quest, false)
         end
     end
 
