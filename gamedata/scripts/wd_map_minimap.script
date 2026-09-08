@@ -16,6 +16,8 @@ local function parse_bound_rect(raw)
 end
 
 local function new_layer(id, placement, bounds, texture_width, texture_height)
+    local window = {}
+    local frac = {}
     return {
         id = id,
         texture_width = texture_width,
@@ -24,44 +26,42 @@ local function new_layer(id, placement, bounds, texture_width, texture_height)
         origin_y = placement.y1,
         pixels_per_meter_x = (placement.x2 - placement.x1) / (bounds.x2 - bounds.x1),
         pixels_per_meter_z = (placement.y2 - placement.y1) / (bounds.z2 - bounds.z1),
+        raw_window = {},
+        slot = { texture_id = id, window = window, frac = frac },
     }
 end
 
-local function get_layer_window(layer, bounds, pos, span_x_m, span_y_m)
+local function fill_layer_window(layer, bounds, pos, span_x_m, span_y_m, out)
     local center_x = layer.origin_x + (pos.x - bounds.x1) * layer.pixels_per_meter_x
     local center_y = layer.origin_y + (bounds.z2 - pos.z) * layer.pixels_per_meter_z
     local half_x = span_x_m / 2 * layer.pixels_per_meter_x
     local half_y = span_y_m / 2 * layer.pixels_per_meter_z
-    return {
-        left = center_x - half_x,
-        top = center_y - half_y,
-        right = center_x + half_x,
-        bottom = center_y + half_y,
-    }
+    out.left = center_x - half_x
+    out.top = center_y - half_y
+    out.right = center_x + half_x
+    out.bottom = center_y + half_y
+    return out
 end
 
-local function clamp_to_texture(window, texture_width, texture_height)
+local function clamp_to_texture(window, texture_width, texture_height, out_window, out_frac)
     local span_x = window.right - window.left
     local span_y = window.bottom - window.top
     if span_x <= 0 or span_y <= 0 then
-        return nil
+        return false
     end
     local left = math.max(window.left, 0)
     local top = math.max(window.top, 0)
     local right = math.min(window.right, texture_width)
     local bottom = math.min(window.bottom, texture_height)
     if right <= left or bottom <= top then
-        return nil
+        return false
     end
-    return {
-        window = { left = left, top = top, right = right, bottom = bottom },
-        frac = {
-            x1 = (left - window.left) / span_x,
-            y1 = (top - window.top) / span_y,
-            x2 = (right - window.left) / span_x,
-            y2 = (bottom - window.top) / span_y,
-        },
-    }
+    out_window.left, out_window.top, out_window.right, out_window.bottom = left, top, right, bottom
+    out_frac.x1 = (left - window.left) / span_x
+    out_frac.y1 = (top - window.top) / span_y
+    out_frac.x2 = (right - window.left) / span_x
+    out_frac.y2 = (bottom - window.top) / span_y
+    return true
 end
 
 function get_heading(dir)
@@ -71,7 +71,7 @@ function get_heading(dir)
     return wd_compass.get_heading(dir)
 end
 
-function project_mark(player_pos, target_pos, zoom_m, screen_w, screen_h)
+function project_mark_into(out, player_pos, target_pos, zoom_m, screen_w, screen_h)
     if not (player_pos and target_pos and zoom_m and zoom_m > 0 and screen_w and screen_h and screen_h > 0) then
         return nil
     end
@@ -80,13 +80,16 @@ function project_mark(player_pos, target_pos, zoom_m, screen_w, screen_h)
     local offset_y = -(target_pos.z - player_pos.z) * scale
     local half_w = screen_w / 2
     local half_h = screen_h / 2
-    return {
-        x = offset_x,
-        y = offset_y,
-        inside = math.abs(offset_x) <= half_w and math.abs(offset_y) <= half_h,
-        pin_x = clamp(offset_x, -half_w, half_w),
-        pin_y = clamp(offset_y, -half_h, half_h),
-    }
+    out.x = offset_x
+    out.y = offset_y
+    out.inside = math.abs(offset_x) <= half_w and math.abs(offset_y) <= half_h
+    out.pin_x = clamp(offset_x, -half_w, half_w)
+    out.pin_y = clamp(offset_y, -half_h, half_h)
+    return out
+end
+
+function project_mark(player_pos, target_pos, zoom_m, screen_w, screen_h)
+    return project_mark_into({}, player_pos, target_pos, zoom_m, screen_w, screen_h)
 end
 
 function new(deps)
@@ -102,12 +105,11 @@ function new(deps)
             end
             return ini_file(reader, "$game_levels$")
         end
-    local get_maps_ini = deps.get_maps_ini or function()
-        return ini_file("game_maps_single.ltx")
-    end
+    local get_maps_ini = deps.get_maps_ini or game_ini
     local view = {}
     local bounds = nil
     local layers = {}
+    local visible = {}
     local function add_global_layer(level_name)
         local maps_ini = get_maps_ini()
         local canvas = parse_bound_rect(maps_ini and maps_ini:r_string_ex("global_map", "bound_rect"))
@@ -169,22 +171,25 @@ function new(deps)
         if not (bounds and pos and span_x_m and span_x_m > 0 and span_y_m and span_y_m > 0) then
             return nil
         end
-        local visible = {}
+        local count = 0
         for _, layer in ipairs(layers) do
+            local slot = layer.slot
             local clamped = clamp_to_texture(
-                get_layer_window(layer, bounds, pos, span_x_m, span_y_m),
+                fill_layer_window(layer, bounds, pos, span_x_m, span_y_m, layer.raw_window),
                 layer.texture_width,
-                layer.texture_height
+                layer.texture_height,
+                slot.window,
+                slot.frac
             )
             if clamped then
-                visible[#visible + 1] = {
-                    texture_id = layer.id,
-                    window = clamped.window,
-                    frac = clamped.frac,
-                }
+                count = count + 1
+                visible[count] = slot
             end
         end
-        if #visible == 0 then
+        for index = #visible, count + 1, -1 do
+            visible[index] = nil
+        end
+        if count == 0 then
             return nil
         end
         return visible

@@ -2,6 +2,7 @@ local SWEEP_CHUNK = 640
 local SNAPSHOT_INTERVAL_MS = 1000
 local PAUSE_RESTART_MS = 1000
 local SWEEP_INTERVAL_MS = 100
+local REFRESH_INTERVAL_MS = 1000
 
 local function get_engine_max_id()
     if alife then
@@ -19,6 +20,10 @@ local function get_engine_object_spots(object_id)
     return level.map_get_object_spots_by_id(object_id)
 end
 
+local function engine_has_spot(object_id, spot_type)
+    return level.map_has_object_spot(object_id, spot_type) ~= 0
+end
+
 function new(deps)
     deps = deps or {}
     local get_max_id = deps.get_max_id or get_engine_max_id
@@ -32,6 +37,7 @@ function new(deps)
     if get_object_spots == nil then
         get_object_spots = level.map_get_object_spots_by_id and get_engine_object_spots or false
     end
+    local has_spot = deps.has_spot or engine_has_spot
 
     local registry = {}
     local entries = {}
@@ -87,13 +93,6 @@ function new(deps)
         publish()
     end
 
-    function registry.request_sweep()
-        if sweeping or get_all_spots then
-            return
-        end
-        start_sweep()
-    end
-
     function registry.is_sweeping()
         return sweeping or (get_all_spots and true or false)
     end
@@ -131,6 +130,36 @@ function new(deps)
         end
     end
 
+    function registry.add(spot_type, object_id)
+        record(entries, held, spot_type, object_id)
+        if sweeping then
+            record(pending_entries, pending, spot_type, object_id)
+        end
+    end
+
+    function registry.validate()
+        local kept_entries = {}
+        local kept = {}
+        for _, entry in ipairs(entries) do
+            if has_spot(entry.id, entry.spot_type) then
+                record(kept_entries, kept, entry.spot_type, entry.id)
+            end
+        end
+        entries = kept_entries
+        held = kept
+    end
+
+    function registry.refresh_ids(ids)
+        if not get_object_spots then
+            return
+        end
+        for _, object_id in ipairs(ids) do
+            for _, spot in ipairs(get_object_spots(object_id) or {}) do
+                registry.add(spot.spot_type, object_id)
+            end
+        end
+    end
+
     function registry.reset()
         entries = {}
         held = {}
@@ -152,67 +181,99 @@ function new(deps)
     return registry
 end
 
-local spots_xml = nil
+local declarations = {}
+local shared_icons = nil
 
-local function get_spots_xml()
-    if not spots_xml then
-        spots_xml = CScriptXmlInit()
-        spots_xml:ParseFile("map_spots.xml")
+local function read_text(xml_obj, element)
+    local kid_count = 0
+    local only_kid = nil
+    xml_obj:iterateChildren(element, function(kid)
+        kid_count = kid_count + 1
+        only_kid = kid
+    end)
+    if kid_count == 1 and xml_obj:isText(only_kid) then
+        return xml_obj:getText(element)
     end
-    return spots_xml
+    return nil
 end
 
-local function read_xml_node(name)
-    local xml = get_spots_xml()
-    xml:NavigateToRoot()
-    if not xml:NodeExist(name, 0) then
-        return nil
-    end
+local function read_declaration_node(xml_obj, element)
+    local attrs = xml_obj:getElementAttr(element)
     local node = {
-        width = tonumber(xml:ReadAttribute(name, 0, "width")),
-        height = tonumber(xml:ReadAttribute(name, 0, "height")),
+        width = tonumber(attrs.width),
+        height = tonumber(attrs.height),
     }
-    xml:NavigateToNode(name, 0)
-    if xml:NodeExist("mini_map", 0) then
-        node.mini_map = xml:ReadAttribute("mini_map", 0, "spot")
-        node.pointer = xml:ReadAttribute("mini_map", 0, "pointer")
-    end
-    if xml:NodeExist("texture", 0) then
-        node.texture = xml:ReadValue("texture", 0)
-        node.r = tonumber(xml:ReadAttribute("texture", 0, "r"))
-        node.g = tonumber(xml:ReadAttribute("texture", 0, "g"))
-        node.b = tonumber(xml:ReadAttribute("texture", 0, "b"))
-    end
+    xml_obj:iterateChildren(element, function(child)
+        if not xml_obj:isElement(child) then
+            return
+        end
+        local child_name = xml_obj:getElementName(child)
+        if child_name == "mini_map" then
+            local child_attrs = xml_obj:getElementAttr(child)
+            node.mini_map = child_attrs.spot
+            node.pointer = child_attrs.pointer
+        elseif child_name == "texture" then
+            local child_attrs = xml_obj:getElementAttr(child)
+            node.texture = read_text(xml_obj, child)
+            node.r = tonumber(child_attrs.r)
+            node.g = tonumber(child_attrs.g)
+            node.b = tonumber(child_attrs.b)
+        elseif child_name == "texture_above" then
+            node.texture_above = read_text(xml_obj, child)
+        elseif child_name == "texture_below" then
+            node.texture_below = read_text(xml_obj, child)
+        end
+    end)
     return node
+end
+
+function load_declarations(xml_obj)
+    local loaded = {}
+    xml_obj:iterateChildren(xml_obj:getRoot(), function(element)
+        if xml_obj:isElement(element) then
+            loaded[xml_obj:getElementName(element)] = read_declaration_node(xml_obj, element)
+        end
+    end)
+    declarations = loaded
+    shared_icons = nil
+end
+
+local function read_declaration(name)
+    return declarations[name]
 end
 
 function new_icons(deps)
     deps = deps or {}
-    local read_node = deps.read_node or read_xml_node
+    local read_node = deps.read_node or read_declaration
     local icons = {}
     local cache = {}
 
     function icons.get(spot_type)
-        if type(spot_type) ~= "string" then
-            return nil
-        end
         local hit = cache[spot_type]
         if hit ~= nil then
             return hit or nil
+        end
+        if type(spot_type) ~= "string" then
+            return nil
         end
         local resolved = false
         local declaration = read_node(spot_type)
         local mini_name = declaration and declaration.mini_map
         local mini = mini_name and mini_name ~= "" and read_node(mini_name)
-        if mini and type(mini.texture) == "string" and mini.texture ~= "" then
+        local px_w = mini and (mini.width or 16)
+        local px_h = mini and (mini.height or 16)
+        if mini and type(mini.texture) == "string" and mini.texture ~= "" and px_w > 0 and px_h > 0 then
+            local has_variants = type(mini.texture_above) == "string" and type(mini.texture_below) == "string"
             resolved = {
                 id = mini.texture,
-                px_w = mini.width or 16,
-                px_h = mini.height or 16,
+                px_w = px_w,
+                px_h = px_h,
                 pointer = (declaration.pointer ~= nil and declaration.pointer ~= ""),
                 r = mini.r,
                 g = mini.g,
                 b = mini.b,
+                above = has_variants and mini.texture_above or nil,
+                below = has_variants and mini.texture_below or nil,
             }
         end
         cache[spot_type] = resolved
@@ -223,7 +284,6 @@ function new_icons(deps)
 end
 
 local shared_registry = nil
-local shared_icons = nil
 
 function get_registry()
     if not shared_registry then
@@ -240,21 +300,42 @@ function get_icon(spot_type)
 end
 
 local allow_sweep = wd_core.throttle(SWEEP_INTERVAL_MS)
+local allow_refresh = wd_core.throttle(REFRESH_INTERVAL_MS)
+local refresh_requested = false
+
+function request_refresh()
+    refresh_requested = true
+end
+
+local function get_online_ids()
+    return db.OnlineStalkers or {}
+end
+
+local function on_map_location_added(spot_type, object_id)
+    get_registry().add(spot_type, object_id)
+end
 
 local function on_first_update()
     get_registry().reset()
-    get_spots_xml()
+    local kind = callback.map_location_added
+    if kind then
+        db.actor:set_callback(kind, on_map_location_added)
+    end
 end
 
 function actor_on_update()
     local registry = get_registry()
-    if not registry.is_sweeping() then
+    if registry.is_sweeping() then
+        if allow_sweep() then
+            registry.update()
+        end
         return
     end
-    if registry.is_ready() and not allow_sweep() then
-        return
+    if refresh_requested and allow_refresh() then
+        refresh_requested = false
+        registry.validate()
+        registry.refresh_ids(get_online_ids())
     end
-    registry.update()
 end
 
 function register()
