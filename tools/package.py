@@ -2,12 +2,27 @@
 
 import argparse
 import shutil
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_OUTPUT = ROOT / "dist" / "WearableDevices.zip"
+
+FOMOD_PATH_ATTRS = {"folder": "source", "file": "source", "image": "path"}
+
+
+def check_fomod_sources(stage: Path):
+    config = stage / "fomod" / "ModuleConfig.xml"
+    missing = []
+    for node in ET.parse(config).iter():
+        attr = FOMOD_PATH_ATTRS.get(node.tag)
+        ref = node.get(attr) if attr else None
+        if ref and not (stage / Path(*ref.split("\\"))).exists():
+            missing.append(ref)
+    if missing:
+        raise SystemExit("ModuleConfig.xml references paths missing from the package: " + ", ".join(missing))
 
 
 def build(output: str | Path):
@@ -23,6 +38,7 @@ def build(output: str | Path):
             shutil.copytree(option / "gamedata", stage / "src" / option.name / "gamedata")
     shutil.copytree(ROOT / "fomod", stage / "fomod")
     shutil.copy2(ROOT / "README.md", stage / "README.md")
+    check_fomod_sources(stage)
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
