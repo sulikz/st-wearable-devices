@@ -21,6 +21,7 @@ local ARROW_CELL = 48
 local ARROW_ART_H = 29
 
 local TRANSITION_ART_PX = 128
+local TRANSITION_FRAME_SCALE = 32 / 19
 
 ICONS = {
     arrow = { id = "wd_map_arrow_frames", scale = ARROW_CELL / ARROW_ART_H },
@@ -36,6 +37,7 @@ for _, direction in ipairs(wd_map_marks.TRANSITION_DIRECTIONS) do
         id = "wd_map_transition_" .. direction,
         px_w = TRANSITION_ART_PX,
         px_h = TRANSITION_ART_PX,
+        scale = TRANSITION_FRAME_SCALE,
     }
 end
 
@@ -164,7 +166,11 @@ function get_category_icon(category)
     if not declared then
         return nil
     end
-    return ICONS[category] or declared, get_declared_scale(declared)
+    local entry = ICONS[category]
+    if entry then
+        return entry, entry.scale or get_declared_scale(declared)
+    end
+    return declared, get_declared_scale(declared)
 end
 
 local function resolve_mark_icon(mark)
