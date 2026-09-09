@@ -52,24 +52,87 @@
 				<texture>ui_button_inv_h</texture>
 			</highlight>
 			<pic stretch="1" align="c" alignment="c"/>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
+			<upgrade width="12" height="12" stretch="1">
+				<texture a="180">ui_upgrade_arrow2</texture>
+			</upgrade>
 		</cell>
 		<cell_1 x="0" y="0" width="38" height="50" stretch="1">
 			<pic stretch="1" align="c" alignment="c"/>
 			<highlight stretch="1">
 				<texture>ui_button_inv_h</texture>
 			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
 		</cell_1>
 		<cell_2 x="0" y="66" width="38" height="50" stretch="1">
 			<pic stretch="1" align="c" alignment="c"/>
 			<highlight stretch="1">
 				<texture>ui_button_inv_h</texture>
 			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
 		</cell_2>
 		<cell_3 x="0" y="131" width="38" height="50" stretch="1">
 			<pic stretch="1" align="c" alignment="c"/>
 			<highlight stretch="1">
 				<texture>ui_button_inv_h</texture>
 			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
 		</cell_3>
 	</cont_slots>
 
@@ -83,24 +146,87 @@
 				<texture>ui_button_inv_h</texture>
 			</highlight>
 			<pic stretch="1" align="c" alignment="c"/>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
+			<upgrade width="12" height="12" stretch="1">
+				<texture a="180">ui_upgrade_arrow2</texture>
+			</upgrade>
 		</cell>
 		<cell_1 x="0" y="0" width="38" height="50" stretch="1">
 			<pic stretch="1" align="c" alignment="c"/>
 			<highlight stretch="1">
 				<texture>ui_button_inv_h</texture>
 			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
 		</cell_1>
 		<cell_2 x="0" y="66" width="38" height="50" stretch="1">
 			<pic stretch="1" align="c" alignment="c"/>
 			<highlight stretch="1">
 				<texture>ui_button_inv_h</texture>
 			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
 		</cell_2>
 		<cell_3 x="0" y="131" width="38" height="50" stretch="1">
 			<pic stretch="1" align="c" alignment="c"/>
 			<highlight stretch="1">
 				<texture>ui_button_inv_h</texture>
 			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="34" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="34" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
 		</cell_3>
 	</cont_modules>
 

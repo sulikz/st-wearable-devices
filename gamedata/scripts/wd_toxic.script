@@ -1,3 +1,30 @@
+-- If you want to make your Toxic Air fork work with WD, define this in your toxic_air.script
+--
+--   function get_air_source()
+--       return { kind = "tank", cond = 0.73, hit = 0.015 }
+--   end
+--
+-- kind     string  | Which thing is draining i.e. "filter" or "tank"
+-- cond     number  | Condition of the filter/tank, 0..1.
+-- hit      number  | How much condition last tick took off. 0..1 scale, 0 = not draining.
+--          keep reporting it after condition hits 0, so WD indicates empty filter instead of switching to clock time.
+--
+-- Return nil when nothing is equipped
+
+local get_redux_air_source
+
+local function get_air_source()
+    local get_fork_source = toxic_air.get_air_source
+    if not get_fork_source then
+        return get_redux_air_source()
+    end
+    local fork_source = get_fork_source()
+    if fork_source and fork_source.kind and fork_source.cond then
+        return fork_source
+    end
+    return nil
+end
+
 local TICK_MS = 1000
 local PERIOD_MIN_MS = 500
 local PERIOD_MAX_MS = 1100
@@ -5,35 +32,38 @@ local WARMUP_TICKS = 10
 local STALL_TICKS = 4
 local PERIOD_NOISE_MS = 10
 local DEADBAND_MIN_MS = 2000
-local SOURCE_REFRESH_MS = 250
+local REDUX_HIT_REFRESH_MS = 250
+local REDUX_TANK_FLOOR = 0.001
 
-local stats_by_section = {}
+local observed_ms
+local source
+local tracked_kind
 
 local function new_edge_tracker()
     return { partial = true, span_ticks = 0, span_ms = 0 }
 end
 
-local filter_edges = new_edge_tracker()
-local tank_edges = new_edge_tracker()
-local observed_ms
-local allow_source_refresh = wd_core.throttle(SOURCE_REFRESH_MS)
-local source_tracker
-local source_hit
+local tracker = new_edge_tracker()
 
-local function get_stats(section)
-    local stats = stats_by_section[section]
+local redux_stats_by_section = {}
+local redux_source = {}
+local redux_hits = { filter = 0, tank = 0 }
+local allow_redux_hit_refresh = wd_core.throttle(REDUX_HIT_REFRESH_MS)
+
+local function get_redux_item_stats(section)
+    local stats = redux_stats_by_section[section]
     if not stats then
         stats = {
             air_immunity = ini_sys:r_float_ex(section, "air_immunity") or 0,
             flow_rate = ini_sys:r_float_ex(section, "flow_rate") or 0,
             flow_factor = ini_sys:r_float_ex(section, "flow_factor") or 0,
         }
-        stats_by_section[section] = stats
+        redux_stats_by_section[section] = stats
     end
     return stats
 end
 
-local function get_config_mult(key)
+local function get_redux_config_mult(key)
     if toxic_air_mcm and toxic_air_mcm.get_config then
         return toxic_air_mcm.get_config(key)
     end
@@ -44,61 +74,70 @@ function is_installed()
     return toxic_air ~= nil
 end
 
-local function get_filter()
-    return toxic_air.filters and toxic_air.filters[toxic_air.cached_filter_id]
+local function get_redux_filter()
+    local filters = toxic_air.filters
+    return filters and filters[toxic_air.cached_filter_id]
 end
 
-function get_filter_capacity()
-    if not toxic_air then
-        return nil
-    end
-    local filter = get_filter()
-    if filter then
-        return filter.cond
-    end
-    return toxic_air.cached_tank_cond
-end
-
-local function get_drain_source()
+local function get_redux_filter_hit(section, flow_mult)
     local toxic = toxic_air.toxic_dmg or 0
-    local flow_mult = get_config_mult("flow_rate_mult") or 1
-    local filter = get_filter()
-    if filter and toxic > 0 and filter.cond and filter.cond > 0 then
-        local stats = get_stats(filter.name)
-        if
-            stats.air_immunity > toxic
-            and stats.flow_rate > 0
-            and not (toxic_air.actor_in_safe_zone and toxic_air.actor_in_safe_zone())
-        then
-            local hit = stats.flow_rate * (toxic / stats.air_immunity) ^ stats.flow_factor * flow_mult
-            if hit > 0 then
-                return filter_edges, hit
-            end
-        end
+    if toxic <= 0 then
+        return 0
     end
+    local is_in_safe_zone = toxic_air.actor_in_safe_zone
+    if is_in_safe_zone and is_in_safe_zone() then
+        return 0
+    end
+    local stats = get_redux_item_stats(section)
+    if not (stats.air_immunity > toxic and stats.flow_rate > 0) then
+        return 0
+    end
+    return stats.flow_rate * (toxic / stats.air_immunity) ^ stats.flow_factor * flow_mult
+end
 
+local function get_redux_tank_hit(flow_mult)
     local tanks = toxic_air.tanks
-    local tank_cond = toxic_air.cached_tank_cond
-    if not (tanks and next(tanks) and tank_cond and tank_cond > 0) then
-        return nil
+    if not (tanks and next(tanks) and db.actor) then
+        return 0
     end
-    local sprint_mult = IsMoveState("mcSprint") and (get_config_mult("tank_sprint_mult") or 1) or 1
-    local hit
+    local hit = 0
     db.actor:iterate_belt(function(owner, tank)
-        if not hit and tanks[tank:id()] then
-            local tank_hit = get_stats(tank:section()).flow_rate * flow_mult * sprint_mult
-            if tank_hit > 0 then
-                hit = tank_hit
-            end
+        if hit <= 0 and tanks[tank:id()] then
+            hit = get_redux_item_stats(tank:section()).flow_rate * flow_mult
         end
     end)
-    if not hit then
-        return nil
-    end
-    return tank_edges, hit
+    return hit
 end
 
-local function observe_cond(tracker, cond, now)
+local function refresh_redux_hits(filter, filter_cond, tank_cond)
+    local flow_mult = get_redux_config_mult("flow_rate_mult") or 1
+    redux_hits.filter = filter_cond and get_redux_filter_hit(filter.name, flow_mult) or 0
+    redux_hits.tank = tank_cond and get_redux_tank_hit(flow_mult) or 0
+end
+
+get_redux_air_source = function()
+    local filter = get_redux_filter()
+    local filter_cond = filter and filter.cond
+    local tank_cond = toxic_air.cached_tank_cond
+    if allow_redux_hit_refresh() then
+        refresh_redux_hits(filter, filter_cond, tank_cond)
+    end
+    local filter_hit, tank_hit = redux_hits.filter, redux_hits.tank
+    local tank_draining = tank_cond and tank_hit > 0
+    if filter_cond and (filter_hit > 0 or not tank_draining) then
+        redux_source.kind, redux_source.cond, redux_source.hit = "filter", filter_cond, filter_hit
+    elseif tank_cond then
+        if tank_cond - tank_hit <= REDUX_TANK_FLOOR then
+            tank_cond = 0
+        end
+        redux_source.kind, redux_source.cond, redux_source.hit = "tank", tank_cond, tank_hit
+    else
+        return nil
+    end
+    return redux_source
+end
+
+local function observe_cond(cond, now)
     local previous = tracker.last_cond
     tracker.last_cond = cond
     if cond == nil then
@@ -130,7 +169,7 @@ local function observe_cond(tracker, cond, now)
     tracker.edge_ms = now
 end
 
-local function get_period_ms(tracker)
+local function get_period_ms()
     if tracker.span_ticks < WARMUP_TICKS then
         return TICK_MS
     end
@@ -139,6 +178,7 @@ end
 
 function observe_drain_edges()
     if not toxic_air then
+        source = nil
         return
     end
     local now = wd_core.get_time_ms()
@@ -146,27 +186,34 @@ function observe_drain_edges()
         return
     end
     observed_ms = now
-    local filter = get_filter()
-    observe_cond(filter_edges, filter and filter.cond, now)
-    observe_cond(tank_edges, toxic_air.cached_tank_cond, now)
+    source = get_air_source()
+    local kind = source and source.kind
+    if kind and kind ~= tracked_kind then
+        tracked_kind = kind
+        tracker = new_edge_tracker()
+    end
+    observe_cond(source and source.cond, now)
+end
+
+function get_filter_capacity()
+    observe_drain_edges()
+    return source and source.cond
+end
+
+function is_draining()
+    observe_drain_edges()
+    local hit = source and source.hit
+    return (hit and hit > 0) or false
 end
 
 function get_filter_time_left()
-    if not (db.actor and toxic_air and toxic_air_mcm) then
-        return nil
-    end
-    observe_drain_edges()
-    if allow_source_refresh() then
-        source_tracker, source_hit = get_drain_source()
-    end
-    local tracker = source_tracker
-    if not (tracker and tracker.last_cond) then
+    if not is_draining() then
         return nil
     end
 
-    local now = wd_core.get_time_ms()
-    local period_ms = get_period_ms(tracker)
-    local ticks_left = tracker.last_cond / source_hit
+    local now = observed_ms
+    local period_ms = get_period_ms()
+    local ticks_left = tracker.last_cond / source.hit
     local noise_ms = math.max(PERIOD_NOISE_MS, tracker.frame_ms)
     local deadband_ms = math.max(DEADBAND_MIN_MS, noise_ms * ticks_left / math.sqrt(math.max(tracker.span_ticks, 1)))
     if not tracker.shown_period_ms or math.abs(period_ms - tracker.shown_period_ms) * ticks_left > deadband_ms then
@@ -179,7 +226,11 @@ function get_filter_time_left()
     end
     local ref_ms = math.min(now, edge_ms + STALL_TICKS * tracker.shown_period_ms)
     local left_ms = math.floor(edge_ms + ticks_left * tracker.shown_period_ms - ref_ms + 0.5)
-    return math.max(0, math.ceil(left_ms / 1000))
+    local seconds_left = math.ceil(left_ms / 1000)
+    if seconds_left <= 0 then
+        return 0
+    end
+    return seconds_left
 end
 
 function register()

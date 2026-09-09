@@ -42,7 +42,7 @@ function get_display_digits()
         math.floor(low / 10),
         low % 10,
     }
-    if seconds_left and digits[1] == 0 then
+    if seconds_left and seconds_left > 0 and digits[1] == 0 then
         digits[1] = nil
     end
     return digits
