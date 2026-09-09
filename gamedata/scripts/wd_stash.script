@@ -1,7 +1,7 @@
 local RARE_SPOT = "treasure_searched"
 local DROPS = {
-    { section = "wd_promin_module_map", chance = 0.15, rare_only = true },
-    { section = "wd_promin_upgrade_kit", chance = 0.05 },
+    { section = "wd_promin_module_map", rare = 0.15 },
+    { section = "wd_promin_upgrade_kit", common = 0.05, rare = 0.15 },
 }
 
 local function inject_stash_loot(box)
@@ -9,9 +9,10 @@ local function inject_stash_loot(box)
     if type(treasure_manager.caches[box_id]) ~= "string" then
         return
     end
-    local rare = level.map_has_object_spot(box_id, RARE_SPOT) ~= 0
+    local tier = level.map_has_object_spot(box_id, RARE_SPOT) ~= 0 and "rare" or "common"
     for _, drop in ipairs(DROPS) do
-        if (rare or not drop.rare_only) and math.random() < drop.chance then
+        local chance = drop[tier]
+        if chance and math.random() < chance then
             alife_create_item(drop.section, box)
         end
     end
