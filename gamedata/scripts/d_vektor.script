@@ -295,12 +295,9 @@ end
 
 local function update_status_bar()
     local mode = d_vektor_config.get_status_bar()
-    if mode ~= "stamina" then
-        local capacity = wd_toxic.get_filter_capacity()
-        if capacity or mode == "toxic" then
-            get_ui().set_status_bar(true, capacity or 0)
-            return
-        end
+    if mode == "toxic" or (mode == "dynamic" and wd_toxic.is_draining()) then
+        get_ui().set_status_bar(true, wd_toxic.get_filter_capacity() or 0)
+        return
     end
     get_ui().set_status_bar(false, db.actor and db.actor.power or 0)
 end
