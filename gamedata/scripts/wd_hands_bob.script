@@ -73,11 +73,11 @@ local function is_accelerated()
     return without_accel
 end
 
+local function is_zoomed()
+    return axr_main.weapon_is_zoomed and db.actor and db.actor:active_item() ~= nil
+end
+
 local function get_move_state()
-    local zoomed = axr_main.weapon_is_zoomed and db.actor and db.actor:active_item() ~= nil
-    if zoomed then
-        return nil
-    end
     if not IsMoveState("mcAnyMove") then
         return nil
     end
@@ -173,8 +173,8 @@ local function drive_side(side, speed, power)
     play_side(side, speed, power, true)
 end
 
-local function step_pair(pair, state, need_right, need_left, raised, delta)
-    local def = pair.always_def or (state and pair.defs[state])
+local function step_pair(pair, state, zoomed, need_right, need_left, raised, delta)
+    local def = not zoomed and (pair.always_def or (state and pair.defs[state])) or nil
     local base = def and def.power or 0
     local left_base = raised and base * (def and def.raised_scale or 0) or base
     local next_right = slew(pair.right.power, need_right and base or 0, delta)
@@ -202,10 +202,11 @@ function actor_on_update()
     local delta = get_engine_delta_ms(now)
     updated_at = now
     local state = get_move_state()
+    local zoomed = is_zoomed()
     local need_right, need_left = get_need()
     local raised = wd_inspect.is_pose_up()
     for pair_index = 1, #clip_pairs do
-        step_pair(clip_pairs[pair_index], state, need_right, need_left, raised, delta)
+        step_pair(clip_pairs[pair_index], state, zoomed, need_right, need_left, raised, delta)
     end
 end
 
