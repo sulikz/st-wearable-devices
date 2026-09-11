@@ -72,6 +72,17 @@ function get_actor_global_pos()
     return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z)
 end
 
+IGNORED_TASK_PREFIXES = { "drx_sl_" }
+
+local function is_ignored_task(task_id)
+    for _, prefix in ipairs(IGNORED_TASK_PREFIXES) do
+        if string.sub(task_id, 1, #prefix) == prefix then
+            return true
+        end
+    end
+    return false
+end
+
 function list_task_targets()
     if not (db.actor and task_manager and task_manager.get_task_manager) then
         return {}
@@ -82,8 +93,8 @@ function list_task_targets()
         return {}
     end
     local targets = {}
-    for _, task in pairs(task_info) do
-        if task.t then
+    for task_id, task in pairs(task_info) do
+        if task.t and not is_ignored_task(task_id) then
             local target_id = tonumber(task.current_target)
             if target_id then
                 targets[#targets + 1] = {
@@ -95,24 +106,6 @@ function list_task_targets()
         end
     end
     return targets
-end
-
-function list_active_tasks()
-    local active = {}
-    for _, target in ipairs(list_task_targets()) do
-        if target.active then
-            active[#active + 1] = target
-        end
-    end
-    return active
-end
-
-function list_active_task_target_ids()
-    local ids = {}
-    for _, target in ipairs(list_active_tasks()) do
-        ids[#ids + 1] = target.id
-    end
-    return ids
 end
 
 local level_id_by_gvid = {}
@@ -130,7 +123,12 @@ function get_level_id_of(gvid)
 end
 
 function get_active_task_target()
-    return list_active_tasks()[1]
+    for _, target in ipairs(list_task_targets()) do
+        if target.active then
+            return target
+        end
+    end
+    return nil
 end
 
 function get_default_target_id()

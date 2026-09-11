@@ -123,6 +123,7 @@ local MS = {
     STOW_MAX = 2000,
     RESTORE_WAIT = 1200,
     DETECTOR_SHOW_HOLD = 700,
+    DETECTOR_SWAP_HOLD = 2000,
     MELEE_GRACE = 1500,
     RECOVER_MAX = 3000,
     FIDGET_MIN = 12000,
@@ -239,6 +240,7 @@ local fidget_at = 0
 local require_release = false
 local prev_held = false
 local pending_show_until = 0
+local relower_weapon_id = nil
 local zoom_cancel_sent = false
 local zoom_cancel_tries = 0
 local zoom_block_until = 0
@@ -435,11 +437,24 @@ local function forget_motion()
     motion_end = 0
 end
 
+-- engine re_sync_anim never re-syncs left hands model's pivot partition
+local function resync_hands_models()
+    local wpn = db.actor and db.actor:active_item()
+    if not wpn or wpn:get_state() ~= WPN_STATE_IDLE or not game.hud_motion_allowed() then
+        return
+    end
+    wpn:switch_state(WPN_STATE_IDLE)
+end
+
 local function stop_motion()
+    local had_motion = hud_part ~= nil
     local was_live = is_motion_live()
     forget_motion()
     if was_live and not game.hud_motion_allowed() then
         game.stop_hud_motion()
+    end
+    if had_motion then
+        resync_hands_models()
     end
 end
 
@@ -788,6 +803,9 @@ local function show(now, ui_open)
     end
     if game.actor_weapon_lowered() then
         game.actor_lower_weapon(false)
+        if not IsMoveState("mcSprint") then
+            relower_weapon_id = wpn:id()
+        end
         request_sprint_lower()
     end
     pending_show_until = 0
@@ -1052,6 +1070,24 @@ local function is_sprint_lower_suppressed()
     return is_pose_up() or pending_show_until ~= 0 or recover_stage ~= 0
 end
 
+local function drain_relower()
+    if not relower_weapon_id or is_sprint_lower_suppressed() then
+        return
+    end
+    local wpn = db.actor:active_item()
+    if not wpn or wpn:id() ~= relower_weapon_id then
+        relower_weapon_id = nil
+        return
+    end
+    if wpn:get_state() ~= WPN_STATE_IDLE or not game.hud_motion_allowed() then
+        return
+    end
+    relower_weapon_id = nil
+    if not game.actor_weapon_lowered() then
+        game.actor_lower_weapon(true)
+    end
+end
+
 function install_sprint_lower_suppression()
     if _G.wd_inspect_sprint_lower_wrapped then
         return
@@ -1084,6 +1120,20 @@ function install_sprint_lower_suppression()
         return prev_delay(...)
     end
     _G.wd_inspect_sprint_lower_wrapped = true
+end
+
+function install_meet_safemode_gate()
+    if _G.wd_inspect_meet_gate_wrapped then
+        return
+    end
+    if not (xr_conditions and xr_conditions.actor_is_safemode) then
+        return
+    end
+    local prev_gate = xr_conditions.actor_is_safemode
+    xr_conditions.actor_is_safemode = function(...)
+        return is_pose_up() or prev_gate(...)
+    end
+    _G.wd_inspect_meet_gate_wrapped = true
 end
 
 local function track_press(now, pressed, held, accept_press)
@@ -1477,6 +1527,7 @@ function actor_on_update()
     end
 
     if state == ST_IDLE then
+        drain_relower()
         if not refresh_active() then
             return
         end
@@ -1563,6 +1614,7 @@ end
 
 function on_weapon_zoom_in()
     aiming = true
+    relower_weapon_id = nil
     if state ~= ST_IDLE then
         soft_yield()
     end
@@ -1574,6 +1626,7 @@ function on_weapon_zoom_out()
 end
 
 function on_weapon_action()
+    relower_weapon_id = nil
     if state == ST_IDLE then
         yield_until = time_global() + MS.YIELD_HOLD
         return
@@ -1640,8 +1693,9 @@ local function is_attack_bind(bind)
     return bind == key_bindings.kWPN_ZOOM and is_melee_in_hand()
 end
 
-local function take_detector_key(now)
-    if not db.actor:item_in_slot(DETECTOR_SLOT) then
+local function take_detector_toggle(now, device)
+    local slotted = db.actor:item_in_slot(DETECTOR_SLOT)
+    if not (slotted or device) then
         return false
     end
     if db.actor:active_detector() then
@@ -1652,6 +1706,9 @@ local function take_detector_key(now)
     end
     if state == ST_IDLE and not wd_hands_empty.is_drawn() then
         return false
+    end
+    if device and (slotted and slotted:id()) ~= device:id() then
+        db.actor:move_to_slot(device, DETECTOR_SLOT)
     end
     owes_detector_show = true
     if state == ST_IDLE then
@@ -1690,7 +1747,7 @@ function on_before_key_press(_, bind, dis, flags)
     end
     local now = time_global()
     if bind == key_bindings.kDETECTOR then
-        if take_detector_key(now) then
+        if take_detector_toggle(now) then
             flags.ret_value = false
         end
     elseif is_repeat_zoom_press(bind) then
@@ -1754,6 +1811,46 @@ function install_wheel_hook()
     _G.wd_inspect_wheel_wrapped = true
 end
 
+local function hold_hands_for_wheel_show(device)
+    local active = db.actor:active_detector()
+    if not active then
+        wd_hands_empty.hold_draw(MS.DETECTOR_SHOW_HOLD)
+    elseif active:id() ~= device:id() then
+        wd_hands_empty.hold_draw(MS.DETECTOR_SWAP_HOLD)
+    end
+end
+
+function install_action_wheel_detector_hook()
+    if _G.wd_inspect_action_wheel_wrapped then
+        return
+    end
+    local wheel = haru_quick_action_wheel_mcm
+    local option_class = wheel and wheel.QDetectorWheelOption
+    if not option_class then
+        return
+    end
+    local prev_click = option_class.OnClick
+    option_class.OnClick = function(self)
+        local device = wheel.ItemWheelOption.OnClick(self)
+        if device then
+            if take_detector_toggle(time_global(), device) then
+                wheel.GUI:Close()
+                return device
+            end
+            hold_hands_for_wheel_show(device)
+        end
+        return prev_click(self)
+    end
+    local prev_equip = wheel.equip_and_show_detector
+    wheel.equip_and_show_detector = function(device)
+        if not take_detector_toggle(time_global(), device) then
+            wd_hands_empty.hold_draw(MS.DETECTOR_SHOW_HOLD)
+            prev_equip(device)
+        end
+    end
+    _G.wd_inspect_action_wheel_wrapped = true
+end
+
 function register_engine()
     wd_core.register({
         id = "wd_inspect",
@@ -1774,7 +1871,9 @@ function register_engine()
         on_start = function()
             install_foreign_anim_yields()
             install_sprint_lower_suppression()
+            install_meet_safemode_gate()
             install_wheel_hook()
+            install_action_wheel_detector_hook()
             wd_mcm.on_option_change()
         end,
     })
