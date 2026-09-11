@@ -270,7 +270,6 @@ function attach(desc)
     if not attachment then
         return nil
     end
-    printf(string.format("wd timing: add_attachment %s %.1f ms", desc.name, os.clock() * 1000 - started))
     textures[desc.name] = {}
     local transform = desc.transforms
     attachment:set_type(TYPE_HUD)

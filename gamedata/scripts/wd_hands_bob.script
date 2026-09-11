@@ -1,17 +1,52 @@
-local LAYER_SECTION = "wd_bob_layers"
-local STATE_KEYS = { "walk", "run", "crouch", "sprint", "idle" }
+local VANILLA_PMA_SECTION = "wd_bob_layers_vanilla_pma"
+local GAMMA_PMA_SECTION = "wd_bob_layers_gamma_pma"
+local ANOMALY_SECTION = "wd_bob_layers_anomaly"
+local ANIM_ROOT = "$game_anims$"
+local AIM_STATE = { walk = "aim_walk", run = "aim_walk", crouch = "aim_crouch", sprint = "aim_walk" }
 local CMD_BLEND_MOVE = "blend_move_anims"
 local WPN_STATE_IDLE = 0
 local WPN_STATE_HIDDEN = 3
+local WPN_STATE_RELOAD = 7
 local PART_LEFT = 1
 local PART_RIGHT = 0
 local PART_BOTH = 2
 local POWER_SLEW_PER_MS = 0.004
-RAISED_SCALE = { walk = 0.4, run = 0.4, crouch = 0.4, sprint = 0.3, idle = 1.0 }
+local VANILLA_PIVOT = "lead_gun"
+local VANILLA_EVENTS = {
+    "actor_on_movement_changed",
+    "actor_on_weapon_zoom_in",
+    "actor_on_weapon_zoom_out",
+    "actor_on_changed_slot",
+    "actor_on_item_state_switch",
+}
+local SPRINT_GENERIC_CLASSES = {
+    II_BOLT = true,
+    WP_BINOC = true,
+    WP_KNIFE = true,
+    G_F1 = true,
+    G_F1_S = true,
+    G_RGD5_S = true,
+    D_PDA = true,
+}
+STATES = {
+    { key = "walk", raised_scale = 0.4 },
+    { key = "run", raised_scale = 0.4 },
+    { key = "crouch", raised_scale = 0.4 },
+    { key = "aim_walk", raised_scale = 0.4 },
+    { key = "aim_crouch", raised_scale = 0.4 },
+    { key = "sprint", raised_scale = 0.3 },
+    { key = "sprint_generic", raised_scale = 0.3 },
+    { key = "sprint_pistol", raised_scale = 0.3 },
+    { key = "sprint_rifle", raised_scale = 0.3 },
+    { key = "idle", raised_scale = 1.0 },
+    { key = "idle_aim", raised_scale = 1.0 },
+}
 
-local defs = nil
 local clip_pairs = nil
-local updated_at = 0
+local vanilla_world = false
+local reload_marked = false
+
+local function noop() end
 
 local function to_engine_float(text)
     local value = tonumber(text) or 0
@@ -33,73 +68,130 @@ function parse_layer_def(def)
     return path, to_engine_float(speed), to_engine_float(power)
 end
 
-local function new_pair(stem, pair_defs, always_def)
+local function get_twin_path(path)
+    local twin = path:gsub("([^\\/]+)(%.%w+)$", function(stem, ext)
+        return stem:upper() .. ext
+    end)
+    return twin
+end
+
+local function new_pair(right_path, left_path)
     return {
-        defs = pair_defs,
-        always_def = always_def,
+        defs = {},
         live = false,
-        speed = nil,
-        right = { path = stem .. [[_r.anm]], part = PART_RIGHT, power = 0, speed = nil },
-        left = { path = stem .. [[_l.anm]], part = PART_LEFT, power = 0, speed = nil },
+        resumable = false,
+        right = { path = right_path, part = PART_RIGHT, power = 0, speed = nil },
+        left = { path = left_path, part = PART_LEFT, power = 0, speed = nil },
     }
+end
+
+local function read_layer_defs(section)
+    local fs = getFS()
+    local layer_defs = nil
+    for _, state in ipairs(STATES) do
+        local path, speed, power = parse_layer_def(ini_sys:r_string_ex(section, state.key))
+        if path then
+            if not fs:exist(ANIM_ROOT, path) then
+                return nil
+            end
+            layer_defs = layer_defs or {}
+            layer_defs[state.key] = { speed = speed, power = power, path = path, raised_scale = state.raised_scale }
+        end
+    end
+    return layer_defs
+end
+
+local function new_clip_pairs(layer_defs)
+    local built = {}
+    local by_path = {}
+    for _, state in ipairs(STATES) do
+        local def = layer_defs[state.key]
+        if def then
+            local pair = by_path[def.path]
+            if not pair then
+                pair = new_pair(def.path, get_twin_path(def.path))
+                by_path[def.path] = pair
+                built[#built + 1] = pair
+            end
+            pair.defs[state.key] = def
+        end
+    end
+    return built
+end
+
+local function get_vanilla_pma()
+    local pma = procedural_movement
+    if type(pma) ~= "table" or type(pma.play) ~= "function" then
+        return nil
+    end
+    return pma
 end
 
 function load_layers()
-    defs = {}
-    for _, key in ipairs(STATE_KEYS) do
-        local stem, speed, power = parse_layer_def(ini_sys:r_string_ex(LAYER_SECTION, key))
-        if not stem then
-            defs = nil
-            return false
-        end
-        defs[key] = { stem = stem, speed = speed, power = power, raised_scale = RAISED_SCALE[key] }
+    local layer_defs = get_vanilla_pma() and read_layer_defs(VANILLA_PMA_SECTION)
+    vanilla_world = layer_defs ~= nil
+    layer_defs = layer_defs or read_layer_defs(GAMMA_PMA_SECTION) or read_layer_defs(ANOMALY_SECTION)
+    if not layer_defs then
+        return false
     end
-    clip_pairs = {
-        new_pair(defs.walk.stem, { walk = defs.walk, run = defs.run, crouch = defs.crouch }),
-        new_pair(defs.sprint.stem, { sprint = defs.sprint }),
-        new_pair(defs.idle.stem, nil, defs.idle),
-    }
+    clip_pairs = new_clip_pairs(layer_defs)
     return true
 end
 
-local function is_accelerated()
-    local without_accel = not IsMoveState("mcAccel")
-    if IsMoveState("mcClimb") or IsMoveState("mcJump") or IsMoveState("mcLanding") or IsMoveState("mcLanding2") then
-        return without_accel
-    end
-    if IsMoveState("mcLookout") then
+local function is_airborne(move_mask)
+    return IsMoveState("mcClimb", move_mask)
+        or IsMoveState("mcJump", move_mask)
+        or IsMoveState("mcLanding", move_mask)
+        or IsMoveState("mcLanding2", move_mask)
+end
+
+local function is_accelerated(move_mask)
+    if IsMoveState("mcLookout", move_mask) and not is_airborne(move_mask) then
         return false
     end
-    return without_accel
+    return not IsMoveState("mcAccel", move_mask)
 end
 
-local function is_zoomed()
-    return axr_main.weapon_is_zoomed and db.actor and db.actor:active_item() ~= nil
+local function is_zoomed(item)
+    return axr_main.weapon_is_zoomed == true and item ~= nil
 end
 
-local function get_move_state()
-    if not IsMoveState("mcAnyMove") then
+local function get_move_state(move_mask)
+    if not IsMoveState("mcAnyMove", move_mask) then
         return nil
     end
-    if IsMoveState("mcCrouch") then
+    if IsMoveState("mcCrouch", move_mask) then
         return "crouch"
     end
-    if IsMoveState("mcSprint") then
+    if IsMoveState("mcSprint", move_mask) then
         return "sprint"
     end
-    if not is_accelerated() then
+    if not is_accelerated(move_mask) then
         return "walk"
     end
     return "run"
 end
 
-local function get_engine_delta_ms(now)
-    local render = device()
-    local engine_ms = render and render.f_time_delta and render.f_time_delta * 1000
-    if engine_ms then
-        return engine_ms
+local function get_sprint_state(item, item_state, raised)
+    if not item then
+        return "sprint_generic"
     end
-    return updated_at ~= 0 and now - updated_at or 0
+    local section = item:section()
+    local generic_class = SPRINT_GENERIC_CLASSES[ini_sys:r_string_ex(section, "class")]
+    local reloading = item_state == WPN_STATE_RELOAD and not reload_marked
+    if raised or reloading or generic_class or game.actor_weapon_lowered() then
+        return "sprint_generic"
+    end
+    if ini_sys:r_float_ex(section, "single_handed") == 1 then
+        return "sprint_pistol"
+    end
+    return "sprint_rifle"
+end
+
+local function get_engine_delta_ms()
+    local render = device()
+    local seconds = render and render.f_time_delta
+    return seconds and seconds * 1000 or 0
 end
 
 local function is_blendless_class(item)
@@ -126,10 +218,8 @@ local function is_weapon_blending(item, item_state)
     return get_console_cmd(1, CMD_BLEND_MOVE) == true
 end
 
-local function get_need()
-    local item = db.actor and db.actor:active_item()
-    local detector = db.actor and db.actor:active_detector()
-    local item_state = item and item:get_state()
+local function get_need(actor, item, item_state)
+    local detector = actor and actor:active_detector()
     local detector_state = detector and detector:get_state()
     local hud_part = wd_inspect.get_hud_part()
     local script_anim_held = not game.hud_motion_allowed()
@@ -152,6 +242,13 @@ local function get_need()
     return need_right, need_left
 end
 
+local function get_vanilla_need(actor, item, aiming)
+    if not item then
+        return false, false
+    end
+    return true, aiming or actor:active_detector() == nil
+end
+
 local function slew(current, target, delta)
     local step = delta * POWER_SLEW_PER_MS
     if current < target then
@@ -160,10 +257,14 @@ local function slew(current, target, delta)
     return math.max(current - step, target)
 end
 
-local function play_side(side, speed, power, keep_clock)
+local function play_side(side, speed, power, no_restart)
     side.speed = speed
     side.power = power
-    game.play_hud_anm(side.path, side.part, speed, power, true, keep_clock)
+    if vanilla_world then
+        game.play_hud_anm(side.path, side.part, speed, power, true, no_restart, VANILLA_PIVOT)
+    else
+        game.play_hud_anm(side.path, side.part, speed, power, true, no_restart)
+    end
 end
 
 local function drive_side(side, speed, power)
@@ -173,58 +274,123 @@ local function drive_side(side, speed, power)
     play_side(side, speed, power, true)
 end
 
-local function step_pair(pair, state, zoomed, need_right, need_left, raised, delta)
-    local def = not zoomed and (pair.always_def or (state and pair.defs[state])) or nil
-    local base = def and def.power or 0
-    local left_base = raised and base * (def and def.raised_scale or 0) or base
-    local next_right = slew(pair.right.power, need_right and base or 0, delta)
-    local next_left = slew(pair.left.power, need_left and left_base or 0, delta)
-    if not pair.live then
-        if not def or (next_right == 0 and next_left == 0) then
-            return
+local function stop_pair(pair, force)
+    pair.live = false
+    game.stop_hud_anm(pair.right.path, force)
+    game.stop_hud_anm(pair.left.path, force)
+end
+
+local function get_pair_def(pair, state, idle_key)
+    return pair.defs[state] or pair.defs[idle_key]
+end
+
+local function has_any_def(state, idle_key)
+    for pair_index = 1, #clip_pairs do
+        if get_pair_def(clip_pairs[pair_index], state, idle_key) then
+            return true
         end
-        pair.live = true
-        play_side(pair.right, def.speed, 0, false)
-        play_side(pair.left, def.speed, 0, false)
     end
+    return false
+end
+
+local function step_pair(pair, def, need_right, need_left, raised, delta)
+    local target_right, target_left = 0, 0
     if def then
-        pair.speed = def.speed
+        local left_power = def.power
+        if raised then
+            left_power = left_power * def.raised_scale
+        end
+        target_right = need_right and def.power or 0
+        target_left = need_left and left_power or 0
     end
-    drive_side(pair.right, pair.speed, next_right)
-    drive_side(pair.left, pair.speed, next_left)
+    if target_right == 0 and target_left == 0 then
+        if pair.live then
+            stop_pair(pair, false)
+        end
+        return
+    end
+    if not pair.live then
+        pair.live = true
+        play_side(pair.right, def.speed, target_right, pair.resumable)
+        play_side(pair.left, def.speed, target_left, pair.resumable)
+        pair.resumable = true
+        return
+    end
+    drive_side(pair.right, def.speed, slew(pair.right.power, target_right, delta))
+    drive_side(pair.left, def.speed, slew(pair.left.power, target_left, delta))
 end
 
 function actor_on_update()
     if not clip_pairs then
         return
     end
-    local now = time_global()
-    local delta = get_engine_delta_ms(now)
-    updated_at = now
-    local state = get_move_state()
-    local zoomed = is_zoomed()
-    local need_right, need_left = get_need()
+    local actor = db.actor
+    local item = actor and actor:active_item()
+    local item_state = item and item:get_state()
+    if item_state ~= WPN_STATE_RELOAD then
+        reload_marked = false
+    end
+    local zoomed = is_zoomed(item)
     local raised = wd_inspect.is_pose_up()
+    local state = get_move_state(level.actor_moving_state())
+    if zoomed then
+        state = AIM_STATE[state]
+    elseif vanilla_world and state == "sprint" then
+        state = get_sprint_state(item, item_state, raised)
+    end
+    local idle_key = zoomed and "idle_aim" or "idle"
+    local need_right, need_left, delta = false, false, 0
+    if has_any_def(state, idle_key) then
+        delta = get_engine_delta_ms()
+        if vanilla_world then
+            need_right, need_left = get_vanilla_need(actor, item, zoomed and state ~= nil)
+        else
+            need_right, need_left = get_need(actor, item, item_state)
+        end
+    end
     for pair_index = 1, #clip_pairs do
-        step_pair(clip_pairs[pair_index], state, zoomed, need_right, need_left, raised, delta)
+        local pair = clip_pairs[pair_index]
+        step_pair(pair, get_pair_def(pair, state, idle_key), need_right, need_left, raised, delta)
     end
 end
 
+function on_hud_animation_mark(state, mark)
+    if state == WPN_STATE_RELOAD and mark == "rld" then
+        reload_marked = true
+    end
+end
+
+local function neutralize_vanilla(pma)
+    if pma.play == noop then
+        return
+    end
+    for _, event in ipairs(VANILLA_EVENTS) do
+        UnregisterScriptCallback(event, pma.on_state_change)
+    end
+    UnregisterScriptCallback("actor_on_hud_animation_mark", pma.on_mark)
+    pma.stop()
+    pma.play = noop
+    pma.on_state_change = noop
+    pma.on_mark = noop
+end
+
 function on_first_update()
-    updated_at = 0
+    reload_marked = false
     if not clip_pairs then
         return
     end
     for pair_index = 1, #clip_pairs do
         local pair = clip_pairs[pair_index]
-        if pair.live then
-            game.stop_hud_anm(pair.right.path, true)
-            game.stop_hud_anm(pair.left.path, true)
+        if pair.resumable then
+            stop_pair(pair, true)
         end
-        pair.live = false
-        pair.speed = nil
+        pair.resumable = false
         pair.right.power, pair.right.speed = 0, nil
         pair.left.power, pair.left.speed = 0, nil
+    end
+    local pma = get_vanilla_pma()
+    if pma then
+        neutralize_vanilla(pma)
     end
 end
 
@@ -235,6 +401,7 @@ function register()
         callbacks = {
             actor_on_first_update = { on_first_update },
             actor_on_update = { actor_on_update },
+            actor_on_hud_animation_mark = { on_hud_animation_mark },
         },
     })
 end

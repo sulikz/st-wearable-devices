@@ -3,8 +3,24 @@ local ARTEFACT = {
     [clsid.artefact_s] = true,
 }
 
+local KIND = {
+    i_arty = true,
+    i_arty_junk = true,
+}
+
+local kind_by_section = {}
+
+local function get_kind(section)
+    local kind = kind_by_section[section]
+    if kind == nil then
+        kind = ini_sys:r_string_ex(section, "kind") or ""
+        kind_by_section[section] = kind
+    end
+    return kind
+end
+
 local function is_artefact(obj)
-    return ARTEFACT[obj:clsid()] == true
+    return ARTEFACT[obj:clsid()] == true and KIND[get_kind(obj:section())] == true
 end
 
 function new(cfg)

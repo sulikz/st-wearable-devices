@@ -1,13 +1,31 @@
 ![hud_movement_layers]
-movement_layer_2 = wd\bob_walk_l.anm, 0.8, 0.001
-movement_layer_3 = wd\bob_walk_l.anm, 0.8, 0.001
-movement_layer_4 = wd\bob_walk_l.anm, 0.9, 0.001
-movement_layer_5 = wd\bob_sprint_l.anm, 1.15, 0.001
-movement_layer_7 = wd\bob_idle_l.anm, 0.5, 0.001
+movement_layer_2 = wd\bob_none.anm, 1, 0.001
+movement_layer_3 = wd\bob_none.anm, 1, 0.001
+movement_layer_4 = wd\bob_none.anm, 1, 0.001
+movement_layer_5 = wd\bob_none.anm, 1, 0.001
+movement_layer_7 = wd\bob_none.anm, 1, 0.001
 
-[wd_bob_layers]
-walk = wd\bob_walk, 0.8, 0.8
-run = wd\bob_walk, 0.9, 1.25
-crouch = wd\bob_walk, 0.8, 0.6
-sprint = wd\bob_sprint, 1.15, 0.75
-idle = wd\bob_idle, 0.5, 0.7
+[wd_bob_layers_gamma_pma]
+walk = movement\walk.anm, 0.8, 0.8
+run = movement\walk.anm, 0.9, 1.25
+crouch = movement\walk.anm, 0.8, 0.6
+sprint = movement\sprint.anm, 1.15, 0.75
+idle = movement\idle.anm, 0.5, 0.7
+
+[wd_bob_layers_anomaly]
+walk = movement\newwalk.anm, 1, 0.1
+run = movement\newwalk.anm, 1.25, 0.125
+crouch = movement\newwalk.anm, 1, 0.1
+sprint = movement\newrunreload.anm, 1, 0.15
+
+[wd_bob_layers_vanilla_pma]
+walk = movement\walk.anm, 1, 0.5
+run = movement\walk.anm, 1, 0.6
+crouch = movement\walk.anm, 1, 0.3
+aim_walk = movement\walk.anm, 1, 0.2
+aim_crouch = movement\walk.anm, 0.7, 0.2
+idle = movement\idle.anm, 0.5, 0.7
+idle_aim = movement\idle_aim.anm, 0.5, 0.2
+sprint_generic = movement\sprint_generic.anm, 0.8, 0.5
+sprint_pistol = movement\sprint_pistol.anm, 0.8, 0.8
+sprint_rifle = movement\sprint_rifle.anm, 0.8, 0.8

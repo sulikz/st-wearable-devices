@@ -8,6 +8,7 @@ local spawn_at = 0
 local melee_hold_until = 0
 local settle_until = 0
 local draw_hold_until = 0
+local foreign_clear_since = 0
 
 local function is_managed_section(section)
     return section == ITEM_SECTION
@@ -78,7 +79,7 @@ function hold_melee()
 end
 
 function hold_draw(ms)
-    draw_hold_until = wd_core.get_time_ms() + ms
+    draw_hold_until = math.max(draw_hold_until, wd_core.get_time_ms() + ms)
 end
 
 local function is_melee_anm_active()
@@ -93,6 +94,21 @@ local function is_foreign_hud_anim_active()
         return true
     end
     return is_melee_anm_active()
+end
+
+local function observe_foreign_anim(now)
+    if is_foreign_hud_anim_active() then
+        foreign_clear_since = nil
+        return true
+    end
+    if not foreign_clear_since then
+        foreign_clear_since = now
+    end
+    return now <= foreign_clear_since
+end
+
+local function sample_foreign_anim()
+    observe_foreign_anim(wd_core.get_time_ms())
 end
 
 local function refresh_input_lock(now)
@@ -113,7 +129,7 @@ function try_draw()
     if now < settle_until then
         return false
     end
-    if db.actor:active_detector() or is_foreign_hud_anim_active() then
+    if observe_foreign_anim(now) or db.actor:active_detector() or not game.hud_motion_allowed() then
         return false
     end
     if not is_available() then
@@ -131,6 +147,7 @@ function register()
         id = "wd_hands_empty",
         callbacks = {
             actor_on_first_update = { ensure_item },
+            actor_on_update = { sample_foreign_anim },
             on_option_change = { ensure_item },
             actor_on_item_take = { on_item_take },
             actor_on_item_drop = { on_item_drop },
