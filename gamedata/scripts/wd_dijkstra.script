@@ -1,0 +1,42 @@
+local function pick_nearest(best_cost, visited)
+    local best_node = nil
+    local lowest_cost = math.huge
+    for node, cost in pairs(best_cost) do
+        if not visited[node] and cost < lowest_cost then
+            best_node = node
+            lowest_cost = cost
+        end
+    end
+    return best_node
+end
+
+function solve_from(graph, seeds)
+    local best_cost = {}
+    for node, _ in pairs(graph) do
+        best_cost[node] = math.huge
+    end
+    for seed, cost in pairs(seeds) do
+        best_cost[seed] = cost
+    end
+    local prev = {}
+    local visited = {}
+
+    while true do
+        local current = pick_nearest(best_cost, visited)
+        if not current then
+            break
+        end
+        visited[current] = true
+        local neighbors = graph[current]
+        local current_cost = best_cost[current]
+        for neighbor, cost in pairs(neighbors) do
+            local candidate = current_cost + cost
+            if candidate < best_cost[neighbor] then
+                best_cost[neighbor] = candidate
+                prev[neighbor] = current
+            end
+        end
+    end
+
+    return best_cost, prev
+end

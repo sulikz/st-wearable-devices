@@ -34,13 +34,14 @@ local function create_guards(entry, position, level_vertex_id, game_vertex_id)
 end
 
 local function create_item_with_condition(item, se_corpse)
+    local is_deferred = se_corpse.online == true
     local se_item = alife_create(
         item.section,
         se_corpse.position,
         se_corpse.m_level_vertex_id,
         se_corpse.m_game_vertex_id,
         se_corpse.id,
-        false
+        not is_deferred
     )
     if not se_item then
         return
@@ -50,7 +51,9 @@ local function create_item_with_condition(item, se_corpse)
         data.condition = item.condition
         utils_stpk.set_object_data(data, se_item)
     end
-    alife():register(se_item)
+    if is_deferred then
+        alife():register(se_item)
+    end
 end
 
 local function create_loot(entry, se_corpse)

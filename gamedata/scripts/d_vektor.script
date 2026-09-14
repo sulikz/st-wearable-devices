@@ -118,7 +118,11 @@ local artefact_sensor = wd_sensor_artefact.new({
     end,
 })
 
-local compass = wd_compass.new({})
+local compass = wd_compass.new({
+    target_pos = function(target_id)
+        return wd_level_transitions.get_nav_pos(target_id)
+    end,
+})
 
 local SPIN_SIGN = -1
 local ARROW_SIGN = -1

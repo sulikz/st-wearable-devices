@@ -14,6 +14,7 @@ function on_game_start()
     wd_hands_highport.register()
     wd_hands_bob.register()
     wd_map_spots.register()
+    wd_level_transitions.register()
     wd_debug_menu.register()
     wd_glow_tune.register()
     local devices = {
