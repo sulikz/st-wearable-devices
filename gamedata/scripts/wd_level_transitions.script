@@ -1,0 +1,310 @@
+local RESOLVE_INTERVAL_MS = 1000
+
+local function get_config_vector(raw)
+    if not raw then
+        return nil
+    end
+    local pos_x, pos_y, pos_z = string.match(raw, "^%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)%s*,%s*(-?[%d%.]+)")
+    pos_x, pos_y, pos_z = tonumber(pos_x), tonumber(pos_y), tonumber(pos_z)
+    if not (pos_x and pos_y and pos_z) then
+        return nil
+    end
+    return { x = pos_x, y = pos_y, z = pos_z }
+end
+
+local function get_distance(from_pos, to_pos)
+    local dx = to_pos.x - from_pos.x
+    local dz = to_pos.z - from_pos.z
+    return math.sqrt(dx * dx + dz * dz)
+end
+
+local name_by_level_id = {}
+
+function get_level_name(gvid)
+    local level_id = wd_compass.get_level_id_of(gvid)
+    if not level_id then
+        return nil
+    end
+    local known = name_by_level_id[level_id]
+    if known then
+        return known
+    end
+    local sim = alife()
+    local name = sim and sim:level_name(level_id)
+    if not name then
+        return nil
+    end
+    name_by_level_id[level_id] = name
+    return name
+end
+
+function get_transitions()
+    local sim = alife()
+    if not sim then
+        return nil
+    end
+    local transitions = {}
+    sim:iterate_objects(function(server_object)
+        if server_object:clsid() == clsid.level_changer_s then
+            local from = get_level_name(server_object.m_game_vertex_id)
+            local data = utils_stpk.get_level_changer_data(server_object)
+            local arrival_gvid = data and data.dest_game_vertex_id
+            local to = arrival_gvid and get_level_name(arrival_gvid)
+            if from and to and from ~= to then
+                transitions[#transitions + 1] = {
+                    id = server_object.id,
+                    from = from,
+                    to = to,
+                    arrival_pos = data.dest_position,
+                    arrival_gvid = arrival_gvid,
+                }
+            end
+        end
+    end)
+    for _, transition in ipairs(get_extra_transitions()) do
+        transitions[#transitions + 1] = transition
+    end
+    return transitions
+end
+
+function get_extra_transitions()
+    local transitions = {}
+    ini_sys:section_for_each(function(section)
+        if
+            ini_sys:r_bool_ex(section, "lc_extra_level_transition", false)
+            and ini_sys:r_string_ex(section, "story_id")
+        then
+            local precondition = ini_sys:r_string_ex(section, "precondition")
+            local pos = get_config_vector(ini_sys:r_string_ex(section, "pos"))
+            local arrival_pos = get_config_vector(ini_sys:r_string_ex(section, "to_pos"))
+            local gvid = tonumber(ini_sys:r_string_ex(section, "gvid"))
+            local arrival_gvid = tonumber(ini_sys:r_string_ex(section, "to_gvid"))
+            local from = gvid and get_level_name(gvid)
+            local to = arrival_gvid and get_level_name(arrival_gvid)
+            if pos and from and to and from ~= to and not precondition then
+                transitions[#transitions + 1] = {
+                    id = section,
+                    from = from,
+                    to = to,
+                    pos = pos,
+                    pos_gvid = gvid,
+                    arrival_pos = arrival_pos,
+                    arrival_gvid = arrival_gvid,
+                }
+            end
+        end
+    end)
+    return transitions
+end
+
+function new_nodes(transitions, get_position, get_global_pos)
+    local nodes = {}
+    for _, transition in ipairs(transitions) do
+        local pos, gvid
+        if transition.pos then
+            pos = get_global_pos(transition.pos, transition.pos_gvid)
+            gvid = transition.pos_gvid
+        else
+            pos, gvid = get_position(transition.id)
+        end
+        local arrival = get_global_pos(transition.arrival_pos, transition.arrival_gvid)
+        if pos and arrival then
+            nodes[transition.id] = {
+                from = transition.from,
+                to = transition.to,
+                pos = pos,
+                gvid = gvid,
+                arrival = arrival,
+            }
+        end
+    end
+    return nodes
+end
+
+function new_graph(nodes)
+    local graph = {}
+    for id in pairs(nodes) do
+        graph[id] = {}
+    end
+    for id, node in pairs(nodes) do
+        local edges = graph[id]
+        local arrival = node.arrival
+        local lands_on = node.to
+        for other_id, other in pairs(nodes) do
+            if other_id ~= id and other.from == lands_on then
+                edges[other_id] = get_distance(arrival, other.pos)
+            end
+        end
+    end
+    return graph
+end
+
+function new(cfg)
+    cfg = cfg or {}
+    local read_transitions = cfg.get_transitions or get_transitions
+    local read_position = cfg.get_position or wd_compass.get_target_pos_of
+    local read_actor_pos = cfg.get_actor_pos or wd_compass.get_actor_global_pos
+    local read_level_name = cfg.get_level_name or get_level_name
+    local read_global_pos = cfg.get_global_pos or wd_compass.get_global_pos
+    local read_time = cfg.get_time or time_global
+    local resolve_interval_ms = cfg.resolve_interval_ms or RESOLVE_INTERVAL_MS
+
+    local router = {}
+    local nodes = nil
+    local graph = nil
+    local solved_actor_level = nil
+    local solved_target_level = nil
+    local solved_at = nil
+    local solved_exit = nil
+
+    local function get_nodes()
+        if nodes then
+            return nodes
+        end
+        local transitions = read_transitions()
+        if not transitions then
+            return nil
+        end
+        local built = new_nodes(transitions, read_position, read_global_pos)
+        if not next(built) then
+            return nil
+        end
+        nodes = built
+        graph = new_graph(built)
+        return nodes
+    end
+
+    function router.get_graph()
+        get_nodes()
+        return graph
+    end
+
+    local function get_seeds(node_by_id, actor_level, actor_pos)
+        local seeds = {}
+        for id, node in pairs(node_by_id) do
+            if node.from == actor_level then
+                seeds[id] = get_distance(actor_pos, node.pos)
+            end
+        end
+        if not next(seeds) then
+            return nil
+        end
+        return seeds
+    end
+
+    local function get_cheapest_arrival_id(node_by_id, target_level, best_cost, target_pos)
+        local best_id, best_total
+        for id, node in pairs(node_by_id) do
+            if node.to == target_level then
+                local reached = best_cost[id]
+                if reached < math.huge then
+                    local total = reached + get_distance(node.arrival, target_pos)
+                    if not best_total or total < best_total then
+                        best_total = total
+                        best_id = id
+                    end
+                end
+            end
+        end
+        return best_id
+    end
+
+    local function resolve_exit(actor_level, target_level, actor_pos, target_pos)
+        local node_by_id = get_nodes()
+        if not node_by_id then
+            return nil
+        end
+        local seeds = get_seeds(node_by_id, actor_level, actor_pos)
+        if not seeds then
+            return nil
+        end
+        local best_cost, previous = wd_dijkstra.solve_from(graph, seeds)
+        local arrival_id = get_cheapest_arrival_id(node_by_id, target_level, best_cost, target_pos)
+        if not arrival_id then
+            return nil
+        end
+        local step = arrival_id
+        while previous[step] do
+            step = previous[step]
+        end
+        local exit_node = node_by_id[step]
+        return { id = step, pos = exit_node.pos, gvid = exit_node.gvid }
+    end
+
+    function router.get_exit(actor_gvid, target_gvid, target_pos)
+        local actor_level = read_level_name(actor_gvid)
+        local target_level = read_level_name(target_gvid)
+        if not (actor_level and target_level) or actor_level == target_level or not target_pos then
+            return nil
+        end
+        local now = read_time()
+        if
+            solved_actor_level ~= actor_level
+            or solved_target_level ~= target_level
+            or now - solved_at >= resolve_interval_ms
+        then
+            local actor_pos = read_actor_pos()
+            if not actor_pos then
+                return nil
+            end
+            solved_exit = resolve_exit(actor_level, target_level, actor_pos, target_pos)
+            solved_actor_level = actor_level
+            solved_target_level = target_level
+            solved_at = now
+        end
+        if not solved_exit then
+            return nil
+        end
+        return solved_exit.id, solved_exit.pos, solved_exit.gvid
+    end
+
+    function router.reset()
+        nodes = nil
+        graph = nil
+        solved_actor_level = nil
+        solved_target_level = nil
+        solved_at = nil
+        solved_exit = nil
+    end
+
+    return router
+end
+
+local default_router = nil
+
+function get_router()
+    if not default_router then
+        default_router = new({})
+    end
+    return default_router
+end
+
+function on_first_update()
+    local router = get_router()
+    router.reset()
+    router.get_graph()
+end
+
+function register()
+    RegisterScriptCallback("actor_on_first_update", on_first_update)
+end
+
+function get_exit_pos(target_gvid, target_pos)
+    if not (db.actor and target_pos) then
+        return nil
+    end
+    local _, exit_pos, exit_gvid = get_router().get_exit(db.actor:game_vertex_id(), target_gvid, target_pos)
+    return exit_pos, exit_gvid
+end
+
+function get_nav_pos(target_id)
+    local pos, gvid = wd_compass.get_target_pos_of(target_id)
+    if not pos then
+        return pos, gvid
+    end
+    local exit_pos, exit_gvid = get_exit_pos(gvid, pos)
+    if exit_pos then
+        return exit_pos, exit_gvid
+    end
+    return pos, gvid
+end

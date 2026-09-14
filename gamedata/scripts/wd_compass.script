@@ -54,7 +54,11 @@ local function get_level_offset(gvid)
     end
     local offset = offset_by_gvid[gvid]
     if not offset then
-        local vertex = game_graph():vertex(gvid)
+        local graph = game_graph()
+        if not graph:valid_vertex_id(gvid) then
+            return 0, 0
+        end
+        local vertex = graph:vertex(gvid)
         local global_point = vertex:game_point()
         local local_point = vertex:level_point()
         offset = { x = global_point.x - local_point.x, z = global_point.z - local_point.z }
@@ -63,13 +67,19 @@ local function get_level_offset(gvid)
     return offset.x, offset.z
 end
 
+function get_global_pos(local_pos, gvid)
+    if not local_pos then
+        return nil
+    end
+    local offset_x, offset_z = get_level_offset(gvid)
+    return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z)
+end
+
 function get_actor_global_pos()
     if not db.actor then
         return nil
     end
-    local local_pos = db.actor:position()
-    local offset_x, offset_z = get_level_offset(db.actor:game_vertex_id())
-    return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z)
+    return get_global_pos(db.actor:position(), db.actor:game_vertex_id())
 end
 
 IGNORED_TASK_PREFIXES = { "drx_sl_" }
@@ -116,7 +126,11 @@ function get_level_id_of(gvid)
     end
     local level_id = level_id_by_gvid[gvid]
     if not level_id then
-        level_id = game_graph():vertex(gvid):level_id()
+        local graph = game_graph()
+        if not graph:valid_vertex_id(gvid) then
+            return nil
+        end
+        level_id = graph:vertex(gvid):level_id()
         level_id_by_gvid[gvid] = level_id
     end
     return level_id
@@ -164,8 +178,7 @@ function get_target_pos_of(target_id)
     if not (local_pos and gvid) then
         return nil
     end
-    local offset_x, offset_z = get_level_offset(gvid)
-    return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z), gvid
+    return get_global_pos(local_pos, gvid), gvid
 end
 
 function new(cfg)
