@@ -1,12 +1,9 @@
 local ANM_DRAW = "anm_draw"
 local ANM_IDLE = "anm_idle"
 local ANM_SPRINT = "anm_sprint"
-local ANM_DRAW_BOTH = "anm_draw_both"
 local ANM_DRAW_WATCH = "anm_draw_watch"
-local ANM_IDLE_BOTH = "anm_idle_both"
 local ANM_TO_WATCH = "anm_to_watch"
 local ANM_FROM_WATCH = "anm_from_watch"
-local ANM_FIDGET = "anm_fidget"
 local ANM_HOLSTER = "anm_holster"
 local SWAP_SUFFIX = "_swap"
 local DETECTOR_SUFFIX = "_detector"
@@ -55,7 +52,6 @@ local function set_speed_mode(anm, pose)
     end
 end
 
-set_speed_mode(ANM_DRAW_BOTH, POSE_BY_VARIANT[""])
 set_speed_mode(ANM_TO_WATCH, SWITCH_SPEED_MODE)
 set_speed_mode(ANM_FROM_WATCH, SWITCH_SPEED_MODE)
 for variant, pose in pairs(POSE_BY_VARIANT) do
@@ -126,8 +122,6 @@ local MS = {
     DETECTOR_SWAP_HOLD = 2000,
     MELEE_GRACE = 1500,
     RECOVER_MAX = 3000,
-    FIDGET_MIN = 12000,
-    FIDGET_SPREAD = 13000,
     FIRE_BLOCK = 350,
     ZOOM_BLOCK = 3000,
     SWAP_PAUSE = 670,
@@ -231,12 +225,7 @@ local function is_editor_gui_holding()
     return is_editor_gui_open() and not is_gui_pose_free()
 end
 
-local function is_both_hands_free()
-    return wd_hands_empty.is_drawn() and not wd_customize.is_open()
-end
-
 local queued_anm = nil
-local fidget_at = 0
 local require_release = false
 local prev_held = false
 local pending_show_until = 0
@@ -538,7 +527,6 @@ local function get_hand_trims()
 end
 
 local function begin_hand_raise(now)
-    local both_hands = is_both_hands_free()
     local watch_raise = raise_variant == VARIANT_WATCH
     local sec = active.get_hand_section()
     local draw_anm = get_detector_draw_anm(sec)
@@ -546,13 +534,12 @@ local function begin_hand_raise(now)
         draw_anm = resolve_defined_anm(sec, get_swap_anm(ANM_DRAW, raise_variant))
     end
     if not draw_anm then
-        draw_anm = resolve_anm_for_state(sec, watch_raise and ANM_DRAW_WATCH, both_hands and ANM_DRAW_BOTH, ANM_DRAW)
+        draw_anm = resolve_anm_for_state(sec, watch_raise and ANM_DRAW_WATCH, ANM_DRAW)
     end
     if not draw_anm then
         return false
     end
-    local draw_part = draw_anm == ANM_DRAW_BOTH and 2 or 1
-    local len = play_hand(draw_anm, true, draw_part)
+    local len = play_hand(draw_anm, true, 1)
     if not len then
         return false
     end
@@ -646,6 +633,7 @@ local function restore_detector()
     if db.actor and wd_hands_empty.is_drawn() then
         if restore_wait_until == 0 then
             restore_wait_until = time_global() + MS.RESTORE_WAIT
+            wd_hands_empty.hold_draw(MS.RESTORE_WAIT)
             db.actor:activate_slot(0)
         end
         return
@@ -857,7 +845,6 @@ local function reset_raise_state()
     raise_detector_id = nil
     held_anm = nil
     queued_anm = nil
-    fidget_at = 0
     pending_show_until = 0
     retry_at = 0
     drain_swap_queue()
@@ -895,20 +882,12 @@ end
 local function get_held_clip()
     local sec = active.get_hand_section()
     local held_base = get_held_anim()
-    local both_idle = held_base == ANM_IDLE and raise_variant == "" and is_both_hands_free()
-    return resolve_anm_for_state(
-        sec,
-        both_idle and ANM_IDLE_BOTH,
-        held_base .. raise_variant,
-        ANM_IDLE .. raise_variant,
-        ANM_IDLE
-    ) or ANM_IDLE
+    return resolve_anm_for_state(sec, held_base .. raise_variant, ANM_IDLE .. raise_variant, ANM_IDLE) or ANM_IDLE
 end
 
 local function held_refire(now, keep_current)
     local anm = get_held_clip()
-    local held_part = anm == ANM_IDLE_BOTH and 2 or 1
-    local len = play_hand(anm, false, held_part, keep_current == true)
+    local len = play_hand(anm, false, 1, keep_current == true)
     if not len then
         retry_at = now + MS.RETRY
         return false
@@ -930,18 +909,12 @@ local function enter_held(now, keep_current)
         return false
     end
     state = ST_HELD
-    if raise_variant == "" and not is_editor_gui_open() then
-        fidget_at = now + MS.FIDGET_MIN + math.random(0, MS.FIDGET_SPREAD)
-    else
-        fidget_at = 0
-    end
     return true
 end
 
 local function play_transition(now, trans_anm)
     stop_motion()
     queued_anm = nil
-    fidget_at = 0
     local len = play_hand(trans_anm, true)
     if not len then
         queued_anm = trans_anm
@@ -1353,9 +1326,6 @@ local function begin_holster(now, for_swap)
     if state ~= ST_HELD then
         return false
     end
-    if held_anm == ANM_IDLE_BOTH then
-        return false
-    end
     local holster_anm
     if for_swap then
         local swap_anm = get_swap_anm(ANM_HOLSTER, raise_variant)
@@ -1379,7 +1349,6 @@ local function begin_holster(now, for_swap)
     watchdog_at = state_deadline
     offsets_released = false
     queued_anm = nil
-    fidget_at = 0
     reset_press_tracking()
     return true
 end
@@ -1462,17 +1431,6 @@ local function handle_held(now)
     end
     if apply_variant_transition(now) then
         return
-    end
-    if fidget_at > 0 and now >= fidget_at then
-        if is_sprinting() or is_editor_gui_open() then
-            fidget_at = now + MS.FIDGET_MIN
-        elseif not is_anm_available(active.get_hand_section(), ANM_FIDGET) then
-            fidget_at = 0
-        else
-            fidget_at = 0
-            play_transition(now, ANM_FIDGET)
-            return
-        end
     end
     if held_anm ~= get_held_clip() or (now >= retry_at and (game.hud_motion_allowed() or now >= state_deadline)) then
         stop_motion()
