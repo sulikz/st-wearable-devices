@@ -2,5 +2,5 @@
 
 float3 wd_pull_toward_eye ( float3 Pe )
 {
-	return Pe * ( max( Pe.z - WD_DEPTH_PULL, 0.001 ) / Pe.z );
+	return Pe * ( ( Pe.z > 0 ) ? max( 1.0 - WD_DEPTH_PULL / Pe.z, 0.5 ) : 1.0 );
 }

@@ -38,12 +38,91 @@ function get_level_name(gvid)
     return name
 end
 
+local function get_link_key(from, to)
+    return from .. ">" .. to
+end
+
+local function get_route_sections()
+    local routes = txr_routes and txr_routes.routes
+    if not routes then
+        return nil
+    end
+    local sections = {}
+    for _, by_target in pairs(routes) do
+        for _, section_list in pairs(by_target) do
+            for _, section in ipairs(section_list) do
+                sections[section] = true
+            end
+        end
+    end
+    if next(sections) == nil then
+        return nil
+    end
+    return sections
+end
+
+local function get_marked_changers(changers, marks)
+    local candidates = {}
+    for mark_index, mark in ipairs(marks) do
+        for changer_index, changer in ipairs(changers) do
+            if changer.transition.from == mark.level then
+                candidates[#candidates + 1] = {
+                    distance = get_distance(mark.pos, changer.pos),
+                    mark_index = mark_index,
+                    changer_index = changer_index,
+                }
+            end
+        end
+    end
+    table.sort(candidates, function(left, right)
+        if left.distance ~= right.distance then
+            return left.distance < right.distance
+        end
+        return left.changer_index < right.changer_index
+    end)
+    local claimed_mark = {}
+    local marked = {}
+    for _, candidate in ipairs(candidates) do
+        if not (claimed_mark[candidate.mark_index] or marked[candidate.changer_index]) then
+            claimed_mark[candidate.mark_index] = true
+            marked[candidate.changer_index] = true
+        end
+    end
+    return marked
+end
+
+local function get_routed_transitions(changers, marks)
+    local ungated = #marks == 0
+    local marked = get_marked_changers(changers, marks)
+    local routed = {}
+    for index in pairs(marked) do
+        local transition = changers[index].transition
+        routed[get_link_key(transition.from, transition.to)] = true
+    end
+    local transitions = {}
+    for index, changer in ipairs(changers) do
+        local transition = changer.transition
+        local kept = ungated
+            or marked[index]
+            or (
+                routed[get_link_key(transition.to, transition.from)]
+                and not routed[get_link_key(transition.from, transition.to)]
+            )
+        if kept then
+            transitions[#transitions + 1] = transition
+        end
+    end
+    return transitions
+end
+
 function get_transitions()
     local sim = alife()
     if not sim then
         return nil
     end
-    local transitions = {}
+    local route_sections = get_route_sections()
+    local changers = {}
+    local marks = {}
     sim:iterate_objects(function(server_object)
         if server_object:clsid() == clsid.level_changer_s then
             local from = get_level_name(server_object.m_game_vertex_id)
@@ -51,16 +130,25 @@ function get_transitions()
             local arrival_gvid = data and data.dest_game_vertex_id
             local to = arrival_gvid and get_level_name(arrival_gvid)
             if from and to and from ~= to then
-                transitions[#transitions + 1] = {
-                    id = server_object.id,
-                    from = from,
-                    to = to,
-                    arrival_pos = data.dest_position,
-                    arrival_gvid = arrival_gvid,
+                changers[#changers + 1] = {
+                    pos = server_object.position,
+                    transition = {
+                        id = server_object.id,
+                        from = from,
+                        to = to,
+                        arrival_pos = data.dest_position,
+                        arrival_gvid = arrival_gvid,
+                    },
                 }
+            end
+        elseif route_sections and route_sections[server_object:name()] then
+            local level = get_level_name(server_object.m_game_vertex_id)
+            if level then
+                marks[#marks + 1] = { level = level, pos = server_object.position }
             end
         end
     end)
+    local transitions = get_routed_transitions(changers, marks)
     for _, transition in ipairs(get_extra_transitions()) do
         transitions[#transitions + 1] = transition
     end

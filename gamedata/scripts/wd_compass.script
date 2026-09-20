@@ -82,17 +82,6 @@ function get_actor_global_pos()
     return get_global_pos(db.actor:position(), db.actor:game_vertex_id())
 end
 
-IGNORED_TASK_PREFIXES = { "drx_sl_" }
-
-local function is_ignored_task(task_id)
-    for _, prefix in ipairs(IGNORED_TASK_PREFIXES) do
-        if string.sub(task_id, 1, #prefix) == prefix then
-            return true
-        end
-    end
-    return false
-end
-
 function list_task_targets()
     if not (db.actor and task_manager and task_manager.get_task_manager) then
         return {}
@@ -103,8 +92,8 @@ function list_task_targets()
         return {}
     end
     local targets = {}
-    for task_id, task in pairs(task_info) do
-        if task.t and not is_ignored_task(task_id) then
+    for _, task in pairs(task_info) do
+        if task.t then
             local target_id = tonumber(task.current_target)
             if target_id then
                 targets[#targets + 1] = {
