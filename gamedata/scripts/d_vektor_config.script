@@ -41,6 +41,7 @@ STATUS_BARS = {
     { name = "dynamic", label = "Dynamic" },
     { name = "stamina", label = "Stamina" },
     { name = "toxic", label = "Toxic Air" },
+    { name = "hp", label = "Health" },
 }
 
 local FAMILY_FIELDS = {
