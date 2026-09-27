@@ -1,4 +1,4 @@
-local function fire_on_press(key)
+local function fire_on_release(key)
     if not (actor_effects and actor_effects.Hit_MaskCleaning) then
         return
     end
@@ -19,7 +19,7 @@ function register()
     wd_core.register({
         id = "wd_hands_wipe",
         callbacks = {
-            on_key_press = { { fire_on_press, unless_captured = true } },
+            on_key_release = { { fire_on_release, unless_captured = true } },
         },
     })
 end

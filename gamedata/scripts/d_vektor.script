@@ -297,13 +297,31 @@ function update_pointers_if_worn()
     end
 end
 
+local STAMINA_LOW = 0.4
+local STAMINA_RECOVERED = 0.7
+local stamina_low = false
+
+local function resolve_dynamic_face(power)
+    stamina_low = power < (stamina_low and STAMINA_RECOVERED or STAMINA_LOW)
+    return stamina_low and "stamina" or "hp"
+end
+
 local function update_status_bar()
     local mode = d_vektor_config.get_status_bar()
     if mode == "toxic" or (mode == "dynamic" and wd_toxic.is_draining()) then
-        get_ui().set_status_bar(true, wd_toxic.get_filter_capacity() or 0)
+        get_ui().set_status_bar("toxic", wd_toxic.get_filter_capacity() or 0)
         return
     end
-    get_ui().set_status_bar(false, db.actor and db.actor.power or 0)
+    local actor = db.actor
+    local power = actor and actor.power or 0
+    if mode == "dynamic" then
+        mode = resolve_dynamic_face(power)
+    end
+    if mode == "hp" then
+        get_ui().set_status_bar("hp", actor and actor.health or 0)
+        return
+    end
+    get_ui().set_status_bar("stamina", power)
 end
 
 function update_status_bar_if_worn()
@@ -356,8 +374,6 @@ local function new_status_bar_field()
 end
 
 local function register_gui()
-    local has_gauge = wd_toxic.is_installed()
-
     wd_gui.register_device({
         id = "vektor",
         label = "Vektor",
@@ -396,16 +412,14 @@ local function register_gui()
             arrow_ui_scale = wd_gui.new_slider(0.01, 3),
             compass_offset = wd_gui.new_slider(-180, 180),
             brightness = wd_gui.new_percent_slider(),
-            status_bar = has_gauge and new_status_bar_field() or nil,
+            status_bar = new_status_bar_field(),
         },
     })
 
     local screen_rows = {
         { "brightness", nil, 5, "Brightness" },
+        { "status_bar", nil, 1, "Gauge" },
     }
-    if has_gauge then
-        screen_rows[#screen_rows + 1] = { "status_bar", nil, 1, "Gauge" }
-    end
 
     wd_gui.register_tab({
         device = "vektor",

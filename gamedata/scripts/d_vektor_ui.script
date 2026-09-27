@@ -7,6 +7,12 @@ local allow_update = wd_core.throttle(350)
 local scratch_pos = vector2()
 local scratch_size = vector2()
 
+local FACE_TEX = {
+    stamina = "vektor_bg",
+    toxic = "vektor_bg_toxic",
+    hp = "vektor_bg_hp",
+}
+
 local DIGIT_TEX = {}
 for digit = 0, 9 do
     DIGIT_TEX[digit] = "vektor_t" .. digit
@@ -103,8 +109,8 @@ function apply_digit_layout()
     screen.colon:SetWndSize(scratch_size:set(colon.w * scale, colon.h * scale))
 end
 
-function UIVektor:set_status_bar(is_toxic, ratio)
-    self.face = binder.bind(self.bg, is_toxic and "vektor_bg_toxic" or "vektor_bg", self.face)
+function UIVektor:set_status_bar(face, ratio)
+    self.face = binder.bind(self.bg, FACE_TEX[face], self.face)
     local fill = clamp(ratio, 0, 1)
     self.bar_fill:SetWndSize(scratch_size:set(self.bar_fill_w * fill, self.bar_fill_h))
 end
@@ -166,10 +172,10 @@ function set_distance(meters)
     end
 end
 
-function set_status_bar(is_toxic, ratio)
+function set_status_bar(face, ratio)
     local screen = hud.get()
     if screen then
-        screen:set_status_bar(is_toxic, ratio)
+        screen:set_status_bar(face, ratio)
     end
 end
 
