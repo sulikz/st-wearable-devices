@@ -237,42 +237,48 @@
 	<cap_global5 x="174" y="218" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global5>
-	<chk_global6 x="352" y="104" width="26" height="24" stretch="1">
+	<chk_global6 x="144" y="244" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global6>
-	<cap_global6 x="382" y="106" width="172" height="20">
+	<cap_global6 x="174" y="246" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global6>
-	<chk_global7 x="352" y="132" width="26" height="24" stretch="1">
+	<chk_global7 x="352" y="104" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global7>
-	<cap_global7 x="382" y="134" width="172" height="20">
+	<cap_global7 x="382" y="106" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global7>
-	<chk_global8 x="352" y="160" width="26" height="24" stretch="1">
+	<chk_global8 x="352" y="132" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global8>
-	<cap_global8 x="382" y="162" width="172" height="20">
+	<cap_global8 x="382" y="134" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global8>
-	<chk_global9 x="352" y="188" width="26" height="24" stretch="1">
+	<chk_global9 x="352" y="160" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global9>
-	<cap_global9 x="382" y="190" width="172" height="20">
+	<cap_global9 x="382" y="162" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global9>
-	<chk_global10 x="352" y="216" width="26" height="24" stretch="1">
+	<chk_global10 x="352" y="188" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global10>
-	<cap_global10 x="382" y="218" width="172" height="20">
+	<cap_global10 x="382" y="190" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global10>
-	<chk_global11 x="352" y="244" width="26" height="24" stretch="1">
+	<chk_global11 x="352" y="216" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global11>
-	<cap_global11 x="382" y="246" width="172" height="20">
+	<cap_global11 x="382" y="218" width="172" height="20">
 		<text align="l" font="letterica16"></text>
 	</cap_global11>
+	<chk_global12 x="352" y="244" width="26" height="24" stretch="1">
+		<texture>ui_inGame2_checkbox</texture>
+	</chk_global12>
+	<cap_global12 x="382" y="246" width="172" height="20">
+		<text align="l" font="letterica16"></text>
+	</cap_global12>
 
 	<pose_header x="14" y="104" width="110" height="20">
 		<text align="l" font="letterica16">Hand pose</text>

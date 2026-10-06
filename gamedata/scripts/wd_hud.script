@@ -9,6 +9,15 @@ local function get_sidhud_module()
     return rawget(_G, "ui_sidhud_mcm")
 end
 
+local AMMO_WIDGETS = {
+    "m_ui_weapon_cur_ammo",
+    "m_ui_weapon_fmj_ammo",
+    "m_ui_weapon_ap_ammo",
+    "m_ui_weapon_third_ammo",
+    "m_ui_grenade",
+    "m_ui_weapon_icon",
+}
+
 local FLAGS = {
     {
         key = "hud_minimap",
@@ -41,6 +50,7 @@ local FLAGS = {
         end,
     },
     { key = "hud_fire", label = "Fire mode" },
+    { key = "hud_ammo", label = "Ammo counter" },
     { key = "hud_status", label = "Status Icons" },
     { key = "hud_companions", label = "Companions" },
     { key = "hud_bhs", label = "BHS HUD", default = 1 },
@@ -180,7 +190,7 @@ local function is_bhs_hidden()
     if not is_mode_on("hud_bhs_inv") then
         return false
     end
-    return not (db.actor and db.actor:has_info("inventory_wnd_open"))
+    return actor_menu.get_last_mode() ~= 1
 end
 
 local function apply_bhs()
@@ -222,6 +232,9 @@ function actor_on_update()
             st.m_ui_psy_bar_show = true
         end
         park(st.m_fire_mode, "hud_fire")
+        for _, field in ipairs(AMMO_WIDGETS) do
+            park(st[field], "hud_ammo")
+        end
     end
     apply_radio()
     apply_module(actor_status, "hud_status")

@@ -1,10 +1,30 @@
 local SECTION = "wd_bracer"
 local ATT_BONE = "l_forearm_twist"
-local PATCH_POLL_MS = 500
 
-local function apply_patch_texture()
-    wd_attach.apply_skin_texture(SECTION, d_bracer_config.get_patch_texture(), d_bracer_config.BAKED_PATCH_TEXTURE)
+local function apply_patch_texture(patch_section)
+    wd_attach.apply_skin_texture(
+        SECTION,
+        d_bracer_config.get_patch_texture(patch_section),
+        d_bracer_config.BAKED_PATCH_TEXTURE
+    )
 end
+
+local patch_owner = wd_worn.new({
+    save_key = "wd_bracer_patch",
+    get_obj_value = function(obj)
+        return obj and obj:section()
+    end,
+    on_attach = function(obj)
+        local patch_section = obj:section()
+        apply_patch_texture(patch_section)
+        return patch_section
+    end,
+    on_detach = function()
+        if is_worn() then
+            apply_patch_texture(nil)
+        end
+    end,
+})
 
 local owner = wd_worn.new({
     attach_label = "st_attach_wd_bracer",
@@ -43,7 +63,7 @@ function sync_attachment()
         bone = ATT_BONE,
         transforms = d_bracer_config.transforms,
     })
-    apply_patch_texture()
+    apply_patch_texture(patch_owner.get_value())
     return attachment
 end
 
@@ -179,6 +199,13 @@ end
 
 function register()
     wd_slots.register_bracer(is_worn)
+    wd_slots.register_device({
+        id = "patch",
+        slot = "patch",
+        in_place = true,
+        matches_section = d_bracer_config.get_patch_stem,
+        owner = patch_owner,
+    })
     wd_exo.register_device({
         id = "bracer",
         names = { SECTION },
@@ -188,10 +215,10 @@ function register()
         id = "bracer",
         callbacks = {
             actor_on_first_update = { actor_on_first_update },
-            actor_on_update = { owner.drop_poll, { apply_patch_texture, interval = PATCH_POLL_MS } },
+            actor_on_update = { owner.drop_poll },
             on_before_key_press = { { open_customize_on_chord, unless_captured = true } },
-            save_state = { owner.save },
-            load_state = { owner.load },
+            save_state = { owner.save, patch_owner.save },
+            load_state = { owner.load, patch_owner.load },
         },
         on_start = start,
     })

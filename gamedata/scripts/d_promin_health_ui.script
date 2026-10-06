@@ -652,16 +652,41 @@ local function get_needs_row_source()
     end
 end
 
-local function get_deprivation_pct(status, get_value, get_blur_4)
-    if not (status and status[get_value] and status[get_blur_4]) then
-        return nil
-    end
-    local blur_4 = status[get_blur_4]()
+local DEPRIVATION_SCALE = 10000
+
+local THIRST = {
+    get_last = "get_last_drink",
+    get_blur_4 = "get_thirst_blur_4",
+    get_deprivation = "get_water_deprivation",
+    blur_4 = 5760,
+}
+local SLEEP = {
+    get_last = "get_last_sleep",
+    get_blur_4 = "get_sleep_blur_4",
+    get_deprivation = "get_sleep_deprivation",
+    blur_4 = 8750,
+}
+
+local function get_remaining_pct(last, blur_4)
     if blur_4 <= 0 then
         return nil
     end
-    local ratio = (blur_4 - status[get_value]()) / blur_4
-    return math.floor(clamp(ratio, 0, 1) * 100)
+    return math.floor(clamp((blur_4 - last) / blur_4, 0, 1) * 100)
+end
+
+local function get_deprivation_pct(status, need)
+    if not status then
+        return nil
+    end
+    local get_last = status[need.get_last]
+    local get_blur_4 = status[need.get_blur_4]
+    if get_last and get_blur_4 then
+        return get_remaining_pct(get_last(), get_blur_4())
+    end
+    local get_deprivation = status[need.get_deprivation]
+    if get_deprivation then
+        return get_remaining_pct(get_deprivation() * DEPRIVATION_SCALE, need.blur_4)
+    end
 end
 
 local function get_need_pcts(cond)
@@ -674,10 +699,10 @@ local function get_need_pcts(cond)
     end
     need_pcts.food = nil
     if cond then
-        need_pcts.food = math.floor(clamp(cond:GetSatiety() - 0.1, 0, 1) * 1.123 * 100)
+        need_pcts.food = math.min(math.floor(clamp(cond:GetSatiety() - 0.1, 0, 1) * 1.123 * 100), 100)
     end
-    need_pcts.water = get_deprivation_pct(actor_status_thirst, "get_last_drink", "get_thirst_blur_4")
-    need_pcts.sleep = get_deprivation_pct(actor_status_sleep, "get_last_sleep", "get_sleep_blur_4")
+    need_pcts.water = get_deprivation_pct(actor_status_thirst, THIRST)
+    need_pcts.sleep = get_deprivation_pct(actor_status_sleep, SLEEP)
     return need_pcts
 end
 
@@ -694,19 +719,28 @@ local function update_needs(page, cond)
     end
 end
 
-local function update_bio_frame(page)
-    if not zzz_player_injuries or not db.actor or not db.actor:alive() then
-        set_blanked(page, true)
-        return false
+local function get_rad_full()
+    if grok_progressive_rad_damages then
+        return d_promin_config.RAD_FULL_GAMMA
     end
+    return d_promin_config.RAD_FULL_ANOMALY
+end
 
-    set_blanked(page, false)
+local function apply_limb(page, limb, perm, total, max_val)
+    local name = "bar_" .. limb
+    set_limb(page[name], page[name .. "_temp"], page[name .. "_track"], perm, total, max_val)
+end
 
-    local health = zzz_player_injuries.health
-    local maxhp = zzz_player_injuries.maxhp
-    local timedhp = zzz_player_injuries.timedhp
-    if not health or not maxhp or not timedhp then
-        return false
+local function update_limbs(page)
+    local injuries = zzz_player_injuries
+    local health = injuries and injuries.health
+    local maxhp = injuries and injuries.maxhp
+    local timedhp = injuries and injuries.timedhp
+    if not (health and maxhp and timedhp) then
+        for _, limb in ipairs(LIMBS) do
+            apply_limb(page, limb, 1, 1, 1)
+        end
+        return
     end
 
     local pv_h, pv_b
@@ -716,20 +750,30 @@ local function update_bio_frame(page)
     end
     for _, limb in ipairs(LIMBS) do
         local dk = DATA_KEY[limb] or limb
-        set_limb(
-            page["bar_" .. limb],
-            page["bar_" .. limb .. "_temp"],
-            page["bar_" .. limb .. "_track"],
+        apply_limb(
+            page,
+            limb,
             get_limb_perm(dk, health, timedhp, pv_h, pv_b),
             get_limb_total(dk, health, pv_h),
             maxhp[dk]
         )
     end
+end
+
+local function update_bio_frame(page)
+    if not db.actor or not db.actor:alive() then
+        set_blanked(page, true)
+        return false
+    end
+
+    set_blanked(page, false)
+
+    update_limbs(page)
 
     set_bar(page.bar_health, db.actor.health or 0, "wd_bar_sys_hp")
     local psy = arszi_psy and arszi_psy.get_psy_health and arszi_psy.get_psy_health() or db.actor.psy_health or 0
     set_bar(page.bar_psy, psy, "wd_bar_sys_hp")
-    set_bar(page.bar_rad, (db.actor.radiation or 0) / d_promin_config.RAD_FULL, "wd_bar_sys_hp")
+    set_bar(page.bar_rad, (db.actor.radiation or 0) / get_rad_full(), "wd_bar_sys_hp")
     set_bar(page.bar_stam, db.actor.power or 0, "wd_bar_sys_stam")
 
     local bleed = db.actor.bleeding or 0

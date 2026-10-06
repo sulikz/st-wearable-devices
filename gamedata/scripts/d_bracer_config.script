@@ -6,20 +6,7 @@ DEFAULT_PATCH = "loners"
 BAKED_PATCH_TEXTURE = PATCH_TEXTURE_PREFIX .. DEFAULT_PATCH
 PATCH_TEXTURE_NONE = PATCH_TEXTURE_PREFIX .. "none"
 
-PATCHES = {
-    stalker = "loners",
-    bandit = "bandits",
-    csky = "clearsky",
-    dolg = "duty",
-    freedom = "freedom",
-    killer = "merc",
-    army = "military",
-    ecolog = "ecolog",
-    monolith = "monolith",
-    greh = "sin",
-    renegade = "renegades",
-    isg = "isg",
-}
+PATCH_KEY = "wd_bracer_patch"
 
 DEFAULTS = {
     model_pos = { 0.0578507975669, 0.0000962907679, 0.000420982957 },
@@ -48,27 +35,13 @@ resolve = cfg.resolve
 load_transforms = cfg.load_transforms
 save_global = cfg.save_global
 
-local function get_suit_community()
-    local suit = wd_outfit.get_item()
-    if not suit then
-        return nil
-    end
-    local community = ini_sys:r_string_ex(suit:section(), "community")
-    if not community or community == "" then
-        return nil
-    end
-    if se_load_var(suit:id(), nil, "unpatched") then
-        return nil
-    end
-    return community
+function get_patch_stem(patch_section)
+    local stem = patch_section and ini_sys:r_string_ex(patch_section, PATCH_KEY)
+    return stem ~= "" and stem or nil
 end
 
-function get_patch_stem()
-    return PATCHES[get_suit_community()]
-end
-
-function get_patch_texture()
-    local stem = get_patch_stem()
+function get_patch_texture(patch_section)
+    local stem = get_patch_stem(patch_section)
     if not stem then
         return PATCH_TEXTURE_NONE
     end
