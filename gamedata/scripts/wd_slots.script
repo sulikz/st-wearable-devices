@@ -72,6 +72,15 @@ function get_mounted(slot)
     return nil
 end
 
+function is_in_place(slot)
+    for _, spec in pairs(devices) do
+        if spec.slot == slot then
+            return spec.in_place == true
+        end
+    end
+    return false
+end
+
 function get_mounted_object(slot)
     local spec = get_mounted(slot)
     return spec and spec.get_worn_object()

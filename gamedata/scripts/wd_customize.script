@@ -1,4 +1,6 @@
 SLOT_BY_INDEX = { "wrist", "forearm", "side" }
+ACCESSORY_BY_INDEX = { "patch" }
+SLOTS_BY_BAG = { slots = SLOT_BY_INDEX, accessories = ACCESSORY_BY_INDEX }
 REFRESH_SYNC_MS = 1500
 REFRESH_STEP_MS = 300
 
@@ -16,7 +18,7 @@ function decide_drop(from_id, from_idx, to_id, to_idx, item_slot, is_module)
         if to_id == "modules" then
             return { act = "install" }
         end
-        if to_id == "slots" then
+        if SLOTS_BY_BAG[to_id] then
             return { act = "reject", reason = "wrong_slot" }
         end
         return { act = "none" }
@@ -24,21 +26,22 @@ function decide_drop(from_id, from_idx, to_id, to_idx, item_slot, is_module)
     if item_slot == nil then
         return { act = "none" }
     end
+    local to_slots = SLOTS_BY_BAG[to_id]
     if from_id == "devices" then
         if to_id == "modules" then
             return { act = "reject", reason = "wrong_slot" }
         end
-        if to_id ~= "slots" then
+        if not to_slots then
             return { act = "none" }
         end
-        if SLOT_BY_INDEX[to_idx] ~= item_slot then
+        if to_slots[to_idx] ~= item_slot then
             return { act = "reject", reason = "wrong_slot" }
         end
-        return { act = "mount" }
+        return { act = "mount", slot = item_slot }
     end
-    if from_id == "slots" then
-        if to_id == "slots" then
-            if SLOT_BY_INDEX[to_idx] == item_slot then
+    if SLOTS_BY_BAG[from_id] then
+        if to_slots then
+            if to_slots[to_idx] == item_slot then
                 return { act = "none" }
             end
             return { act = "reject", reason = "wrong_slot" }
@@ -58,10 +61,18 @@ function decide_activate(from_id, from_idx, item_slot, is_module)
     if item_slot == nil then
         return { act = "none" }
     end
-    if from_id == "slots" then
+    if SLOTS_BY_BAG[from_id] then
         return { act = "unmount", slot = item_slot }
     end
-    return { act = "mount" }
+    return { act = "mount", slot = item_slot }
+end
+
+local function run_slot_change(slot, callback)
+    if wd_slots.is_in_place(slot) then
+        callback()
+    else
+        wd_inspect.run_swap(callback)
+    end
 end
 
 function get_bay_ids()
@@ -146,7 +157,7 @@ end
 
 function apply_decision(win, decision, obj)
     if decision.act == "mount" then
-        wd_inspect.run_swap(function()
+        run_slot_change(decision.slot, function()
             local ok, reason = wd_slots.mount(obj, true)
             if win.closed then
                 return
@@ -157,7 +168,7 @@ function apply_decision(win, decision, obj)
             win:refresh()
         end)
     elseif decision.act == "unmount" then
-        wd_inspect.run_swap(function()
+        run_slot_change(decision.slot, function()
             wd_slots.unmount(decision.slot)
             if win.closed then
                 return
@@ -229,7 +240,7 @@ function UIWdCustomize:InitControls()
     self.back = xml:InitStatic("back", self)
     for index = 1, #SLOT_BY_INDEX do
         xml:InitStatic("device_open_" .. index, self)
-        xml:InitStatic("accessory_restricted_" .. index, self)
+        xml:InitStatic((ACCESSORY_BY_INDEX[index] and "accessory_open_" or "accessory_restricted_") .. index, self)
     end
     self.module_restricted = {}
     for index = 1, #get_bay_ids() do
@@ -244,11 +255,14 @@ function UIWdCustomize:InitControls()
     self:Register(self.btn_close, "btn_close")
     self:AddCallback("btn_close", ui_events.BUTTON_CLICKED, self.on_close, self)
     self.CC = {}
-    self.CC.slots = utils_ui.UICellContainer("slots", self, "cont_slots", "cont_slots", self, true)
-    self.CC.slots.disable_callback["On_CC_Add"] = true
-    self.CC.slots.disable_callback["On_CC_Remove"] = true
-    for index = 1, #SLOT_BY_INDEX do
-        self.CC.slots:AddItemManual(nil, nil, index)
+    for bag_id, slots in pairs(SLOTS_BY_BAG) do
+        local container = utils_ui.UICellContainer(bag_id, self, "cont_slots", "cont_" .. bag_id, self, true)
+        container.disable_callback["On_CC_Add"] = true
+        container.disable_callback["On_CC_Remove"] = true
+        for index = 1, #slots do
+            container:AddItemManual(nil, nil, index)
+        end
+        self.CC[bag_id] = container
     end
     self.CC.devices = utils_ui.UICellContainer("devices", self, nil, "cont_devices", self)
     self.CC.devices.disable_scroll_dragdrop = true
@@ -259,7 +273,9 @@ function UIWdCustomize:InitControls()
     for index = 1, #get_bay_ids() do
         self.CC.modules:AddItemManual(nil, nil, index)
     end
-    self.CC.slots:Scroll_Reinit(true)
+    for bag_id in pairs(SLOTS_BY_BAG) do
+        self.CC[bag_id]:Scroll_Reinit(true)
+    end
     self.CC.modules:Scroll_Reinit(true)
     self.item_info = utils_ui.UIInfoItem(self)
     self:refresh()
@@ -273,12 +289,14 @@ function UIWdCustomize:on_open_gui()
 end
 
 function UIWdCustomize:refresh()
-    for index, slot in ipairs(SLOT_BY_INDEX) do
-        local obj = wd_slots.get_mounted_object(slot)
-        if obj then
-            self.CC.slots:AddItemManual(obj, nil, index)
-        else
-            self.CC.slots:RemoveItemManual(index)
+    for bag_id, slots in pairs(SLOTS_BY_BAG) do
+        for index, slot in ipairs(slots) do
+            local obj = wd_slots.get_mounted_object(slot)
+            if obj then
+                self.CC[bag_id]:AddItemManual(obj, nil, index)
+            else
+                self.CC[bag_id]:RemoveItemManual(index)
+            end
         end
     end
     local bay_ids = get_bay_ids()
@@ -293,9 +311,10 @@ end
 
 function UIWdCustomize:Update()
     CUIScriptWnd.Update(self)
-    local found_cell = self.CC.slots:Update(self.item_info)
-    found_cell = self.CC.devices:Update(self.item_info) or found_cell
-    found_cell = self.CC.modules:Update(self.item_info) or found_cell
+    local found_cell = false
+    for _, container in pairs(self.CC) do
+        found_cell = container:Update(self.item_info) or found_cell
+    end
     if not found_cell then
         self.item_info:Update()
     end

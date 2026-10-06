@@ -29,6 +29,9 @@
 	<string id="ui_mcm_wd_double_tap_ms_desc">
 		<text>This controls double tap timeout for switching Promin screens.</text>
 	</string>
+	<string id="ui_mcm_wd_swap_hold_toggle">
+		<text>Swap which device inspection is toggled/held</text>
+	</string>
 	<string id="ui_mcm_wd_gui_key">
 		<text>WD GUI key</text>
 	</string>

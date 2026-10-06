@@ -5,7 +5,7 @@ function is_ui_open()
     if db.actor:is_talking() then
         return true
     end
-    if actor_menu and actor_menu.inventory_opened and actor_menu.inventory_opened() then
+    if actor_menu.get_last_mode() ~= 0 then
         return true
     end
     local pda = ActorMenu.get_pda_menu()

@@ -1,6 +1,6 @@
 local ROW_COUNT = 7
 local PICK_SLOTS = 6
-local GLOBAL_SLOTS = 11
+local GLOBAL_SLOTS = 12
 local BUTTON_ROWS = 3
 local DEVICE_SLOTS = 10
 local SECTION_SLOTS = 6

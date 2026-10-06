@@ -4,12 +4,14 @@ local ID_TAP_MS = "tap_ms"
 local ID_GUI_KEY = "gui_key"
 local ID_GUI_MOD = "gui_mod"
 local ID_DOUBLE_TAP_MS = "double_tap_ms"
+local ID_SWAP_HOLD_TOGGLE = "swap_hold_toggle"
 
 hold_key = DIK_keys.MOUSE_4
 tap_ms = 300
 gui_key = DIK_keys.DIK_M
 gui_mod = "alt"
 double_tap_ms = 250
+swap_hold_toggle = false
 
 local MOD_DIKS = {
     alt = { "DIK_LMENU", "DIK_RMENU" },
@@ -69,6 +71,13 @@ function on_mcm_load()
                 text = "ui_mcm_wd_double_tap_ms",
             },
             {
+                id = ID_SWAP_HOLD_TOGGLE,
+                type = "check",
+                val = 1,
+                def = false,
+                text = "ui_mcm_wd_swap_hold_toggle",
+            },
+            {
                 id = ID_GUI_KEY,
                 type = "key_bind",
                 val = 2,
@@ -112,6 +121,7 @@ function on_option_change()
     gui_key = read_option(ID_GUI_KEY, gui_key)
     gui_mod = read_option(ID_GUI_MOD, gui_mod)
     double_tap_ms = read_option(ID_DOUBLE_TAP_MS, double_tap_ms, is_positive)
+    swap_hold_toggle = read_option(ID_SWAP_HOLD_TOGGLE, swap_hold_toggle)
 end
 
 function get_hold_key_dik()
@@ -132,4 +142,8 @@ end
 
 function get_double_tap_ms()
     return math.max(double_tap_ms, tap_ms)
+end
+
+function is_hold_toggle_swapped()
+    return swap_hold_toggle == true
 end

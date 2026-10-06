@@ -591,7 +591,8 @@ local function get_raise_variant()
     if wd_gui.is_open() then
         return wd_gui.get_pose() == POSE_BY_VARIANT[VARIANT_WATCH] and VARIANT_WATCH or ""
     end
-    return watch_hold and VARIANT_WATCH or ""
+    local swapped = wd_mcm.is_hold_toggle_swapped() and not wd_customize.is_open()
+    return watch_hold ~= swapped and VARIANT_WATCH or ""
 end
 
 local function schedule_pending_show(now)
@@ -1270,7 +1271,7 @@ local function handle_idle(now, ui_open, pressed, held)
     if press_result == "tap" then
         watch_hold = false
         pipboy_toggled = true
-        raise_variant = ""
+        raise_variant = get_raise_variant()
         show(now, ui_open)
         return
     end
