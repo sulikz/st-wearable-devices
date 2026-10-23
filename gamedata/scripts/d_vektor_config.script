@@ -85,7 +85,7 @@ DEFAULTS = {
     arrow_ui_pos = { 0.015833836, 0.0002, -0.021388926 },
     arrow_ui_scale = 0.15000000870228,
     compass_offset = 0,
-    brightness = 80,
+    brightness = 90,
     status_bar = "dynamic",
 }
 

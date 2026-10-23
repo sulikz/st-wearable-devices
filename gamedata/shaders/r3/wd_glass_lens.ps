@@ -1,0 +1,19 @@
+#include "wd_glass.h"
+
+float4 rgba_blend(float4 b, float4 a)
+{
+	float na = a.a + b.a * (1 - a.a);
+	float3 nc = na > 0 ? (a.rgb * a.a + b.rgb * b.a * (1 - a.a)) / na : float3(0, 0, 0);
+	return float4(nc, na);
+}
+
+float4 main(vf I) : SV_Target
+{
+	float4 lens = s_base.Sample(smp_rtlinear, I.tc0 / 2);
+	lens.a *= current_lum();
+
+	float4 reflections = sample_reflections(I.tc0, transpose(float3x3(I.T, I.B, I.N)), I.P, I.N);
+	float4 dirt = sample_dirt(I.tc0, I.N);
+
+	return rgba_blend(rgba_blend(lens, reflections), dirt);
+}
