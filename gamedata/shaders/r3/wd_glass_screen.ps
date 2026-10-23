@@ -1,0 +1,33 @@
+#include "wd_glass.h"
+
+// cracks disabled for now
+/*
+#define CRACK_LEVEL	float2(30.0 / 255.0, 60.0 / 255.0)
+#define CRACK_LOSS	0.5
+#define CRACK_LIGHT	1.0
+
+float crack_mask(float3 texel)
+{
+	return smoothstep(CRACK_LEVEL.x, CRACK_LEVEL.y, max(texel.r, max(texel.g, texel.b)));
+}
+*/
+
+float4 main(vf I) : SV_Target
+{
+/*
+	float3 lens = s_base.Sample(smp_rtlinear, I.tc0 / 2).rgb;
+	float3 dirt = s_base.Sample(smp_rtlinear, float2(I.tc0.x / 2, I.tc0.y / 2 + 0.5)).rgb;
+	float lens_crack = crack_mask(lens);
+	float dirt_crack = crack_mask(dirt);
+
+	// Cracks dim the screen behind and show their painted colour only where the glass is lit
+	float3 lit = max(lens * lens_crack, dirt * dirt_crack) * CRACK_LIGHT * calc_model_lq_lighting(I.N);
+	float loss = CRACK_LOSS * max(lens_crack, dirt_crack);
+*/
+	float3 lit = 0;
+	float loss = 0;
+
+	float4 reflections = sample_reflections(I.tc0, transpose(float3x3(I.T, I.B, I.N)), I.P, I.N);
+
+	return float4(lit + reflections.rgb * reflections.a, loss);
+}
