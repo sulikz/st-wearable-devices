@@ -120,7 +120,7 @@ function new(kit)
     sidebar.emblem = kit.new_image(wd_screen.FILL_ID, "text", holder)
     sidebar.rank = new_cell(kit, holder, "rank", LAYOUT.tiers.w)
     sidebar.reputation = new_cell(kit, holder, "reputation", LAYOUT.tiers.w)
-    sidebar.rule = kit.new_fill("border", holder)
+    sidebar.rule = kit.new_soft_fill("border", wd_panel.SOFT_FILLS.line_h, holder)
     sidebar.channel = kit.new_text({ parent = holder, chars = line_chars })
     sidebar.stamp = kit.new_text({ parent = holder, chars = line_chars })
 
@@ -129,7 +129,7 @@ function new(kit)
     local function place_footer(rule_y)
         local stamp = LAYOUT.stamp
         local stamp_y = rule_y + stamp.gap
-        place_widget(sidebar.rule.widget, inset_x, px.h(rule_y), inner_w, px.h(LAYOUT.rule.h))
+        wd_panel.place_soft_fill(sidebar.rule, inset_x, px.h(rule_y), inner_w, px.h(LAYOUT.rule.h))
         place_text(sidebar.channel, LAYOUT.inset, stamp_y, LAYOUT.line_box_h, LAYOUT.text_h)
         place_text(sidebar.stamp, LAYOUT.inset, stamp_y + stamp.pitch, LAYOUT.line_box_h, LAYOUT.text_h)
         sidebar.card.place(0, 0, sidebar_w, px.h(stamp_y + stamp.lines * stamp.pitch + LAYOUT.inset))
