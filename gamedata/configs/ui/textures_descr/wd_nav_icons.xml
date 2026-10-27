@@ -1,0 +1,37 @@
+<w>
+<file name="wd\ui\promin\nav_icons">
+	<texture id="wd_nav_icon_artifact" x="2" y="2" width="48" height="48"/>
+	<texture id="wd_nav_icon_package" x="54" y="2" width="60" height="66"/>
+	<texture id="wd_nav_icon_squad" x="118" y="2" width="54" height="40"/>
+	<texture id="wd_nav_icon_quest" x="176" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_quest_above" x="244" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_quest_below" x="312" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_link_rise" x="380" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_link_fall" x="448" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_trader" x="516" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_mechanic" x="584" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_medic" x="652" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_guide" x="720" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_barman" x="788" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_special" x="856" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_bed" x="924" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_campfire_lit" x="992" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_campfire_unlit" x="1060" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_up" x="1128" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_up_right" x="1196" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_right" x="1264" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_right_down" x="1332" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_down" x="1400" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_down_left" x="1468" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_left" x="1536" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_mark_transition_left_up" x="1604" y="2" width="64" height="64"/>
+	<texture id="wd_nav_icon_route_here" x="1672" y="2" width="40" height="40"/>
+	<texture id="wd_nav_icon_route_next" x="1716" y="2" width="48" height="48"/>
+	<texture id="wd_nav_icon_route_via" x="1768" y="2" width="32" height="32"/>
+	<texture id="wd_nav_icon_route_goal" x="1804" y="2" width="56" height="56"/>
+	<texture id="wd_nav_icon_route_fold" x="1864" y="2" width="16" height="64"/>
+</file>
+<file name="wd\ui\promin\quest_pointer">
+	<texture id="wd_nav_quest_pointer" x="0" y="0" width="512" height="512"/>
+</file>
+</w>

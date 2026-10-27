@@ -8,112 +8,121 @@ local scratch_size = vector2()
 local scratch_rect = Frect()
 
 local binder = wd_screen.new_binder(d_promin_config.SCREEN_SHADER)
+local map_binder = wd_screen.new_binder(d_promin_config.MAP_SHADER)
 
-local px = d_promin_health_ui.get_px()
-local CHROME = d_promin_health_ui.get_layout()
+local px = d_promin_config.get_px()
 
-local BG_TEXTURE = "wd_tab_bg_map"
-local VIEW = { x = px.x(572), y = px.y(85), w = px.w(425), h = px.h(450) }
+local BG_TEXTURE = "wd_promin_page_nav"
+local TITLE_TEXTURE = "wd_promin_title_nav"
+local WHEEL_ZOOM_FACTOR = 1.15
 
-local ARROW_FRAMES = 64
-local ARROW_GRID = 8
+LAYOUT = {
+    view = { x = px.x(78), y = px.y(76), w = px.w(621), h = px.h(498) },
+    quest_dot = px.h(22),
+}
+
+local PANEL_RGB = d_promin_config.PANEL_RGB
+local WHITE_RGB = { r = 255, g = 255, b = 255 }
+local NONE_LIST = {}
+local REFRESH_MS = 500
+
+local FRAME_COUNT = 64
+local FRAME_GRID = 8
 local ARROW_CELL = 48
 local ARROW_ART_H = 29
+local POINTER_CELL = 64
+local POINTER_SPAN = 2
 
-local TRANSITION_ART_PX = 128
-local TRANSITION_FRAME_SCALE = 32 / 19
+local MARK_SCALE = LAYOUT.quest_dot / ICON_H
+
+local function new_tile_icon(id, scale, rgb)
+    return { id = id, px_w = 1, px_h = 1, scale = scale, r = rgb[1], g = rgb[2], b = rgb[3] }
+end
 
 ICONS = {
     arrow = { id = "wd_map_arrow_frames", scale = ARROW_CELL / ARROW_ART_H },
-    quest_arrow = {
-        id = "wd_map_arrow_frames",
-        px_w = ARROW_CELL,
-        px_h = ARROW_CELL,
-        scale = ARROW_CELL / ARROW_ART_H / 2,
-    },
+    quest_pointer = new_tile_icon("wd_nav_quest_pointer", POINTER_SPAN * MARK_SCALE, PANEL_RGB.tracked),
+}
+local TRACKED_RGB = { r = PANEL_RGB.tracked[1], g = PANEL_RGB.tracked[2], b = PANEL_RGB.tracked[3] }
+ICONS.quest_secondary = new_tile_icon("wd_nav_icon_quest", MARK_SCALE, PANEL_RGB.text)
+ICONS.quest_secondary.above = "wd_nav_icon_quest_above"
+ICONS.quest_secondary.below = "wd_nav_icon_quest_below"
+ICONS.quest = ICONS.quest_secondary
+local SERVICE_RGB = { 89, 255, 227 }
+local FIRE_RGB = { 219, 93, 8 }
+local EXIT_RGB = { 102, 173, 88 }
+
+local MARK_TILES = {
+    trader = { tile = "trader", rgb = SERVICE_RGB },
+    mechanic = { tile = "mechanic", rgb = SERVICE_RGB },
+    medic = { tile = "medic", rgb = SERVICE_RGB },
+    guide = { tile = "guide", rgb = SERVICE_RGB },
+    barman = { tile = "barman", rgb = SERVICE_RGB },
+    special = { tile = "special", rgb = SERVICE_RGB },
+    quest_npc = { tile = "special", rgb = SERVICE_RGB },
+    bed = { tile = "bed", rgb = SERVICE_RGB },
+    campfire = { tile = "campfire_lit", rgb = FIRE_RGB },
+    campfire_unlit = { tile = "campfire_unlit", rgb = PANEL_RGB.text },
 }
 for _, direction in ipairs(wd_map_marks.TRANSITION_DIRECTIONS) do
-    ICONS["transition_" .. direction] = {
-        id = "wd_map_transition_" .. direction,
-        px_w = TRANSITION_ART_PX,
-        px_h = TRANSITION_ART_PX,
-        scale = TRANSITION_FRAME_SCALE,
-    }
+    MARK_TILES["transition_" .. direction] = { tile = "transition_" .. direction, rgb = EXIT_RGB }
+end
+for category, mark in pairs(MARK_TILES) do
+    ICONS[category] = new_tile_icon("wd_nav_icon_mark_" .. mark.tile, MARK_SCALE, mark.rgb)
 end
 
 function get_arrow_frame(offset_x, offset_y)
-    local step = 2 * math.pi / ARROW_FRAMES
-    return math.floor(math.atan2(offset_x, -offset_y) / step + 0.5) % ARROW_FRAMES
+    local step = 2 * math.pi / FRAME_COUNT
+    return math.floor(math.atan2(offset_x, -offset_y) / step + 0.5) % FRAME_COUNT
 end
 
-local function set_arrow_frame(widget, frame)
-    local cell_x = frame % ARROW_GRID * ARROW_CELL
-    local cell_y = math.floor(frame / ARROW_GRID) * ARROW_CELL
-    widget:SetTextureRect(scratch_rect:set(cell_x, cell_y, cell_x + ARROW_CELL, cell_y + ARROW_CELL))
+local function set_frame(widget, frame, cell)
+    local cell_x = frame % FRAME_GRID * cell
+    local cell_y = math.floor(frame / FRAME_GRID) * cell
+    widget:SetTextureRect(scratch_rect:set(cell_x, cell_y, cell_x + cell, cell_y + cell))
 end
 
-local frame_alpha = 0
-local arrow_tint, arrow_tint_alpha = nil, nil
-local white_tint, white_tint_alpha = nil, nil
-local storyline_pin_tint, storyline_pin_tint_alpha = nil, nil
+local frame_level = 0
 
-local function get_icon_alpha()
-    return d_promin_health_ui.get_ui_alpha()
-end
+local cached_arrow_tint, arrow_tint_level = nil, nil
 
-local function get_player_arrow_tint()
-    local alpha = get_icon_alpha()
-    if arrow_tint_alpha ~= alpha then
-        arrow_tint_alpha = alpha
-        arrow_tint = GetARGB(alpha, 106, 255, 89)
+local function get_arrow_tint()
+    if arrow_tint_level ~= frame_level then
+        arrow_tint_level = frame_level
+        cached_arrow_tint = d_promin_config.get_tint(PANEL_RGB.pulse)
     end
-    return arrow_tint
-end
-
-local function get_white_tint()
-    if white_tint_alpha ~= frame_alpha then
-        white_tint_alpha = frame_alpha
-        white_tint = GetARGB(frame_alpha, 255, 255, 255)
-    end
-    return white_tint
-end
-
-local function get_storyline_pin_tint()
-    if storyline_pin_tint_alpha ~= frame_alpha then
-        storyline_pin_tint_alpha = frame_alpha
-        storyline_pin_tint = GetARGB(frame_alpha, 242, 231, 11)
-    end
-    return storyline_pin_tint
+    return cached_arrow_tint
 end
 
 local function get_icon_tint(icon)
-    if icon.tint_alpha ~= frame_alpha then
-        icon.tint_alpha = frame_alpha
-        icon.tint = GetARGB(frame_alpha, icon.r or 255, icon.g or 255, icon.b or 255)
+    if icon.tint_level ~= frame_level then
+        icon.tint_level = frame_level
+        icon.tint = d_promin_config.get_dimmed_tint(icon.r or 255, icon.g or 255, icon.b or 255)
     end
     return icon.tint
 end
 
-local layout_cache = nil
-local layout_scale, layout_x, layout_y = nil, nil, nil
+local map_frame = nil
+local frame_scale, frame_x, frame_y = nil, nil, nil
 
-function get_layout()
+function get_map_frame()
     local transforms = d_promin_config.transforms
     if
-        layout_cache
-        and layout_scale == transforms.map_scale
-        and layout_x == transforms.map_x
-        and layout_y == transforms.map_y
+        map_frame
+        and frame_scale == transforms.map_scale
+        and frame_x == transforms.map_x
+        and frame_y == transforms.map_y
     then
-        return layout_cache
+        return map_frame
     end
-    layout_scale, layout_x, layout_y = transforms.map_scale, transforms.map_x, transforms.map_y
-    local width = VIEW.w * transforms.map_scale
-    local height = VIEW.h * transforms.map_scale
-    layout_cache = {
+    frame_scale, frame_x, frame_y = transforms.map_scale, transforms.map_x, transforms.map_y
+    local view = LAYOUT.view
+    local width = view.w * transforms.map_scale
+    local height = view.h * transforms.map_scale
+    map_frame = {
         screen = {
-            x = VIEW.x + (VIEW.w - width) / 2 + transforms.map_x,
-            y = VIEW.y + (VIEW.h - height) / 2 + transforms.map_y,
+            x = view.x + (view.w - width) / 2 + transforms.map_x,
+            y = view.y + (view.h - height) / 2 + transforms.map_y,
             w = width,
             h = height,
         },
@@ -121,22 +130,14 @@ function get_layout()
         arrow_h = ARROW_H,
         max_marks = MAX_MARKS,
     }
-    return layout_cache
+    return map_frame
 end
 
-local function set_tint(slot, tint)
-    if slot.tint ~= tint then
-        slot.tint = tint
-        slot.widget:SetTextureColor(tint)
-    end
-end
-
-local function set_shown(slot, flag)
-    if slot.shown ~= flag then
-        slot.shown = flag
-        slot.widget:Show(flag)
-    end
-end
+local set_tint = wd_screen.set_tint
+local set_shown = wd_screen.set_shown
+local place_slot = wd_screen.place_slot
+local set_texture_rect = wd_screen.set_texture_rect
+local reset_texture_rect = wd_screen.reset_texture_rect
 
 local VARIANT_DY = 1.8
 
@@ -151,9 +152,9 @@ local function get_variant_id(icon, dy)
     return icon.id
 end
 
-local function bind_icon(slot, icon, tint_override, dy)
+local function bind_icon(slot, icon, dy, tint)
     slot.icon_id = binder.bind(slot.widget, get_variant_id(icon, dy), slot.icon_id)
-    set_tint(slot, tint_override or get_icon_tint(icon))
+    set_tint(slot, tint or get_icon_tint(icon))
 end
 
 local function get_declared_scale(icon)
@@ -188,7 +189,7 @@ end
 
 local EDGE_EPSILON = 1e-6
 
-local function place_icon_inside(slot, icon, scale, center_x, center_y, screen, tint_override, dy)
+local function place_icon_inside(slot, icon, scale, center_x, center_y, screen, dy, tint)
     local icon_w, icon_h = get_icon_size(icon, scale)
     local left = center_x - icon_w / 2
     local top = center_y - icon_h / 2
@@ -200,48 +201,153 @@ local function place_icon_inside(slot, icon, scale, center_x, center_y, screen, 
     then
         return false
     end
-    bind_icon(slot, icon, tint_override, dy)
-    slot.widget:SetWndPos(scratch_pos:set(left, top))
-    slot.widget:SetWndSize(scratch_size:set(icon_w, icon_h))
+    bind_icon(slot, icon, dy, tint)
+    place_slot(slot, left, top, icon_w, icon_h)
     return true
 end
 
 local function apply_map_layer(slot, layer, screen)
-    slot.tex_id = binder.bind(slot.widget, layer.texture_id, slot.tex_id)
-    set_tint(slot, get_white_tint())
+    local tex_id = map_binder.bind(slot.widget, layer.texture_id, slot.tex_id)
+    if tex_id ~= slot.tex_id then
+        slot.tex_id = tex_id
+        reset_texture_rect(slot)
+    end
+    set_tint(slot, get_icon_tint(WHITE_RGB))
     local width = screen.x2 - screen.x1
     local height = screen.y2 - screen.y1
     local frac = layer.frac
     local window = layer.window
-    slot.widget:SetWndPos(scratch_pos:set(screen.x1 + frac.x1 * width, screen.y1 + frac.y1 * height))
-    slot.widget:SetWndSize(scratch_size:set((frac.x2 - frac.x1) * width, (frac.y2 - frac.y1) * height))
-    slot.widget:SetTextureRect(scratch_rect:set(window.left, window.top, window.right, window.bottom))
+    place_slot(
+        slot,
+        screen.x1 + frac.x1 * width,
+        screen.y1 + frac.y1 * height,
+        (frac.x2 - frac.x1) * width,
+        (frac.y2 - frac.y1) * height
+    )
+    set_texture_rect(slot, window.left, window.top, window.right, window.bottom)
     set_shown(slot, true)
 end
 
 local function hide_all(page)
     page.chrome.set_visible(false)
-    page.bio.set_visible(false)
     for _, slot in ipairs(page.map_slots) do
         set_shown(slot, false)
     end
     page.arrow:Show(false)
     set_shown(page.quest, false)
+    if page.kit then
+        page.overlay.hide()
+        page.sidebar.set_hidden()
+    end
     for _, slot in ipairs(page.marks) do
         set_shown(slot, false)
     end
+end
+
+local function get_edge_scale(offset, low, high)
+    if offset > 0 then
+        return high / offset
+    elseif offset < 0 then
+        return low / offset
+    end
+    return math.huge
+end
+
+local function get_free_coord(value, half, blocked_low, blocked_high, screen_low, screen_high)
+    local before = blocked_low - half
+    local after = blocked_high + half
+    local fits_before = before >= screen_low + half
+    local fits_after = after <= screen_high - half
+    if fits_before and not (fits_after and after - value < value - before) then
+        return before
+    elseif fits_after then
+        return after
+    end
+    return value
+end
+
+local function get_pointer_center(page, quest, half_w, half_h, obstacle)
+    local screen = page.screen
+    local center = page.center
+    local scale_x = get_edge_scale(quest.x, screen.x1 + half_w - center.x, screen.x2 - half_w - center.x)
+    local scale_y = get_edge_scale(quest.y, screen.y1 + half_h - center.y, screen.y2 - half_h - center.y)
+    local scale = math.min(1, scale_x, scale_y)
+    local pointer_x = center.x + quest.x * scale
+    local pointer_y = center.y + quest.y * scale
+    if
+        scale == 1
+        or not obstacle
+        or pointer_x - half_w >= obstacle.x2
+        or pointer_x + half_w <= obstacle.x1
+        or pointer_y - half_h >= obstacle.y2
+        or pointer_y + half_h <= obstacle.y1
+    then
+        return pointer_x, pointer_y, scale == 1
+    end
+    if scale_x <= scale_y then
+        return pointer_x, get_free_coord(pointer_y, half_h, obstacle.y1, obstacle.y2, screen.y1, screen.y2), false
+    end
+    return get_free_coord(pointer_x, half_w, obstacle.x1, obstacle.x2, screen.x1, screen.x2), pointer_y, false
+end
+
+local function update_quest(page, quest, obstacle)
+    if not quest then
+        page.quest_frame = nil
+        set_shown(page.quest, false)
+        return nil
+    end
+    local icon, scale, frame
+    if quest.inside then
+        icon, scale = get_category_icon(quest.category)
+        page.quest_frame = nil
+    else
+        icon = ICONS.quest_pointer
+        scale = icon.scale
+        frame = get_arrow_frame(quest.x, quest.y)
+    end
+    if not icon then
+        set_shown(page.quest, false)
+        return nil
+    end
+    local icon_w, icon_h = get_icon_size(icon, scale)
+    local screen = page.screen
+    local center_x, center_y, on_target
+    if frame then
+        center_x, center_y, on_target = get_pointer_center(page, quest, icon_w / 2, icon_h / 2, obstacle)
+    else
+        on_target = true
+        center_x = math.max(screen.x1 + icon_w / 2, math.min(screen.x2 - icon_w / 2, page.center.x + quest.x))
+        center_y = math.max(screen.y1 + icon_h / 2, math.min(screen.y2 - icon_h / 2, page.center.y + quest.y))
+    end
+    local shown =
+        place_icon_inside(page.quest, icon, scale, center_x, center_y, screen, quest.dy, get_icon_tint(TRACKED_RGB))
+    if frame and page.quest_frame ~= frame then
+        page.quest_frame = frame
+        set_frame(page.quest.widget, frame, POINTER_CELL)
+    end
+    set_shown(page.quest, shown)
+    if not shown then
+        return nil
+    end
+    return center_x, center_y, icon_w, icon_h, on_target
 end
 
 function build(ctx)
     local page = {
         visible = false,
         center = { x = 0, y = 0 },
+        task_titles = {},
+        tracked_title = nil,
+        items = {},
+        obstacles = {},
         screen = { x1 = 0, y1 = 0, x2 = 0, y2 = 0 },
     }
-    local icon_tint = GetARGB(get_icon_alpha(), 255, 255, 255)
+    frame_level = d_promin_config.get_ui_level()
+    local icon_tint = get_icon_tint(WHITE_RGB)
+    local allow_refresh = wd_core.throttle(REFRESH_MS)
 
-    page.chrome = d_promin_health_ui.build_chrome({ init = ctx.init, layout = CHROME, bg_tex = BG_TEXTURE })
-    page.bio = d_promin_health_ui.build_bio(ctx)
+    page.chrome =
+        d_promin_chrome_ui.build({ init = ctx.init, bg_tex = BG_TEXTURE, title_tex = TITLE_TEXTURE, wnd = ctx.wnd })
 
     page.map = ctx.init("map")
     page.map:SetStretchTexture(true)
@@ -253,14 +359,17 @@ function build(ctx)
         { widget = page.map, tex_id = nil, tint = icon_tint },
         { widget = page.map_detail, tex_id = nil, tint = icon_tint },
     }
+    local kit = page.chrome.kit
+    page.kit = kit
+    local link_layer = kit and kit.new_holder()
     page.marks = {}
     for index = 1, MAX_MARKS do
         local widget = ctx.init("mark")
         widget:SetStretchTexture(true)
         widget:SetTextureColor(icon_tint)
-        page.marks[index] = { widget = widget, icon_id = nil, tint = icon_tint }
+        page.marks[index] = { widget = widget, icon_id = nil, tint = icon_tint, item = {} }
     end
-    page.quest = { widget = ctx.init("quest"), icon_id = nil, tint = icon_tint }
+    page.quest = { widget = ctx.init("quest"), icon_id = nil, tint = icon_tint, item = {} }
     page.quest.widget:SetStretchTexture(true)
     page.quest.widget:SetTextureColor(icon_tint)
     page.arrow = ctx.init("arrow")
@@ -269,13 +378,17 @@ function build(ctx)
     page.arrow:SetWndSize(scratch_size:set(arrow_side, arrow_side))
     page.arrow:SetStretchTexture(true)
     binder.set(page.arrow, arrow_icon.id)
-    set_arrow_frame(page.arrow, 0)
+    set_frame(page.arrow, 0, ARROW_CELL)
     page.arrow_frame = 0
-    page.arrow_tint = get_player_arrow_tint()
+    page.arrow_tint = get_arrow_tint()
     page.arrow:SetTextureColor(page.arrow_tint)
+    if kit then
+        page.overlay = d_promin_nav_overlay_ui.new(kit, page.screen, link_layer)
+        page.sidebar = d_promin_nav_sidebar_ui.new(kit)
+    end
 
     local function reposition()
-        local screen = get_layout().screen
+        local screen = get_map_frame().screen
         local x2 = screen.x + screen.w
         local y2 = screen.y + screen.h
         if
@@ -293,20 +406,33 @@ function build(ctx)
         page.screen.x2 = x2
         page.screen.y2 = y2
         for _, slot in ipairs(page.map_slots) do
-            slot.widget:SetWndPos(scratch_pos:set(screen.x, screen.y))
-            slot.widget:SetWndSize(scratch_size:set(screen.w, screen.h))
+            place_slot(slot, screen.x, screen.y, screen.w, screen.h)
         end
         page.arrow:SetWndPos(scratch_pos:set(page.center.x - arrow_side / 2, page.center.y - arrow_side / 2))
+        page.arrow_rect = {
+            x1 = page.center.x - arrow_side / 2,
+            y1 = page.center.y - arrow_side / 2,
+            x2 = page.center.x + arrow_side / 2,
+            y2 = page.center.y + arrow_side / 2,
+        }
     end
     reposition()
     hide_all(page)
+
+    local function refresh()
+        page.tracked_title = wd_compass.get_active_task_title()
+        page.task_titles = wd_intel.get_task_titles()
+        if kit then
+            page.sidebar.refresh(page.tracked_title)
+        end
+    end
 
     function page.set_visible(visible)
         page.visible = visible
         if visible then
             page.chrome.set_visible(true)
-            page.bio.set_visible(true)
             page.arrow:Show(true)
+            allow_refresh = wd_core.throttle(REFRESH_MS)
         else
             hide_all(page)
         end
@@ -314,21 +440,43 @@ function build(ctx)
 
     function page.update()
         page.chrome.update()
-        page.bio.update()
+        if page.visible and allow_refresh() then
+            refresh()
+        end
     end
 
     function page.repaint()
         page.chrome.repaint()
-        page.bio.repaint()
+        if kit then
+            page.sidebar.update_pulse()
+        end
+    end
+
+    function page.set_artefact_lit(lit)
+        if kit then
+            page.sidebar.set_artefact_lit(lit)
+        end
+    end
+
+    function page.on_wheel(direction)
+        local zoom = d_promin_config.transforms.map_zoom
+        if direction > 0 then
+            zoom = zoom / WHEEL_ZOOM_FACTOR
+        else
+            zoom = zoom * WHEEL_ZOOM_FACTOR
+        end
+        zoom = clamp(math.floor(zoom + 0.5), d_promin_config.MAP_ZOOM_MIN, d_promin_config.MAP_ZOOM_MAX)
+        d_promin_config.set_map_zoom(zoom)
+        return true
     end
 
     function page.update_map(state)
         if not page.visible then
             return
         end
-        frame_alpha = get_icon_alpha()
+        frame_level = d_promin_config.get_ui_level()
         reposition()
-        local map_layers = (state and state.has_map and state.layers) or {}
+        local map_layers = (state and state.has_map and state.layers) or NONE_LIST
         for index, slot in ipairs(page.map_slots) do
             local layer = map_layers[index]
             if layer then
@@ -341,67 +489,91 @@ function build(ctx)
         local arrow_frame = get_arrow_frame(math.sin(player_heading), -math.cos(player_heading))
         if page.arrow_frame ~= arrow_frame then
             page.arrow_frame = arrow_frame
-            set_arrow_frame(page.arrow, arrow_frame)
+            set_frame(page.arrow, arrow_frame, ARROW_CELL)
         end
-        local arrow_tint = get_player_arrow_tint()
+        local arrow_tint = get_arrow_tint()
         if page.arrow_tint ~= arrow_tint then
             page.arrow_tint = arrow_tint
             page.arrow:SetTextureColor(arrow_tint)
         end
-        local marks = (state and state.marks) or {}
+        local marks = (state and state.marks) or NONE_LIST
+        local quest = state and state.quest
+        local exit_mark_id = quest and quest.exit_mark_id
+        local exit_x, exit_y, exit_w, exit_h
+        local items = wd_map_labels.clear_list(page.items)
         for index, slot in ipairs(page.marks) do
             local mark = marks[index]
             local shown = false
             if mark and mark.inside then
                 local icon, scale = resolve_mark_icon(mark)
                 if icon then
-                    shown = place_icon_inside(
-                        slot,
-                        icon,
-                        scale,
-                        page.center.x + mark.x,
-                        page.center.y + mark.y,
-                        page.screen,
-                        nil,
-                        mark.dy
-                    )
+                    local center_x = page.center.x + mark.x
+                    local center_y = page.center.y + mark.y
+                    local is_routed_exit = exit_mark_id ~= nil and mark.id == exit_mark_id
+                    local tint = is_routed_exit and get_icon_tint(TRACKED_RGB) or nil
+                    shown = place_icon_inside(slot, icon, scale, center_x, center_y, page.screen, mark.dy, tint)
+                    local title = shown and page.task_titles[mark.id]
+                    local is_exit = shown and is_routed_exit
+                    if title or is_exit then
+                        local icon_w, icon_h = get_icon_size(icon, scale)
+                        if is_exit then
+                            exit_x, exit_y, exit_w, exit_h = center_x, center_y, icon_w, icon_h
+                        end
+                        if title then
+                            items[#items + 1] = d_promin_nav_overlay_ui.set_label_item(
+                                slot.item,
+                                mark.id,
+                                title,
+                                false,
+                                index,
+                                center_x,
+                                center_y,
+                                icon_w,
+                                icon_h
+                            )
+                        end
+                    end
                 end
             end
             set_shown(slot, shown)
         end
-        local quest = state and state.quest
-        if quest then
-            local storyline = quest.category ~= "quest_secondary"
-            local icon, scale, raw_x, raw_y, tint, arrow_frame
-            if quest.inside then
-                icon, scale = get_category_icon(storyline and "quest" or "quest_secondary")
-                raw_x, raw_y = quest.x, quest.y
-                page.quest_frame = nil
-            else
-                icon = ICONS.quest_arrow
-                scale = icon.scale
-                raw_x, raw_y = quest.pin_x, quest.pin_y
-                tint = storyline and get_storyline_pin_tint() or nil
-                arrow_frame = get_arrow_frame(quest.x, quest.y)
-            end
-            if not icon then
-                set_shown(page.quest, false)
-                return
-            end
-            local icon_w, icon_h = get_icon_size(icon, scale)
-            local center_x =
-                math.max(page.screen.x1 + icon_w / 2, math.min(page.screen.x2 - icon_w / 2, page.center.x + raw_x))
-            local center_y =
-                math.max(page.screen.y1 + icon_h / 2, math.min(page.screen.y2 - icon_h / 2, page.center.y + raw_y))
-            local shown = place_icon_inside(page.quest, icon, scale, center_x, center_y, page.screen, tint, quest.dy)
-            if arrow_frame and page.quest_frame ~= arrow_frame then
-                page.quest_frame = arrow_frame
-                set_arrow_frame(page.quest.widget, arrow_frame)
-            end
-            set_shown(page.quest, shown)
+        local obstacles = wd_map_labels.clear_list(page.obstacles)
+        obstacles[1] = page.arrow_rect
+        local overlay = page.overlay
+        local zoom_rect = kit and overlay.update_zoom(state and state.zoom)
+        if zoom_rect then
+            obstacles[#obstacles + 1] = zoom_rect
+        end
+        if kit then
+            page.sidebar.update_pulse()
+        end
+        local quest_x, quest_y, quest_w, quest_h, on_target
+        if exit_x then
+            update_quest(page, nil)
+            quest_x, quest_y, quest_w, quest_h, on_target = exit_x, exit_y, exit_w, exit_h, true
         else
-            page.quest_frame = nil
-            set_shown(page.quest, false)
+            quest_x, quest_y, quest_w, quest_h, on_target = update_quest(page, quest, zoom_rect)
+        end
+        if quest_x then
+            local tracked = d_promin_nav_overlay_ui.set_label_item(
+                page.quest.item,
+                d_promin_nav_overlay_ui.TRACKED_ID,
+                page.tracked_title,
+                true,
+                0,
+                quest_x,
+                quest_y,
+                quest_w,
+                quest_h
+            )
+            if on_target and page.tracked_title then
+                items[#items + 1] = tracked
+            else
+                obstacles[#obstacles + 1] = tracked
+            end
+        end
+        if kit then
+            overlay.layout(items, obstacles)
         end
     end
 

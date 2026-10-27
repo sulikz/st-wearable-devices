@@ -85,7 +85,7 @@ local function get_marked_changers(changers, marks)
     for _, candidate in ipairs(candidates) do
         if not (claimed_mark[candidate.mark_index] or marked[candidate.changer_index]) then
             claimed_mark[candidate.mark_index] = true
-            marked[candidate.changer_index] = true
+            marked[candidate.changer_index] = candidate.mark_index
         end
     end
     return marked
@@ -102,6 +102,8 @@ local function get_routed_transitions(changers, marks)
     local transitions = {}
     for index, changer in ipairs(changers) do
         local transition = changer.transition
+        local mark_index = marked[index]
+        transition.mark_id = mark_index and marks[mark_index].id
         local kept = ungated
             or marked[index]
             or (
@@ -115,14 +117,32 @@ local function get_routed_transitions(changers, marks)
     return transitions
 end
 
+local function get_route_marks(sim)
+    local marks = {}
+    local route_sections = get_route_sections()
+    if not route_sections then
+        return marks
+    end
+    for section in pairs(route_sections) do
+        local id = get_story_object_id(section)
+        local server_object = id and sim:object(id)
+        local level = server_object and get_level_name(server_object.m_game_vertex_id)
+        if level then
+            marks[#marks + 1] = { id = server_object.id, level = level, pos = server_object.position }
+        end
+    end
+    table.sort(marks, function(left, right)
+        return left.id < right.id
+    end)
+    return marks
+end
+
 function get_transitions()
     local sim = alife()
     if not sim then
         return nil
     end
-    local route_sections = get_route_sections()
     local changers = {}
-    local marks = {}
     sim:iterate_objects(function(server_object)
         if server_object:clsid() == clsid.level_changer_s then
             local from = get_level_name(server_object.m_game_vertex_id)
@@ -141,14 +161,9 @@ function get_transitions()
                     },
                 }
             end
-        elseif route_sections and route_sections[server_object:name()] then
-            local level = get_level_name(server_object.m_game_vertex_id)
-            if level then
-                marks[#marks + 1] = { level = level, pos = server_object.position }
-            end
         end
     end)
-    local transitions = get_routed_transitions(changers, marks)
+    local transitions = get_routed_transitions(changers, get_route_marks(sim))
     for _, transition in ipairs(get_extra_transitions()) do
         transitions[#transitions + 1] = transition
     end
@@ -203,6 +218,7 @@ function new_nodes(transitions, get_position, get_global_pos)
                 pos = pos,
                 gvid = gvid,
                 arrival = arrival,
+                mark_id = transition.mark_id,
             }
         end
     end
@@ -311,12 +327,26 @@ function new(cfg)
         if not arrival_id then
             return nil
         end
+        local chain = {}
         local step = arrival_id
-        while previous[step] do
+        while step do
+            table.insert(chain, 1, step)
             step = previous[step]
         end
-        local exit_node = node_by_id[step]
-        return { id = step, pos = exit_node.pos, gvid = exit_node.gvid }
+        local exit_id = chain[1]
+        local exit_node = node_by_id[exit_id]
+        local legs = {}
+        for index, id in ipairs(chain) do
+            legs[index] = { level = node_by_id[id].to, chain_distance = best_cost[id] - seeds[exit_id] }
+        end
+        return {
+            id = exit_id,
+            pos = exit_node.pos,
+            gvid = exit_node.gvid,
+            mark_id = exit_node.mark_id,
+            arrival = node_by_id[arrival_id].arrival,
+            legs = legs,
+        }
     end
 
     function router.get_exit(actor_gvid, target_gvid, target_pos)
@@ -340,10 +370,7 @@ function new(cfg)
             solved_target_level = target_level
             solved_at = now
         end
-        if not solved_exit then
-            return nil
-        end
-        return solved_exit.id, solved_exit.pos, solved_exit.gvid
+        return solved_exit
     end
 
     function router.reset()
@@ -381,8 +408,40 @@ function get_exit_pos(target_gvid, target_pos)
     if not (db.actor and target_pos) then
         return nil
     end
-    local _, exit_pos, exit_gvid = get_router().get_exit(db.actor:game_vertex_id(), target_gvid, target_pos)
-    return exit_pos, exit_gvid
+    local exit = get_router().get_exit(db.actor:game_vertex_id(), target_gvid, target_pos)
+    if not exit then
+        return nil
+    end
+    return exit.pos, exit.gvid, exit.mark_id
+end
+
+function get_nav_route(target_id)
+    local target_pos, target_gvid = wd_compass.get_target_pos_of(target_id)
+    local actor_pos = wd_compass.get_actor_global_pos()
+    if not (target_pos and actor_pos) then
+        return nil
+    end
+    local actor_gvid = db.actor:game_vertex_id()
+    local exit = get_router().get_exit(actor_gvid, target_gvid, target_pos)
+    local goal_level = get_level_name(target_gvid)
+    if exit then
+        local exit_distance = get_distance(actor_pos, exit.pos)
+        local legs = exit.legs
+        local stops = {}
+        for index, leg in ipairs(legs) do
+            stops[index] = { level = leg.level, distance = exit_distance + leg.chain_distance }
+        end
+        return {
+            distance = exit_distance + legs[#legs].chain_distance + get_distance(exit.arrival, target_pos),
+            goal_level = goal_level,
+            stops = stops,
+        }
+    end
+    local route = { distance = get_distance(actor_pos, target_pos), goal_level = goal_level }
+    if goal_level == get_level_name(actor_gvid) then
+        route.stops = {}
+    end
+    return route
 end
 
 function get_nav_pos(target_id)

@@ -1,0 +1,7 @@
+<w>
+<face_arcs_mono_nav_compass>
+	<ring x="-0.00904613" y="-0.00904613" width="0.01809225" height="0.01809225" stretch="1">
+		<texture shader="wd\ui">face_arcs_mono_nav_compass</texture>
+	</ring>
+</face_arcs_mono_nav_compass>
+</w>

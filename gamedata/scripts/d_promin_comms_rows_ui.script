@@ -1,0 +1,463 @@
+local px = d_promin_config.get_px()
+local map_binder = wd_screen.new_binder(d_promin_config.MAP_SHADER)
+
+local set_shown = wd_screen.set_shown
+local get_sender_icon = d_promin_comms_sidebar_ui.get_sender_icon
+local SMALL_GLYPH_IDS = d_promin_comms_sidebar_ui.SMALL_GLYPH_IDS
+local get_tone_role = d_promin_comms_sidebar_ui.get_tone_role
+local get_alert_role = d_promin_comms_sidebar_ui.get_alert_role
+local RADIO_ICON = SMALL_GLYPH_IDS[wd_comms.RADIO_GLYPH]
+
+local ACCENT = wd_text.mark(1)
+local NEW_RULE = "new"
+local HEADER_SEPARATOR = "  "
+local PORTRAIT_ROLES = { border = "border" }
+
+local FEED = { x = 75, top = 75, w = 625, bottom = 575 }
+local BAND_H = 32
+local CONTENT_GAP = 8
+local BOTTOM_PAD = 10
+local TRACK_X = 686
+local VIEW_TOP = FEED.top + BAND_H + CONTENT_GAP
+
+LAYOUT = {
+    feed = FEED,
+    band_h = BAND_H,
+    track_x = TRACK_X,
+    view = {
+        x = FEED.x,
+        top = VIEW_TOP,
+        w = TRACK_X - FEED.x,
+        h = FEED.bottom - BOTTOM_PAD - VIEW_TOP,
+        shrink = BAND_H + CONTENT_GAP - BOTTOM_PAD,
+    },
+    text = { x = 157, right = 676, w = 519, h = 18, inset = 3 },
+    row_h = 24,
+    pad_top = 4,
+    pad_bottom = 6,
+    gap = 8,
+    divider_h = 28,
+    sender = { x = 85, w = 62, h = 44, glyph = 20, emblem = 24 },
+    unread = { size = 8, top = 8, shift = 18 },
+    time = { w = 60, gap = 12, chars = 5 },
+    focus = { x = 75, w = 609, bar_w = 3 },
+    flash = { x = 151, w = 531 },
+    rule = { left = 85, right = 676, center = 380.5, line_h = 1.5, gap = 10, label_h = 16, chars = 32 },
+    chip = { pad = 6, h = 20 },
+}
+
+local ROWS = math.floor(LAYOUT.view.h / LAYOUT.row_h)
+local HEAD_PITCH = LAYOUT.pad_top + LAYOUT.row_h + LAYOUT.pad_bottom + LAYOUT.gap
+local HEADS = math.ceil(LAYOUT.view.h / HEAD_PITCH) + 1
+local RULES = math.ceil(LAYOUT.view.h / (HEAD_PITCH + LAYOUT.divider_h + LAYOUT.gap)) + 2
+
+local function is_inside(top, height, bottom)
+    return top >= LAYOUT.view.top and top + height <= bottom
+end
+
+local function get_header_text(entry)
+    local sender = wd_text.get_upper(entry.name or "")
+    local faction = entry.faction
+    if not faction then
+        return sender
+    end
+    return sender .. HEADER_SEPARATOR .. ACCENT .. wd_text.get_upper(faction)
+end
+
+local function hide_head(head)
+    set_shown(head.square, false)
+    head.time.set_visible(false)
+end
+
+local function hide_tile(tile)
+    tile.box.set_visible(false)
+    set_shown(tile.image, false)
+end
+
+local function hide_portrait(portrait)
+    set_shown(portrait.image, false)
+    portrait.border.set_visible(false)
+end
+
+local function hide_rule(rule)
+    set_shown(rule.left, false)
+    set_shown(rule.right, false)
+    set_shown(rule.chip, false)
+    rule.label.set_visible(false)
+end
+
+local function hide_pool(pool, first, hide)
+    for index = first, #pool do
+        hide(pool[index])
+    end
+end
+
+local function get_line_key(text)
+    return text.line.text
+end
+
+local function get_image_key(slot)
+    return slot.image.tex_id
+end
+
+local function new_claim(pool, get_key)
+    return { pool = pool, get_key = get_key, requests = {}, claimed = {} }
+end
+
+local function build_pools(rows, kit, parent, row_chars)
+    rows.focus = { fill = kit.new_fill("focus"), bar = kit.new_fill("text") }
+    rows.flash = kit.new_fill("text")
+    rows.rules = {}
+    local label_h = px.h(LAYOUT.rule.label_h)
+    for index = 1, RULES do
+        rows.rules[index] = {
+            left = kit.new_fill("dim"),
+            right = kit.new_fill("dim"),
+            chip = kit.new_fill("text"),
+            label = kit.new_text({ chars = LAYOUT.rule.chars, height = label_h }),
+        }
+    end
+    rows.tiles = {}
+    for index = 1, HEADS do
+        rows.tiles[index] = { box = kit.new_box(), image = kit.new_image(RADIO_ICON, "text") }
+    end
+    rows.portraits = {}
+    for index = 1, HEADS do
+        rows.portraits[index] = {
+            image = kit.new_image(wd_screen.FILL_ID, "art", parent, map_binder),
+            border = kit.new_box(PORTRAIT_ROLES),
+        }
+    end
+    rows.heads = {}
+    local time = LAYOUT.time
+    for index = 1, HEADS do
+        rows.heads[index] = {
+            square = kit.new_fill("text"),
+            time = kit.new_text({ chars = time.chars, width = px.w(time.w), align = "right" }),
+        }
+    end
+    rows.lines = {}
+    for index = 1, ROWS do
+        rows.lines[index] = kit.new_text({ chars = row_chars })
+    end
+end
+
+function new(kit, parent, row_chars)
+    local font = kit.font
+    local view_cfg = LAYOUT.view
+    local text_cfg = LAYOUT.text
+    local rows = {}
+    build_pools(rows, kit, parent, row_chars)
+    local cursor = {}
+    local claims = {
+        lines = new_claim(rows.lines, get_line_key),
+        tiles = new_claim(rows.tiles, get_image_key),
+        portraits = new_claim(rows.portraits, get_image_key),
+    }
+
+    local function has_room(kind)
+        return claims[kind].pool[cursor[kind] + 1] ~= nil
+    end
+
+    local function add_request(kind, key)
+        local count = cursor[kind] + 1
+        local requests = claims[kind].requests
+        local request = requests[count]
+        if not request then
+            request = {}
+            requests[count] = request
+        end
+        request.key = key
+        cursor[kind] = count
+        return request
+    end
+
+    local function claim_slot(claim, key)
+        local claimed = claim.claimed
+        for index = 1, #claim.pool do
+            if not claimed[index] and (key == nil or claim.get_key(claim.pool[index]) == key) then
+                claimed[index] = true
+                return index
+            end
+        end
+        return nil
+    end
+
+    local function assign_slots(kind)
+        local claim = claims[kind]
+        local requests = claim.requests
+        for index = 1, #claim.pool do
+            claim.claimed[index] = false
+        end
+        for count = 1, cursor[kind] do
+            local request = requests[count]
+            request.slot = claim_slot(claim, request.key)
+        end
+        for count = 1, cursor[kind] do
+            local request = requests[count]
+            request.slot = request.slot or claim_slot(claim, nil)
+        end
+        return claim
+    end
+
+    local function draw_slots(kind, draw, hide)
+        local claim = assign_slots(kind)
+        local pool = claim.pool
+        local requests = claim.requests
+        for count = 1, cursor[kind] do
+            local request = requests[count]
+            draw(pool[request.slot], request)
+        end
+        for index = 1, #pool do
+            if not claim.claimed[index] then
+                hide(pool[index])
+            end
+        end
+    end
+
+    local function request_line(value, role, accent_role, left, top)
+        local request = add_request("lines", value)
+        request.role = role
+        request.accent_role = accent_role
+        request.left = left
+        request.top = top
+    end
+
+    local function draw_line(text, request)
+        text.place(request.left, request.top)
+        text.show(request.key, request.role, request.accent_role)
+    end
+
+    local function hide_line(text)
+        text.set_visible(false)
+    end
+
+    local function take(pool, key)
+        local item = pool[cursor[key] + 1]
+        if item then
+            cursor[key] = cursor[key] + 1
+        end
+        return item
+    end
+
+    local function draw_flash(row_y)
+        local flash = LAYOUT.flash
+        px.place(rows.flash.widget, flash.x, row_y, flash.w, LAYOUT.row_h)
+        cursor.flashed = true
+    end
+
+    local function draw_focus(block_y, height)
+        local top = math.max(block_y, view_cfg.top)
+        local bottom = math.min(block_y + height, cursor.bottom)
+        if bottom <= top then
+            return
+        end
+        local focus = LAYOUT.focus
+        px.place(rows.focus.fill.widget, focus.x, top, focus.w, bottom - top)
+        px.place(rows.focus.bar.widget, focus.x, top, focus.bar_w, bottom - top)
+        cursor.focused = true
+    end
+
+    local function request_sender(entry, top)
+        local portrait_id = entry.portrait
+        if portrait_id then
+            if has_room("portraits") then
+                add_request("portraits", portrait_id).top = top
+            end
+            return
+        end
+        if not has_room("tiles") then
+            return
+        end
+        local id, is_emblem = get_sender_icon(entry, SMALL_GLYPH_IDS)
+        local request = add_request("tiles", id)
+        request.top = top
+        request.role = get_alert_role(entry)
+        request.size = is_emblem and LAYOUT.sender.emblem or LAYOUT.sender.glyph
+    end
+
+    local function draw_portrait(portrait, request)
+        local sender = LAYOUT.sender
+        local top = request.top
+        local image = portrait.image
+        kit.set_image(image, request.key)
+        px.place(image.widget, sender.x, top, sender.w, sender.h)
+        set_shown(image, true)
+        px.place_box(portrait.border, sender.x, top, sender.w, sender.h)
+        portrait.border.set_visible(true)
+    end
+
+    local function draw_tile(tile, request)
+        local sender = LAYOUT.sender
+        local top = request.top
+        local size = request.size
+        local role = request.role
+        px.place_box(tile.box, sender.x, top, sender.w, sender.h)
+        tile.box.set_role(role or "border")
+        tile.box.set_visible(true)
+        kit.set_image(tile.image, request.key)
+        kit.set_role(tile.image, role or "text")
+        px.place(tile.image.widget, sender.x + (sender.w - size) / 2, top + (sender.h - size) / 2, size, size)
+        set_shown(tile.image, true)
+    end
+
+    local function draw_header(block, row_y, invert)
+        if not has_room("lines") then
+            return
+        end
+        local head = take(rows.heads, "heads")
+        if not head then
+            return
+        end
+        if invert then
+            draw_flash(row_y)
+        end
+        local entry = block.entry
+        local inverted_role = invert and "fill"
+        local time_cfg = LAYOUT.time
+        local text_y = px.y(row_y + text_cfg.inset)
+        local time = d_promin_comms_feed.format_time(entry)
+        head.time.place(px.x(text_cfg.right - time_cfg.w), text_y)
+        head.time.show(time, inverted_role or "meta")
+        local text_x = text_cfg.x
+        local unread = block.unread
+        if unread then
+            local square = LAYOUT.unread
+            px.place(head.square.widget, text_x, row_y + square.top, square.size, square.size)
+            kit.set_role(head.square, inverted_role or "text")
+            text_x = text_x + square.shift
+        end
+        set_shown(head.square, unread)
+        local room = text_cfg.right - text_x - wd_text.measure(font, time, text_cfg.h) - time_cfg.gap
+        local header = wd_text.ellipsize(font, get_header_text(entry), text_cfg.h, room)
+        request_line(header, inverted_role or get_tone_role(entry), inverted_role or "meta", px.x(text_x), text_y)
+        if row_y + LAYOUT.sender.h <= cursor.bottom then
+            request_sender(entry, row_y)
+        end
+    end
+
+    local function draw_body(block, index, row_y, invert)
+        if not has_room("lines") then
+            return
+        end
+        if invert then
+            draw_flash(row_y)
+        end
+        local lines = block.lines
+        local value = lines[index]
+        local more = block.more
+        if more and index == #lines then
+            value = value .. ACCENT .. d_promin_comms_feed.format_more(more)
+        end
+        local inverted_role = invert and "fill"
+        local role = inverted_role or ((block.focus or block.unread) and "text" or "mid")
+        request_line(value, role, inverted_role or "meta", px.x(text_cfg.x), px.y(row_y + text_cfg.inset))
+    end
+
+    local function draw_message(block, block_y)
+        if block.focus then
+            draw_focus(block_y, block.height)
+        end
+        local row_h = LAYOUT.row_h
+        local invert = block.entry.id == cursor.flash_id
+        local row_y = block_y + LAYOUT.pad_top
+        if block.head then
+            if is_inside(row_y, row_h, cursor.bottom) then
+                draw_header(block, row_y, invert)
+            end
+            row_y = row_y + row_h
+            invert = false
+        end
+        for index = 1, #block.lines do
+            if is_inside(row_y, row_h, cursor.bottom) then
+                draw_body(block, index, row_y, invert)
+            end
+            invert = false
+            row_y = row_y + row_h
+        end
+    end
+
+    local function show_rule_line(line, role)
+        kit.set_role(line, role)
+        set_shown(line, true)
+    end
+
+    local function draw_rule(block, block_y)
+        local rule = take(rows.rules, "rules")
+        if not rule then
+            return
+        end
+        local spec = LAYOUT.rule
+        local divider_h = LAYOUT.divider_h
+        local label = block.label
+        local label_w = wd_text.measure(font, label, spec.label_h)
+        local label_x = spec.center - label_w / 2
+        local is_new = block.rule == NEW_RULE
+        local left_x = label_x
+        local right_x = label_x + label_w
+        if is_new then
+            local chip = LAYOUT.chip
+            left_x = left_x - chip.pad
+            right_x = right_x + chip.pad
+            px.place(rule.chip.widget, left_x, block_y + (divider_h - chip.h) / 2, right_x - left_x, chip.h)
+        end
+        set_shown(rule.chip, is_new)
+        local line_role = is_new and "text" or "dim"
+        local line_y = block_y + (divider_h - spec.line_h) / 2
+        px.place(rule.left.widget, spec.left, line_y, left_x - spec.gap - spec.left, spec.line_h)
+        px.place(rule.right.widget, right_x + spec.gap, line_y, spec.right - right_x - spec.gap, spec.line_h)
+        show_rule_line(rule.left, line_role)
+        show_rule_line(rule.right, line_role)
+        rule.label.place(px.x(label_x), px.y(block_y + (divider_h - spec.label_h) / 2))
+        rule.label.show(label, is_new and "fill" or "meta")
+    end
+
+    local function draw_block(block, block_y)
+        if block.kind == "rule" then
+            if is_inside(block_y, LAYOUT.divider_h, cursor.bottom) then
+                draw_rule(block, block_y)
+            end
+            return
+        end
+        if block.focus then
+            cursor.entry = block.entry
+        end
+        if block_y < cursor.bottom and block_y + block.height > view_cfg.top then
+            draw_message(block, block_y)
+        end
+    end
+
+    local function reset_cursor()
+        cursor.lines, cursor.heads, cursor.tiles, cursor.portraits, cursor.rules = 0, 0, 0, 0, 0
+        cursor.focused, cursor.flashed, cursor.entry = false, false, nil
+    end
+
+    local function finish()
+        draw_slots("lines", draw_line, hide_line)
+        draw_slots("tiles", draw_tile, hide_tile)
+        draw_slots("portraits", draw_portrait, hide_portrait)
+        hide_pool(rows.heads, cursor.heads + 1, hide_head)
+        hide_pool(rows.rules, cursor.rules + 1, hide_rule)
+        set_shown(rows.focus.fill, cursor.focused)
+        set_shown(rows.focus.bar, cursor.focused)
+        set_shown(rows.flash, cursor.flashed)
+    end
+
+    function rows.render(view, flash_id)
+        reset_cursor()
+        cursor.bottom = view_cfg.top + view.view_h
+        cursor.flash_id = flash_id
+        for _, block in ipairs(view.blocks) do
+            draw_block(block, view_cfg.top + block.top - view.scroll_top)
+        end
+        finish()
+        return cursor.entry
+    end
+
+    function rows.hide()
+        reset_cursor()
+        finish()
+    end
+
+    return rows
+end

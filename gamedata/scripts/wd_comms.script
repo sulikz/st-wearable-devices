@@ -1,0 +1,679 @@
+local SAVE_KEY = "wd_comms"
+local CAP = 100
+local COMMUNITIES = {
+    "stalker",
+    "dolg",
+    "freedom",
+    "csky",
+    "ecolog",
+    "killer",
+    "army",
+    "bandit",
+    "monolith",
+    "greh",
+    "renegade",
+    "isg",
+}
+local FACTION_VARIANTS = 10
+RADIO_GLYPH = "radio"
+local ALERT_GLYPH = "alert"
+GLYPHS = {
+    RADIO_GLYPH,
+    "task",
+    ALERT_GLYPH,
+    "stash",
+    "money",
+    "task_new",
+    "task_update",
+    "task_fail",
+    "rank_up",
+    "rank_down",
+    "rep_up",
+    "rep_down",
+    "emission",
+    "psy",
+    "death",
+    "disassembly",
+    "encyclopedia",
+    "skill",
+}
+local TASK_CLASS = { "tasks", "task", "tracked" }
+local TASK_NEW_CLASS = { "tasks", "task_new", "tracked" }
+local TASK_UPDATE_CLASS = { "tasks", "task_update", "tracked" }
+local STASH_CLASS = { "items", "stash" }
+local MONEY_CLASS = { "items", "money" }
+local DEATH_CLASS = { "deaths", "death" }
+local ENCYCLOPEDIA_CLASS = { "pda", "encyclopedia", nil, "st_wd_comms_encyclopedia" }
+local DISASSEMBLY_CLASS = { "items", "disassembly", nil, "st_wd_comms_disassembly" }
+local DISASSEMBLY_TEXT = "st_dis_text_9"
+local CAPTION_CLASSES = {
+    general_new_task = TASK_NEW_CLASS,
+    general_complete_task = TASK_CLASS,
+    general_fail_task = { "tasks", "task_fail", "warn" },
+    general_reverse_task = TASK_UPDATE_CLASS,
+    general_update_task = TASK_UPDATE_CLASS,
+    general_in_item = STASH_CLASS,
+    general_out_item = STASH_CLASS,
+    st_found_new_treasure = STASH_CLASS,
+    st_got_treasure = STASH_CLASS,
+    st_found_old_treasure = STASH_CLASS,
+    st_dyn_news_ch_died = DEATH_CLASS,
+    st_dyn_news_sender_obituary = DEATH_CLASS,
+    st_dyn_news_sender_com_centre = { "factions", RADIO_GLYPH },
+    st_tip = { "pda", RADIO_GLYPH },
+    general_in_money = MONEY_CLASS,
+    general_out_money = MONEY_CLASS,
+}
+local CAPTION_FORMATS = {
+    st_new_level_header = { "status", "skill", "tracked" },
+}
+local TEXT_CLASSES = {
+    st_rank_increased = { "status", "rank_up", "tracked", "st_wd_comms_rank_up" },
+    st_rank_decreased = { "status", "rank_down", nil, "st_wd_comms_rank_down" },
+    st_reputation_increased = { "status", "rep_up", "tracked", "st_wd_comms_rep_up" },
+    st_reputation_decreased = { "status", "rep_down", nil, "st_wd_comms_rep_down" },
+}
+local TEXT_FORMATS = {
+    pda_encyclopedia_notify = ENCYCLOPEDIA_CLASS,
+    pda_encyclopedia_notify_note = ENCYCLOPEDIA_CLASS,
+}
+local STORM_CAPTIONS = { "general_new_task", "general_update_task" }
+local EMISSION_CLASS = { "tasks", "emission", "crit", "st_wd_comms_emission" }
+local PSY_CLASS = { "tasks", "psy", "crit", "st_wd_comms_psy" }
+local STORM_TITLES = {
+    hide_from_surge_name_1 = EMISSION_CLASS,
+    hide_from_surge_name_2 = EMISSION_CLASS,
+    hide_from_psi_storm_name_1 = PSY_CLASS,
+    hide_from_psi_storm_name_2 = PSY_CLASS,
+}
+local TASK_TEXT_FORMAT = "%s."
+local PENDING_MS = 60000
+local CONNECTION_LOST_TEXT = "st_dyn_news_spc_commu_off"
+local SPEAKER_DESCRIPTION = 6
+local COMPANION_TEXT = "st_dyn_news_sender_companion"
+local REPUTATION_PREFIX = "^st_reputation_"
+local NO_SPEAKER = {}
+
+local messages = {}
+local next_id = 1
+local seen_id = 0
+local version = 0
+local pending = {}
+local translations = nil
+
+local function bump_version()
+    version = version + 1
+end
+
+local function reset_log()
+    messages = {}
+    next_id = 1
+    seen_id = 0
+    bump_version()
+end
+
+function clean_text(text)
+    text = text:gsub("%%c%[[^%]]*%]", "")
+    text = text:gsub("%$clr_%d+", "")
+    text = text:gsub("\\n", "\n")
+    return (text:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function get_translated(id)
+    return clean_text(game.translate_string(id))
+end
+
+local function get_format_pattern(format)
+    local pattern = format:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")
+    pattern = pattern:gsub("%%%%s", ".-"):gsub("%%%$%a+", ".-")
+    return "^" .. pattern .. "$"
+end
+
+local function get_translated_classes(classes)
+    local by_text = {}
+    for id, class in pairs(classes) do
+        by_text[get_translated(id)] = class
+    end
+    return by_text
+end
+
+local function get_translated_formats(classes)
+    local formats = {}
+    for id, class in pairs(classes) do
+        formats[#formats + 1] = { pattern = get_format_pattern(get_translated(id)), class = class }
+    end
+    return formats
+end
+
+local function get_translations()
+    if translations then
+        return translations
+    end
+    local community_by_faction = {}
+    for _, community in ipairs(COMMUNITIES) do
+        for index = 1, FACTION_VARIANTS do
+            community_by_faction[get_translated("st_dyn_news_comm_" .. community .. "_" .. index)] = community
+        end
+    end
+    local storm_captions = {}
+    for _, id in ipairs(STORM_CAPTIONS) do
+        storm_captions[get_translated(id)] = true
+    end
+    local storm_by_text = {}
+    for id, class in pairs(STORM_TITLES) do
+        storm_by_text[string.format(TASK_TEXT_FORMAT, get_translated(id))] = class
+    end
+    translations = {
+        community_by_faction = community_by_faction,
+        class_by_caption = get_translated_classes(CAPTION_CLASSES),
+        caption_formats = get_translated_formats(CAPTION_FORMATS),
+        class_by_text = get_translated_classes(TEXT_CLASSES),
+        text_formats = get_translated_formats(TEXT_FORMATS),
+        disassembly_marker = get_translated(DISASSEMBLY_TEXT),
+        storm_captions = storm_captions,
+        storm_by_text = storm_by_text,
+        connection_lost = get_translated(CONNECTION_LOST_TEXT),
+    }
+    return translations
+end
+
+local function split_header(header)
+    return header:match("^(.*), (.-)$")
+end
+
+local function get_faction_label(community)
+    local label = get_translated("st_dyn_news_comm_" .. community .. "_" .. SPEAKER_DESCRIPTION)
+    if get_translations().community_by_faction[label] == community then
+        return label
+    end
+    return nil
+end
+
+local function is_group_caption(caption)
+    local translated = get_translations()
+    return translated.class_by_caption[caption] ~= nil or translated.community_by_faction[caption] ~= nil
+end
+
+local function parse_sender(caption)
+    local by_faction = get_translations().community_by_faction
+    local name, faction = split_header(caption)
+    local community = faction and by_faction[faction]
+    if community then
+        return name, faction, community
+    end
+    return caption, nil, by_faction[caption]
+end
+
+local function get_matched_class(formats, text)
+    for _, format in ipairs(formats) do
+        if text:match(format.pattern) then
+            return format.class
+        end
+    end
+    return nil
+end
+
+local function get_text_class(text)
+    local translated = get_translations()
+    local marker = translated.disassembly_marker
+    if marker ~= "" and text:find(marker, 1, true) then
+        return DISASSEMBLY_CLASS
+    end
+    return translated.class_by_text[text] or get_matched_class(translated.text_formats, text)
+end
+
+local function get_caption_class(caption, text)
+    local translated = get_translations()
+    local class = translated.class_by_caption[caption]
+    if class and translated.storm_captions[caption] then
+        return translated.storm_by_text[text] or class
+    end
+    return class or get_matched_class(translated.caption_formats, caption)
+end
+
+local function get_class(caption, text, faction, community)
+    local translated = get_translations()
+    local class = get_text_class(text) or get_caption_class(caption, text)
+    if class then
+        if text == translated.connection_lost then
+            return class[1], ALERT_GLYPH, "warn"
+        end
+        return class[1], class[2], class[3], class[4] and get_translated(class[4])
+    end
+    if faction then
+        return "chatter", nil, nil
+    end
+    if community then
+        return "factions", nil, nil
+    end
+    return "pda", RADIO_GLYPH, nil
+end
+
+local function add_entry(caption, text, speaker)
+    if caption == "" and text == "" then
+        return nil
+    end
+    speaker = speaker or NO_SPEAKER
+    local sender = speaker.name and clean_text(speaker.name) or caption
+    local name, faction, community = parse_sender(sender)
+    if not faction and speaker.community then
+        faction = get_faction_label(speaker.community)
+        community = faction and speaker.community
+    end
+    local channel, glyph, tone, class_name = get_class(sender, text, faction, community)
+    local year, month, day, hour, minute = game.get_game_time():get()
+    local entry = {
+        id = next_id,
+        name = class_name or name,
+        faction = faction,
+        community = community,
+        channel = channel,
+        glyph = glyph,
+        tone = tone,
+        portrait = speaker.portrait,
+        rank = speaker.rank,
+        reputation = speaker.reputation,
+        text = text,
+        year = year,
+        month = month,
+        day = day,
+        hour = hour,
+        minute = minute,
+        level = wd_intel.get_level_name(),
+    }
+    next_id = next_id + 1
+    messages[#messages + 1] = entry
+    if #messages > CAP then
+        table.remove(messages, 1)
+    end
+    bump_version()
+    return entry
+end
+
+function add(caption, text, speaker)
+    return add_entry(clean_text(caption or ""), clean_text(text or ""), speaker)
+end
+
+function get_messages()
+    return messages
+end
+
+function get_version()
+    return version
+end
+
+function get_seen_id()
+    return seen_id
+end
+
+function has_unread()
+    local newest = messages[#messages]
+    return newest ~= nil and newest.id > seen_id
+end
+
+function mark_seen(id)
+    if id > seen_id then
+        seen_id = id
+    end
+end
+
+function is_signal_ok()
+    if item_device and item_device.is_pda_charged and not item_device.is_pda_charged(true) then
+        return false
+    end
+    if dynamic_news_helper and dynamic_news_helper.IsInvalidMap and dynamic_news_helper.IsInvalidMap(level.name()) then
+        return false
+    end
+    if xr_conditions and xr_conditions.surge_started and xr_conditions.surge_started() then
+        return false
+    end
+    return true
+end
+
+local function normalize_space(text)
+    return (text:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+end
+
+local function get_pending_key(caption, text)
+    return normalize_space(caption) .. "\n" .. normalize_space(text)
+end
+
+local function add_pending(caption, text, speaker)
+    speaker.key = get_pending_key(clean_text(caption), clean_text(text))
+    speaker.at = time_global()
+    pending[#pending + 1] = speaker
+    return speaker
+end
+
+local function add_call_pending(caption, speaker)
+    speaker.caption = normalize_space(clean_text(caption))
+    speaker.at = time_global()
+    pending[#pending + 1] = speaker
+    return speaker
+end
+
+local function has_call_pending(caption)
+    caption = normalize_space(clean_text(caption))
+    for _, entry in ipairs(pending) do
+        if entry.caption == caption then
+            return true
+        end
+    end
+    return false
+end
+
+local function remove_pending(entry)
+    for index = #pending, 1, -1 do
+        if pending[index] == entry then
+            table.remove(pending, index)
+            return
+        end
+    end
+end
+
+local function take_pending(caption, text)
+    local now = time_global()
+    for index = #pending, 1, -1 do
+        if now - pending[index].at > PENDING_MS then
+            table.remove(pending, index)
+        end
+    end
+    local key = nil
+    for index, entry in ipairs(pending) do
+        key = key or get_pending_key(caption, text)
+        if entry.key == key then
+            table.remove(pending, index)
+            return entry
+        end
+    end
+    caption = normalize_space(caption)
+    for index, entry in ipairs(pending) do
+        if entry.caption == caption then
+            table.remove(pending, index)
+            return entry
+        end
+    end
+    return nil
+end
+
+local function on_news_received(_item, _time_wnd, caption_wnd, text_wnd)
+    local caption = clean_text(caption_wnd:GetText())
+    local text = clean_text(text_wnd:GetText())
+    add_entry(caption, text, take_pending(caption, text))
+end
+
+local function get_reputation_value(obj)
+    if obj.character_reputation then
+        return obj:character_reputation()
+    end
+    return obj:reputation()
+end
+
+local function get_tiers(obj)
+    local rank = ranks.get_obj_rank_name(obj)
+    local reputation = utils_obj.get_reputation_name(get_reputation_value(obj)):gsub(REPUTATION_PREFIX, "")
+    if rank == "" then
+        rank = nil
+    end
+    return rank, reputation
+end
+
+local function new_speaker(portrait, rank, reputation, community)
+    return { portrait = portrait, rank = rank, reputation = reputation, community = community }
+end
+
+local function add_match(match, obj, community)
+    local rank, reputation = get_tiers(obj)
+    if match.count > 0 and (rank ~= match.rank or reputation ~= match.reputation or community ~= match.community) then
+        match.conflict = true
+    end
+    match.count = match.count + 1
+    match.rank = rank
+    match.reputation = reputation
+    match.community = community
+    return match.conflict
+end
+
+local function is_speaker(obj, name, icon)
+    return obj:character_name() == name and obj:alive() and (icon == nil or obj:character_icon() == icon)
+end
+
+local function is_caption_faction(npc, faction)
+    return faction == dynamic_news_helper.GetCommunityDescription(npc, SPEAKER_DESCRIPTION)
+        or faction == game.translate_string(COMPANION_TEXT)
+end
+
+local function add_online_matches(match, name, faction, icon)
+    for _, id in ipairs(db.OnlineStalkers) do
+        local storage = db.storage[id]
+        local npc = storage and storage.object or level.object_by_id(id)
+        if npc and is_speaker(npc, name, icon) and (faction == nil or is_caption_faction(npc, faction)) then
+            if add_match(match, npc, npc:character_community()) then
+                return
+            end
+        end
+    end
+end
+
+local function add_offline_matches(match, name, community, icon)
+    local sim = alife()
+    for squad_id in pairs(SIMBOARD.squads) do
+        local squad = sim:object(squad_id)
+        if squad and squad.player_id == community then
+            for member in squad:squad_members() do
+                local se_npc = sim:object(member.id)
+                if se_npc and is_speaker(se_npc, name, icon) then
+                    if add_match(match, se_npc, community) then
+                        return
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function add_commander_matches(match, name, icon)
+    local sim = alife()
+    for squad_id in pairs(SIMBOARD.squads) do
+        local squad = sim:object(squad_id)
+        local se_npc = squad and sim:object(squad:commander_id())
+        if se_npc and is_speaker(se_npc, name, icon) then
+            if add_match(match, se_npc, squad.player_id) then
+                return
+            end
+        end
+    end
+end
+
+local function find_speaker(header, icon)
+    local match = { count = 0 }
+    local name, faction = split_header(header)
+    if name then
+        add_online_matches(match, name, faction, icon)
+        if match.count == 0 then
+            local community = get_translations().community_by_faction[clean_text(faction)]
+            if community then
+                add_offline_matches(match, name, community, icon)
+            end
+        end
+    elseif icon and icon ~= "" and not is_group_caption(clean_text(header)) then
+        name = clean_text(header)
+        add_online_matches(match, name, nil, icon)
+        if match.count == 0 then
+            add_commander_matches(match, name, icon)
+        end
+    end
+    if match.conflict then
+        return nil, nil, nil
+    end
+    return match.rank, match.reputation, match.community
+end
+
+local function get_sender_speaker(sender)
+    local rank, reputation = get_tiers(sender)
+    if sender.character_community then
+        return rank, reputation, sender:character_community()
+    end
+    return rank, reputation, sender:community()
+end
+
+local function read_guarded(what, reader, ...)
+    local ok, first_or_error, second, third = pcall(reader, ...)
+    if ok then
+        return first_or_error, second, third
+    end
+    printf(string.format("! wd_comms: sender %s lookup failed: %s", what, tostring(first_or_error)))
+    return nil, nil, nil
+end
+
+local function new_wrapped_tip(original, get_pending_args)
+    return function(...)
+        local caption, text, speaker = read_guarded("speaker", get_pending_args, ...)
+        local entry = nil
+        if speaker then
+            entry = add_pending(caption, text, speaker)
+        end
+        local result = original(...)
+        if entry and result == false then
+            remove_pending(entry)
+        end
+        return result
+    end
+end
+
+local function new_wrapped_call(original, get_caption, get_speaker)
+    return function(...)
+        local caption = read_guarded("speaker", get_caption, ...)
+        local entry = nil
+        if caption and not has_call_pending(caption) then
+            local speaker = read_guarded("speaker", get_speaker, ...)
+            if speaker then
+                entry = add_call_pending(caption, speaker)
+            end
+        end
+        local result = original(...)
+        if entry then
+            remove_pending(entry)
+        end
+        return result
+    end
+end
+
+local function get_dynamic_tip_args(msg, header, _timeout, _showtime, sender, _sound, icon_by)
+    if not (msg and db.actor) then
+        return nil
+    end
+    local icon = nil
+    if icon_by == "npc" and type(sender) == "string" then
+        icon = sender
+    elseif icon_by ~= "gr" then
+        return nil
+    end
+    local caption = header or game.translate_string("st_tip")
+    local text = "%c[default]" .. game.translate_string(msg)
+    return caption, text, new_speaker(icon, read_guarded("tier", find_speaker, caption, icon))
+end
+
+local function get_named_speaker(caption, icon)
+    if is_group_caption(clean_text(caption)) then
+        return nil
+    end
+    if icon == "" then
+        icon = nil
+    end
+    return new_speaker(icon, read_guarded("tier", find_speaker, caption, icon))
+end
+
+local function get_first(first)
+    return first
+end
+
+local function get_published_speaker(caption, _msg, icon)
+    return get_named_speaker(caption, icon)
+end
+
+local function get_bark_caption(npc)
+    return npc and npc:character_name()
+end
+
+local function get_bark_speaker(npc)
+    return new_speaker(npc:character_icon(), read_guarded("tier", get_sender_speaker, npc))
+end
+
+local function get_manager_tip_args(_actor, news_id, _timeout, sender)
+    if not news_id or type(sender) == "string" or sender == nil then
+        return nil
+    end
+    if not news_manager.is_npc_stalker(sender:clsid()) then
+        return nil
+    end
+    local speaker = new_speaker(sender:character_icon(), read_guarded("tier", get_sender_speaker, sender))
+    speaker.name = sender:character_name()
+    return game.translate_string("st_tip"), game.translate_string(news_id), speaker
+end
+
+function install_wraps()
+    local wrapped = _G.wd_comms_wrapped or {}
+    if not wrapped.dynamic and dynamic_news_helper and dynamic_news_helper.send_tip then
+        dynamic_news_helper.send_tip = new_wrapped_tip(dynamic_news_helper.send_tip, get_dynamic_tip_args)
+        wrapped.dynamic = true
+    end
+    if not wrapped.manager and news_manager and news_manager.send_tip and news_manager.is_npc_stalker then
+        news_manager.send_tip = new_wrapped_tip(news_manager.send_tip, get_manager_tip_args)
+        wrapped.manager = true
+    end
+    if not wrapped.xpda and xpda and xpda.publish_news then
+        xpda.publish_news = new_wrapped_call(xpda.publish_news, get_first, get_published_speaker)
+        wrapped.xpda = true
+    end
+    if not wrapped.wom and wom_bark and wom_bark.send_pda and wom_bark.send_news_pda then
+        wom_bark.send_pda = new_wrapped_call(wom_bark.send_pda, get_bark_caption, get_bark_speaker)
+        wom_bark.send_news_pda = new_wrapped_call(wom_bark.send_news_pda, get_first, get_named_speaker)
+        wrapped.wom = true
+    end
+    _G.wd_comms_wrapped = wrapped
+end
+
+local function save_state(m_data)
+    m_data[SAVE_KEY] = {
+        next_id = next_id,
+        seen_id = seen_id,
+        messages = messages,
+    }
+end
+
+local function load_state(m_data)
+    reset_log()
+    local saved = m_data[SAVE_KEY]
+    if type(saved) ~= "table" then
+        return
+    end
+    next_id = saved.next_id or 1
+    seen_id = saved.seen_id or 0
+    if type(saved.messages) ~= "table" then
+        return
+    end
+    local first = math.max(#saved.messages - CAP + 1, 1)
+    for index = first, #saved.messages do
+        local entry = saved.messages[index]
+        messages[#messages + 1] = entry
+        next_id = math.max(next_id, entry.id + 1)
+    end
+end
+
+function register()
+    wd_core.register({
+        id = "wd_comms",
+        callbacks = {
+            on_news_received = { on_news_received },
+            save_state = { save_state },
+            load_state = { load_state },
+        },
+        on_start = function()
+            translations = nil
+            pending = {}
+            reset_log()
+            install_wraps()
+        end,
+    })
+end

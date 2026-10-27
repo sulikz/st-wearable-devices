@@ -73,6 +73,8 @@ local FAMILY_FIELDS = {
     { "skin", false },
     { "nixie", false },
     { "clock", false },
+    { "time_source", false },
+    { "time_format", false },
     { "hand_pos", true },
     { "hand_rot", true },
 }
@@ -81,6 +83,8 @@ local USER_FIELDS = {
     "skin",
     "nixie",
     "clock",
+    "time_source",
+    "time_format",
     "hand_pos",
     "hand_rot",
 }
@@ -92,6 +96,8 @@ DEFAULTS = {
     skin = "regular",
     nixie = "amber",
     clock = "dynamic",
+    time_source = "game",
+    time_format = "24h",
     hand_pos = { -0.075000011920929, 0, -0.045000016689301 },
     hand_rot = { -3.5, 3, -6.5 },
 }

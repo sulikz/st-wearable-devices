@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <file name="wd\ui\faces\shared\text">
+    <texture id="wd_font_face_text" x="0" y="0" width="512" height="896" />
+  </file>
+</w>

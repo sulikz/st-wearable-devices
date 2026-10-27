@@ -1,15 +1,26 @@
 #include "common.h"
+#include "wd_perturb_normal.h"
 
 static const float WD_LED_GAIN = 1.5;
 static const float WD_LED_OPACITY = 0.6;
+static const float WD_LED_RELIEF = 2.0;
+static const float3 WD_LED_LIGHT = float3(-0.4, 0.7, -0.6);
 
 struct v2p_led
 {
 	float2 tc0 : TEXCOORD0;
+	float3 N   : TEXCOORD1;
+	float3 P   : TEXCOORD2;
 };
 
 float4 main(v2p_led I) : SV_Target
 {
 	float4 base = s_base.Sample(smp_base, I.tc0);
-	return float4(base.rgb * WD_LED_GAIN, WD_LED_OPACITY);
+
+	float3 Ngeo = normalize(I.N);
+	float3 mapN = unpack_normal(s_wdnrm.Sample(smp_base, I.tc0).wzy);
+	float3 N = wd_perturb_normal(Ngeo, I.P, I.tc0, mapN);
+	float relief = max(0.0, 1.0 + WD_LED_RELIEF * dot(N - Ngeo, normalize(WD_LED_LIGHT)));
+
+	return float4(base.rgb * WD_LED_GAIN * relief, WD_LED_OPACITY);
 }

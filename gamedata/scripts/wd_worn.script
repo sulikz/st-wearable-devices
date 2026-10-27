@@ -54,19 +54,19 @@ function new(cfg)
         return game.translate_string(cfg.attach_label)
     end
 
-    function self.detach()
+    function self.detach(replacing)
         if not self.is_attached() then
             return
         end
         attached = nil
         attached_id = nil
-        cfg.on_detach()
+        cfg.on_detach(replacing)
     end
 
     function self.toggle(obj)
         if self.is_attached() then
             local replacing = is_replacement(obj)
-            self.detach()
+            self.detach(replacing)
             if not replacing then
                 return
             end

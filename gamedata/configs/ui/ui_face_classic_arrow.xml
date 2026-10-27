@@ -1,0 +1,7 @@
+<w>
+<face_classic_arrow>
+	<arrow x="-0.02000" y="-0.02000" width="0.04000" height="0.04000" stretch="1">
+		<texture shader="wd\ui">face_classic_arrow</texture>
+	</arrow>
+</face_classic_arrow>
+</w>

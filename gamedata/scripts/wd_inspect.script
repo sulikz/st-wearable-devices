@@ -14,6 +14,12 @@ local SWAP_ANM_SPEED = 1.25
 local SWAP_HOLD_ANM_SPEED = 0.001
 local SWITCH_SPEED_MODE = "switch"
 
+CLIP_DRAW = "draw"
+CLIP_HOLSTER = "holster"
+CLIP_SWITCH = "switch"
+POSE_PROMIN = "promin"
+POSE_WATCH = "watch"
+
 local DETECTOR_FAMILY = {
     detector_advanced = "bear",
     detector_grizzly = "bear",
@@ -40,31 +46,38 @@ local function get_swap_anm(base, variant)
     return base .. variant .. SWAP_SUFFIX
 end
 
-local POSE_BY_VARIANT = { [""] = "promin", [VARIANT_WATCH] = "watch" }
+local POSE_BY_VARIANT = { [""] = POSE_PROMIN, [VARIANT_WATCH] = POSE_WATCH }
+local VARIANT_BY_POSE = {}
+local CLIP_BY_BASE = { [ANM_DRAW] = CLIP_DRAW, [ANM_HOLSTER] = CLIP_HOLSTER }
 
-local ANM_SPEED_BY_CLIP = {}
-local ANM_SPEED_MODE_BY_CLIP = {}
+local CLIP_INFO_BY_ANM = {}
 
-local function set_speed_mode(anm, pose)
-    ANM_SPEED_MODE_BY_CLIP[anm] = pose
+local function set_clip_info(anm, info)
+    CLIP_INFO_BY_ANM[anm] = info
+    local detector_info = { speed_mode = info.speed_mode, kind = info.kind, pose = info.pose, detector = true }
     for _, family in ipairs(DETECTOR_FAMILY_TOKENS) do
-        ANM_SPEED_MODE_BY_CLIP[get_detector_anm_name(anm, family)] = pose
+        CLIP_INFO_BY_ANM[get_detector_anm_name(anm, family)] = detector_info
     end
 end
 
-set_speed_mode(ANM_TO_WATCH, SWITCH_SPEED_MODE)
-set_speed_mode(ANM_FROM_WATCH, SWITCH_SPEED_MODE)
+set_clip_info(ANM_TO_WATCH, { speed_mode = SWITCH_SPEED_MODE, kind = CLIP_SWITCH, pose = POSE_WATCH })
+set_clip_info(ANM_FROM_WATCH, { speed_mode = SWITCH_SPEED_MODE, kind = CLIP_SWITCH, pose = POSE_PROMIN })
 for variant, pose in pairs(POSE_BY_VARIANT) do
+    VARIANT_BY_POSE[pose] = variant
     for _, base in ipairs({ ANM_DRAW, ANM_HOLSTER }) do
         local swap_anm = get_swap_anm(base, variant)
-        set_speed_mode(base .. variant, pose)
-        ANM_SPEED_MODE_BY_CLIP[swap_anm] = pose
-        ANM_SPEED_BY_CLIP[swap_anm] = SWAP_ANM_SPEED
+        set_clip_info(base .. variant, { speed_mode = pose, kind = CLIP_BY_BASE[base], pose = pose })
+        CLIP_INFO_BY_ANM[swap_anm] = { speed_mode = pose, speed = SWAP_ANM_SPEED }
     end
+end
+
+function get_clip_info(anm)
+    return CLIP_INFO_BY_ANM[anm]
 end
 
 function get_anm_speed_mode(anm)
-    return ANM_SPEED_MODE_BY_CLIP[anm]
+    local info = get_clip_info(anm)
+    return info and info.speed_mode
 end
 
 local registered = nil
@@ -195,6 +208,10 @@ local function get_hand_offset_driver()
     end
     return hand_offset_driver
 end
+
+function prime_hand_offsets()
+    get_hand_offset_driver().prime()
+end
 local held_anm = nil
 local raise_variant = ""
 local swap_redraw = false
@@ -221,8 +238,27 @@ local function is_gui_pose_free()
     return wd_gui.is_open() and wd_gui.is_pose_free()
 end
 
+local function is_settings_gui_holding()
+    return wd_gui.is_open() and not wd_gui.is_pose_free()
+end
+
 local function is_editor_gui_holding()
     return is_editor_gui_open() and not is_gui_pose_free()
+end
+
+local function is_input_blocked_over(gui_holding)
+    if gui_holding then
+        return wd_blocking.is_ui_open() or Overlapped_UI()
+    end
+    return wd_blocking.is_input_captured()
+end
+
+local function is_input_blocked()
+    return is_input_blocked_over(is_settings_gui_holding())
+end
+
+local function is_number_key_blocked()
+    return is_input_blocked_over(is_editor_gui_holding())
 end
 
 local queued_anm = nil
@@ -246,11 +282,11 @@ local detector_restore_at = 0
 local restore_wait_until = 0
 local pipboy_toggled = false
 local watch_hold = false
+local requested_pose = nil
 local customize_was_open = false
 local customize_entry_flip = false
 local press_pending = false
 local press_start = 0
-local double_tap_deadline = 0
 local fire_block_until = 0
 
 local function is_sprinting()
@@ -287,7 +323,7 @@ end
 local motion_available = {}
 local hands_visual_by_section = {}
 
-local function get_hands_visual()
+function get_hands_visual()
     if not (wd_hands_left and wd_hands_left.get_base_hands_section) then
         return nil
     end
@@ -306,14 +342,14 @@ end
 
 local hands_visual
 
-local function has_hands_motion(visual, base)
+function find_hands_motion(visual, base)
     for variant = 0, 8 do
         local name = variant == 0 and base or (base .. variant)
         if game.motion_exists(visual, name) then
-            return true
+            return name
         end
     end
-    return false
+    return nil
 end
 
 local function get_available_cache(visual, section)
@@ -346,6 +382,11 @@ local function get_anm_def(section, anm)
     return cached or nil
 end
 
+function get_motion_name(section, anm)
+    local definition = get_anm_def(section, anm)
+    return definition and definition:match("^%s*([^,%s]+)")
+end
+
 local function is_anm_available(section, anm)
     if not (game and game.motion_exists) then
         return true
@@ -359,9 +400,8 @@ local function is_anm_available(section, anm)
     if cached ~= nil then
         return cached
     end
-    local def = get_anm_def(section, anm)
-    local base = def and def:match("^%s*([^%s,]+)")
-    local available = base ~= nil and has_hands_motion(visual, base)
+    local base = get_motion_name(section, anm)
+    local available = base ~= nil and find_hands_motion(visual, base) ~= nil
     cache[anm] = available
     return available
 end
@@ -409,6 +449,7 @@ end
 
 local hud_part = nil
 local motion_end = 0
+local clip = nil
 
 local function is_motion_live()
     return hud_part ~= nil and time_global() < motion_end
@@ -424,6 +465,11 @@ end
 local function forget_motion()
     hud_part = nil
     motion_end = 0
+    clip = nil
+end
+
+function get_hand_clip()
+    return clip
 end
 
 -- engine re_sync_anim never re-syncs left hands model's pivot partition
@@ -471,18 +517,25 @@ local function play_hand(anm, mix, part, keep_current, speed_override)
     if not is_anm_available(sec, anm) then
         return nil
     end
+    local info = CLIP_INFO_BY_ANM[anm] or {}
     local speed = speed_override
     if not speed then
-        speed = ANM_SPEED_BY_CLIP[anm] or ANM_SPEED
-        local speed_mode = get_anm_speed_mode(anm)
-        if speed_mode then
-            speed = speed * wd_gui.get_anm_speed_scale(speed_mode)
+        speed = info.speed or ANM_SPEED
+        if info.speed_mode then
+            speed = speed * wd_gui.get_anm_speed_scale(info.speed_mode)
         end
     end
     local target_part = part or 1
     local len = game.play_hud_motion(target_part, sec, anm, mix, speed) or 0
     hud_part = target_part
     motion_end = len > 0 and (time_global() + len) or math.huge
+    clip = {
+        kind = info.kind,
+        pose = info.pose,
+        detector = info.detector == true,
+        started = time_global(),
+        length = len,
+    }
     return len
 end
 
@@ -584,15 +637,18 @@ local function has_variant_pose()
     return active.variants() and is_anm_available(active.get_hand_section(), ANM_IDLE_WATCH)
 end
 
-local function get_raise_variant()
+local function get_raise_variant(hold)
     if not has_variant_pose() then
         return ""
     end
     if wd_gui.is_open() then
-        return wd_gui.get_pose() == POSE_BY_VARIANT[VARIANT_WATCH] and VARIANT_WATCH or ""
+        return VARIANT_BY_POSE[wd_gui.get_pose()] or ""
+    end
+    if requested_pose then
+        return VARIANT_BY_POSE[requested_pose]
     end
     local swapped = wd_mcm.is_hold_toggle_swapped() and not wd_customize.is_open()
-    return watch_hold ~= swapped and VARIANT_WATCH or ""
+    return hold ~= swapped and VARIANT_WATCH or ""
 end
 
 local function schedule_pending_show(now)
@@ -831,7 +887,6 @@ local function reset_press_tracking()
     pipboy_toggled = false
     press_pending = false
     press_start = 0
-    double_tap_deadline = 0
 end
 
 local function reset_raise_state()
@@ -929,7 +984,7 @@ local function play_transition(now, trans_anm)
 end
 
 local function apply_variant_transition(now)
-    local wanted = get_raise_variant()
+    local wanted = get_raise_variant(watch_hold)
     if wanted == raise_variant then
         return false
     end
@@ -1147,8 +1202,7 @@ local function handle_pending_melee(now)
     return true
 end
 
-local function guard_raised(now, ui_open)
-    local wpn = db.actor:active_item()
+local function guard_raised(now, ui_open, wpn)
     if raise_detector_id then
         local detector = db.actor:active_detector()
         if wpn or not detector or detector:id() ~= raise_detector_id then
@@ -1204,14 +1258,18 @@ local function handle_slot_recovery(now)
     return false
 end
 
+local function drop_pending_show()
+    pending_show_until = 0
+    zoom_cancel_sent = false
+    restore_detector()
+end
+
 local function handle_pending_show(now, ui_open)
     if pending_show_until == 0 then
         return false
     end
     if now > pending_show_until then
-        pending_show_until = 0
-        zoom_cancel_sent = false
-        restore_detector()
+        drop_pending_show()
         if db.actor:active_item() and not is_hud_motion_ok() and not game.actor_weapon_lowered() then
             stuck_blocked = true
         end
@@ -1234,9 +1292,9 @@ local function refresh_active()
     return active
 end
 
-local function raise_for_editor(now, ui_open)
+local function raise_for_hold(now, ui_open)
     watch_hold = false
-    raise_variant = get_raise_variant()
+    raise_variant = get_raise_variant(watch_hold)
     show(now, ui_open)
 end
 
@@ -1258,7 +1316,13 @@ local function handle_idle(now, ui_open, pressed, held)
         pipboy_toggled = false
     end
     if is_editor_gui_holding() then
-        raise_for_editor(now, ui_open)
+        raise_for_hold(now, ui_open)
+        if state ~= ST_IDLE then
+            return
+        end
+    end
+    if requested_pose and POSE_BY_VARIANT[get_raise_variant(false)] == requested_pose then
+        raise_for_hold(now, ui_open)
         if state ~= ST_IDLE then
             return
         end
@@ -1271,7 +1335,7 @@ local function handle_idle(now, ui_open, pressed, held)
     if press_result == "tap" then
         watch_hold = false
         pipboy_toggled = true
-        raise_variant = get_raise_variant()
+        raise_variant = get_raise_variant(watch_hold)
         show(now, ui_open)
         return
     end
@@ -1279,7 +1343,7 @@ local function handle_idle(now, ui_open, pressed, held)
         if not held then
             watch_hold = false
         elseif not require_release then
-            raise_variant = get_raise_variant()
+            raise_variant = get_raise_variant(watch_hold)
             if not pending_drove_show then
                 show(now, ui_open)
             end
@@ -1288,37 +1352,14 @@ local function handle_idle(now, ui_open, pressed, held)
 end
 
 local function get_lower_intent(now, pressed, held)
-    local wants_lower = false
-    local double_tap = active.on_double_tap
+    local wants_lower
     if pipboy_toggled then
-        if pressed and now < double_tap_deadline then
-            double_tap_deadline = 0
-            double_tap()
-        else
-            if pressed and double_tap then
-                double_tap_deadline = now + wd_mcm.get_double_tap_ms()
-            end
-            local press_result = track_press(now, pressed, held, true)
-            if press_result == "tap" and not double_tap then
-                wants_lower = true
-            elseif press_result == "hold" then
-                double_tap_deadline = 0
-            end
-        end
-        if double_tap_deadline > 0 and now >= double_tap_deadline then
-            double_tap_deadline = 0
-            wants_lower = true
-        end
-        if watch_hold and not held then
-            watch_hold = false
-        end
-    elseif watch_hold then
-        if not held then
-            watch_hold = false
-            wants_lower = true
-        end
+        wants_lower = track_press(now, pressed, held, true) == "tap"
     else
-        wants_lower = true
+        wants_lower = not (watch_hold and held) and not requested_pose
+    end
+    if watch_hold and not held then
+        watch_hold = false
     end
     return wants_lower or is_low_crouch() or is_gui_pose_free()
 end
@@ -1481,7 +1522,8 @@ function actor_on_update()
 
     local ui_open = wd_blocking.is_ui_open()
 
-    if not db.actor:active_item() and not ui_open then
+    local active_item = db.actor:active_item()
+    if not active_item and not ui_open then
         wd_hands_empty.try_draw()
     end
 
@@ -1494,7 +1536,7 @@ function actor_on_update()
         return
     end
 
-    if guard_raised(now, ui_open) then
+    if guard_raised(now, ui_open, active_item) then
         return
     end
     drive_hand_offsets(now)
@@ -1541,6 +1583,13 @@ function is_raised()
     return state == ST_RAISING or state == ST_HELD
 end
 
+function get_raised_pose()
+    if is_raised() then
+        return POSE_BY_VARIANT[raise_variant]
+    end
+    return nil
+end
+
 function is_lowering()
     return state == ST_LOWERING
 end
@@ -1555,6 +1604,17 @@ end
 
 function is_pose_held()
     return is_pose_up() and not is_pose_releasing()
+end
+
+function is_hold_down()
+    return press_pending or watch_hold
+end
+
+function set_requested_pose(pose)
+    if requested_pose and not pose and pending_show_until ~= 0 then
+        drop_pending_show()
+    end
+    requested_pose = pose
 end
 
 function on_sleep()
@@ -1730,6 +1790,7 @@ function on_first_update()
     zoom_key_held = false
     require_release = false
     watch_hold = false
+    requested_pose = nil
     swap_redraw = false
     prev_held = false
     fire_block_until = 0
@@ -1750,6 +1811,34 @@ function on_first_update()
     motion_available = {}
 end
 
+local number_key_handlers = {}
+
+function register_number_key(handler)
+    number_key_handlers[#number_key_handlers + 1] = handler
+end
+
+local function on_before_number_key_press(_, bind, dis, flags)
+    local number = SLOT_BY_BIND[bind]
+    if not number or dis or not db.actor:alive() then
+        return
+    end
+    local holding = press_pending or (state == ST_IDLE and watch_hold)
+    if not (holding or is_raised()) then
+        return
+    end
+    local pose = POSE_BY_VARIANT[holding and get_raise_variant(true) or raise_variant]
+    for _, handler in ipairs(number_key_handlers) do
+        if handler(number, pose) then
+            flags.ret_value = false
+            if holding then
+                press_pending = false
+                watch_hold = true
+            end
+            return
+        end
+    end
+end
+
 function install_wheel_hook()
     if _G.wd_inspect_wheel_wrapped then
         return
@@ -1759,10 +1848,10 @@ function install_wheel_hook()
         if prior and not prior(direction) then
             return false
         end
-        if wd_blocking.is_input_captured() then
+        if is_input_blocked() then
             return true
         end
-        if is_raised() and active.on_wheel(direction) then
+        if is_raised() and active.on_wheel(direction, POSE_BY_VARIANT[raise_variant]) then
             return false
         end
         return true
@@ -1824,8 +1913,11 @@ function register_engine()
             actor_on_weapon_fired = { on_weapon_action },
             actor_on_sleep = { on_sleep },
             on_option_change = { wd_mcm.on_option_change },
-            on_key_press = { { on_key_press, unless_captured = true } },
-            on_before_key_press = { { on_before_key_press, unless_captured = true } },
+            on_key_press = { { on_key_press, unless = wd_blocking.is_input_captured } },
+            on_before_key_press = {
+                { on_before_key_press, unless = wd_blocking.is_input_captured },
+                { on_before_number_key_press, unless = is_number_key_blocked },
+            },
         },
         on_start = function()
             install_foreign_anim_yields()

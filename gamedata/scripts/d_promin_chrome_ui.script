@@ -1,0 +1,375 @@
+local binder = wd_screen.new_binder(d_promin_config.SCREEN_SHADER)
+
+local px = d_promin_config.get_px()
+local PANEL_RGB = d_promin_config.PANEL_RGB
+local COMMS_PAGE = d_promin_config.COMMS_PAGE
+
+local TM_NODES = { "tm_h1", "tm_h2", "tm_m1", "tm_m2" }
+local SIGNAL = { x = 766, bottom = 59, bar_w = 4, pitch = 20 / 3, heights = { 4, 8, 12, 16 } }
+local CROSS_ID = "wd_comms_icon_cross"
+local KEY = { right = 1025, top = 35, size = 30, gap = 6 }
+local UNREAD = { dx = 25, dy = -5, size = 8 }
+local FRAME_ID = "wd_promin_frame"
+local TITLE_H = 29
+local TITLE = { x = 125, y = KEY.top + (KEY.size - TITLE_H) / 2, h = TITLE_H }
+local KEY_ROLES = {
+    [true] = { fill = "text", border = "text", digit = "fill" },
+    [false] = { fill = "fill", border = "dim", digit = "meta" },
+}
+
+DIGITS = {}
+for digit = 0, 9 do
+    DIGITS[digit] = "dig2_" .. digit
+end
+
+LAYOUT = {
+    bg = px.box(0, 0, d_promin_config.ART_W, d_promin_config.ART_H),
+    title = px.box(TITLE.x, TITLE.y, 0, TITLE.h),
+    emblem = px.box(74, 29, 40, 42),
+    signal_bars = {},
+    signal_cross = px.box(760, 37, 11, 11),
+    bat_icon = px.box(804, 42, 32, 17),
+    tm = {
+        x = { px.x(852), px.x(864), px.x(883), px.x(895) },
+        y = px.y(43),
+        w = px.w(10),
+        h = px.h(13),
+    },
+    keys = { right = px.x(KEY.right), top = px.y(KEY.top), w = px.w(KEY.size), h = px.h(KEY.size), gap = px.w(KEY.gap) },
+    unread = { dx = px.w(UNREAD.dx), y = px.y(KEY.top + UNREAD.dy), w = px.w(UNREAD.size), h = px.h(UNREAD.size) },
+}
+
+for index, height in ipairs(SIGNAL.heights) do
+    local left = SIGNAL.x + (index - 1) * SIGNAL.pitch
+    LAYOUT.signal_bars[index] = px.box(left, SIGNAL.bottom - height, SIGNAL.bar_w, height)
+end
+
+MAX_KEYS = 3
+PAGE_REFRESH_MS = 250
+local SIGNAL_REFRESH_MS = 1000
+
+local BAT_WARN_RATIO = 0.25
+local BAT_CRIT_RATIO = 0.1
+
+local BAT_LEVELS = {
+    { max = 0.25, tex = "wd_tab_bat_25" },
+    { max = 0.50, tex = "wd_tab_bat_50" },
+    { max = 0.75, tex = "wd_tab_bat_75" },
+    { max = math.huge, tex = "wd_tab_bat_full" },
+}
+
+function get_battery_tex(power_ratio)
+    for _, entry in ipairs(BAT_LEVELS) do
+        if power_ratio <= entry.max then
+            return entry.tex
+        end
+    end
+end
+
+function get_battery_role(power_ratio)
+    return d_promin_config.get_state_role(power_ratio, false, BAT_WARN_RATIO, BAT_CRIT_RATIO)
+end
+
+local set_shown = wd_screen.set_shown
+
+local function get_role_tint(role)
+    return d_promin_config.get_tint(PANEL_RGB[role])
+end
+
+local function apply_battery_icon(slot, power_ratio)
+    slot.tex_cache = binder.bind(slot.widget, get_battery_tex(power_ratio), slot.tex_cache)
+    local role = get_battery_role(power_ratio)
+    local element = slot.element
+    if element.role ~= role then
+        element.role = role
+        slot.widget:SetTextureColor(get_role_tint(role))
+    end
+    set_shown(slot, true)
+end
+
+local function bind_digit(slot, id)
+    slot.tex_cache = binder.bind(slot.widget, id, slot.tex_cache)
+end
+
+local function update_clock(slots)
+    local hrs = level.get_time_hours()
+    local mins = level.get_time_minutes()
+    bind_digit(slots[1], DIGITS[math.floor(hrs / 10)])
+    bind_digit(slots[2], DIGITS[hrs % 10])
+    bind_digit(slots[3], DIGITS[math.floor(mins / 10)])
+    bind_digit(slots[4], DIGITS[mins % 10])
+end
+
+function seat_element(element)
+    wd_screen.place_widget(element.wnd, element.bx, element.by, element.bw, element.bh)
+end
+
+function tint_elements(elements)
+    local white = d_promin_config.get_dimmed_tint(255, 255, 255)
+    local tints = {}
+    for _, group in ipairs(d_promin_config.COLOR_GROUPS) do
+        tints[group.key] = d_promin_config.get_group_tint(group.key)
+    end
+    for _, element in ipairs(elements) do
+        local role = element.role
+        element.wnd:SetTextureColor(role and get_role_tint(role) or tints[element.group] or white)
+    end
+end
+
+local emblem_ids = {}
+
+function get_emblem_id(faction)
+    local id = emblem_ids[faction]
+    if not id then
+        id = "wd_emblem_" .. faction
+        emblem_ids[faction] = id
+    end
+    return id
+end
+
+local function get_emblem_tex()
+    local faction = d_promin_config.get_emblem_faction()
+    return faction and get_emblem_id(faction)
+end
+
+local function apply_emblem(chrome)
+    local tex = get_emblem_tex()
+    if tex then
+        chrome.emblem_tex = binder.bind(chrome.emblem, tex, chrome.emblem_tex)
+    end
+    set_shown(chrome.emblem_slot, chrome.visible and tex ~= nil)
+end
+
+local function is_key_layout_current(chrome, pages)
+    for index = 1, MAX_KEYS do
+        if chrome.key_ids[index] ~= pages[index] then
+            return false
+        end
+    end
+    return true
+end
+
+local function layout_keys(chrome, pages)
+    local keys = LAYOUT.keys
+    local count = math.min(#pages, MAX_KEYS)
+    chrome.shown_page = nil
+    chrome.has_comms_key = false
+    for index, key in ipairs(chrome.keys) do
+        local page_id = pages[index]
+        chrome.key_ids[index] = page_id
+        if page_id then
+            local left = keys.right - (count - index + 1) * keys.w - (count - index) * keys.gap
+            key.place(left, keys.top, keys.w, keys.h)
+            if page_id == COMMS_PAGE then
+                local unread = LAYOUT.unread
+                chrome.has_comms_key = true
+                wd_screen.place_widget(chrome.unread.widget, left + unread.dx, unread.y, unread.w, unread.h)
+            end
+        else
+            key.set_visible(false)
+        end
+    end
+end
+
+local function show_keys(chrome, current)
+    for index, page_id in ipairs(chrome.key_ids) do
+        local key = chrome.keys[index]
+        local roles = KEY_ROLES[page_id == current]
+        chrome.kit.set_role(key.box.fill, roles.fill)
+        key.box.set_role(roles.border)
+        key.set_role(roles.digit)
+        key.set_visible(true)
+    end
+end
+
+local function update_header(chrome, force)
+    if not chrome.visible or not chrome.kit then
+        return
+    end
+    local refresh = force or chrome.allow_page_refresh()
+    if refresh then
+        local pages = d_promin.get_available_pages()
+        if not is_key_layout_current(chrome, pages) then
+            layout_keys(chrome, pages)
+        end
+    end
+    local current = d_promin.get_page()
+    local changed = current ~= chrome.shown_page
+    if changed then
+        chrome.shown_page = current
+        show_keys(chrome, current)
+    end
+    if changed or refresh then
+        set_shown(chrome.unread, chrome.has_comms_key and current ~= COMMS_PAGE and wd_comms.has_unread())
+    end
+end
+
+local function hide_header(chrome)
+    if not chrome.kit then
+        return
+    end
+    layout_keys(chrome, {})
+    set_shown(chrome.unread, false)
+end
+
+local function apply_signal(chrome)
+    local signal = chrome.signal
+    if not signal then
+        return
+    end
+    local visible = chrome.visible
+    local lost = not chrome.signal_ok
+    for _, bar in ipairs(signal.bars) do
+        chrome.kit.set_role(bar, lost and "dim" or "text")
+        set_shown(bar, visible)
+    end
+    set_shown(signal.cross, visible and lost)
+end
+
+local function read_signal(chrome)
+    chrome.signal_ok = wd_comms.is_signal_ok()
+    apply_signal(chrome)
+end
+
+local function set_chrome_visible(chrome, visible)
+    chrome.visible = visible
+    chrome.bg:Show(visible)
+    chrome.page:Show(visible)
+    chrome.title:Show(visible)
+    for _, slot in ipairs(chrome.tm) do
+        slot.widget:Show(visible)
+    end
+    apply_emblem(chrome)
+    set_shown(chrome.bat_icon, false)
+    if visible then
+        read_signal(chrome)
+    else
+        apply_signal(chrome)
+    end
+end
+
+local function update_chrome(chrome)
+    update_clock(chrome.tm)
+    apply_emblem(chrome)
+    apply_battery_icon(chrome.bat_icon, d_promin.get_power_ratio())
+    if chrome.allow_signal_refresh() then
+        read_signal(chrome)
+    end
+    update_header(chrome)
+end
+
+local function add_chrome_element(chrome, node, box, group)
+    local wnd = chrome.init(node)
+    wnd:SetStretchTexture(true)
+    local element = { wnd = wnd, bx = box[1], by = box[2], bw = box[3], bh = box[4], is_bar = false, group = group }
+    chrome.elements[#chrome.elements + 1] = element
+    seat_element(element)
+    return wnd, element
+end
+
+local function add_title(chrome, texture_id)
+    local wnd, element = add_chrome_element(chrome, "title", LAYOUT.title)
+    binder.set(wnd, texture_id)
+    local aspect = wd_screen.get_texture_aspect(wnd)
+    if aspect then
+        element.bw = element.bh * aspect
+        seat_element(element)
+    end
+    return wnd
+end
+
+local function new_key(kit, index)
+    local key = kit.new_cell({ chars = 1, align = "center", roles = KEY_ROLES[false] })
+    key.set_text(tostring(index))
+    return key
+end
+
+local function place_box(widget, box)
+    wd_screen.place_widget(widget, box[1], box[2], box[3], box[4])
+end
+
+local function new_signal(kit)
+    local signal = { bars = {} }
+    for index, box in ipairs(LAYOUT.signal_bars) do
+        signal.bars[index] = kit.new_fill("text")
+        place_box(signal.bars[index].widget, box)
+    end
+    signal.cross = kit.new_image(CROSS_ID, "warn")
+    place_box(signal.cross.widget, LAYOUT.signal_cross)
+    return signal
+end
+
+local function new_kit(parent)
+    local font = wd_fonts.get_font(d_promin_config.FONT)
+    if not font then
+        return nil
+    end
+    return wd_panel.new({
+        parent = parent,
+        binder = binder,
+        font = font,
+        style = d_promin_config.PANEL_STYLE,
+        palette = d_promin_config.PANEL_RGB,
+        get_tint = d_promin_config.get_tint,
+    })
+end
+
+function build(cfg)
+    local tm = LAYOUT.tm
+    local chrome = { init = cfg.init, elements = {}, tm = {} }
+
+    chrome.bg = add_chrome_element(chrome, "bg", LAYOUT.bg)
+    binder.set(chrome.bg, FRAME_ID)
+    chrome.page = add_chrome_element(chrome, "page", LAYOUT.bg)
+    binder.set(chrome.page, cfg.bg_tex)
+    chrome.title = add_title(chrome, cfg.title_tex)
+
+    chrome.emblem = add_chrome_element(chrome, "emblem", LAYOUT.emblem, "faction_color")
+    chrome.emblem_slot = { widget = chrome.emblem }
+
+    for index, node in ipairs(TM_NODES) do
+        chrome.tm[index] = { widget = add_chrome_element(chrome, node, { tm.x[index], tm.y, tm.w, tm.h }) }
+    end
+
+    local bat_wnd, bat_element = add_chrome_element(chrome, "bat_icon", LAYOUT.bat_icon)
+    bat_element.role = "text"
+    chrome.bat_icon = { widget = bat_wnd, element = bat_element }
+
+    chrome.keys = {}
+    chrome.key_ids = {}
+    chrome.allow_page_refresh = wd_core.throttle(PAGE_REFRESH_MS)
+    chrome.allow_signal_refresh = wd_core.throttle(SIGNAL_REFRESH_MS)
+    chrome.kit = new_kit(cfg.wnd)
+    if chrome.kit then
+        for index = 1, MAX_KEYS do
+            chrome.keys[index] = new_key(chrome.kit, index)
+        end
+        chrome.unread = chrome.kit.new_fill("text")
+        chrome.signal = new_signal(chrome.kit)
+    end
+
+    function chrome.set_visible(visible)
+        set_chrome_visible(chrome, visible)
+        if visible then
+            update_header(chrome, true)
+        else
+            hide_header(chrome)
+        end
+    end
+
+    function chrome.update()
+        update_chrome(chrome)
+    end
+
+    function chrome.repaint()
+        tint_elements(chrome.elements)
+        apply_emblem(chrome)
+        if chrome.kit then
+            chrome.kit.repaint()
+        end
+    end
+
+    set_chrome_visible(chrome, true)
+    tint_elements(chrome.elements)
+    return chrome
+end

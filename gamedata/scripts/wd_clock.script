@@ -1,0 +1,86 @@
+SOURCES = {
+    { name = "game", label = "In-game" },
+    { name = "system", label = "System" },
+}
+
+FORMATS = {
+    { name = "24h", label = "24h" },
+    { name = "12h", label = "12h" },
+}
+
+local SOURCE_LABEL = "Date & time"
+local FORMAT_LABEL = "Time format"
+local MONTHS = {
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+}
+
+local system_minute = nil
+local system_now = nil
+
+local function get_system_now()
+    local stamp = os.time()
+    local minute = stamp - stamp % 60
+    if minute ~= system_minute then
+        system_minute = minute
+        system_now = os.date("*t", stamp)
+    end
+    return system_now
+end
+
+local function read_time(source)
+    if source == "system" then
+        local now = get_system_now()
+        return now.hour, now.min
+    end
+    return level.get_time_hours(), level.get_time_minutes()
+end
+
+function get_time(transforms)
+    local hours, minutes = read_time(transforms.time_source)
+    if transforms.time_format == "12h" then
+        hours = (hours - 1) % 12 + 1
+    end
+    return hours, minutes
+end
+
+local function get_date_stamp(source)
+    if source == "system" then
+        return os.time()
+    end
+    local year, month, day = game.get_game_time():get(0, 0, 0, 0, 0, 0, 0)
+    return os.time({ year = year, month = month, day = day, hour = 12 })
+end
+
+function format_date(transforms, pattern)
+    return os.date(pattern, get_date_stamp(transforms.time_source))
+end
+
+function format_day_month_year(year, month, day)
+    return string.format("%02d %s %04d", day, game.translate_string("month_" .. MONTHS[month]), year)
+end
+
+local function new_enum_field(catalog, key, config, on_change)
+    local field = wd_gui.new_catalog_enum(catalog, function()
+        return wd_appearance.get_index(config.transforms, catalog, key)
+    end, { no_apply = true })
+    field.on_change = on_change
+    return field
+end
+
+function add_gui_rows(fields, rows, config, on_change)
+    fields.time_source = new_enum_field(SOURCES, "time_source", config, on_change)
+    fields.time_format = new_enum_field(FORMATS, "time_format", config, on_change)
+    rows[#rows + 1] = { "time_source", nil, 1, SOURCE_LABEL }
+    rows[#rows + 1] = { "time_format", nil, 1, FORMAT_LABEL }
+end

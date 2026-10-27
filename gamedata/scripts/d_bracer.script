@@ -1,28 +1,30 @@
 local SECTION = "wd_bracer"
 local ATT_BONE = "l_forearm_twist"
 
-local function apply_patch_texture(patch_section)
-    wd_attach.apply_skin_texture(
-        SECTION,
-        d_bracer_config.get_patch_texture(patch_section),
-        d_bracer_config.BAKED_PATCH_TEXTURE
-    )
+local accessory_bones = wd_attach.new_bone_switch({
+    name = SECTION,
+    bones = d_bracer_config.ACCESSORY_BONES,
+    meshes_per_bone = d_bracer_config.ACCESSORY_MESHES_PER_BONE,
+})
+
+local function show_accessory(section)
+    local kind, texture = d_bracer_config.get_accessory(section)
+    wd_attach.apply_skin_texture(SECTION, texture, d_bracer_config.BAKED_ACCESSORY_TEXTURES[kind])
+    accessory_bones.show(kind)
 end
 
-local patch_owner = wd_worn.new({
+local accessory_owner = wd_worn.new({
     save_key = "wd_bracer_patch",
     get_obj_value = function(obj)
         return obj and obj:section()
     end,
     on_attach = function(obj)
-        local patch_section = obj:section()
-        apply_patch_texture(patch_section)
-        return patch_section
+        local section = obj:section()
+        show_accessory(section)
+        return section
     end,
     on_detach = function()
-        if is_worn() then
-            apply_patch_texture(nil)
-        end
+        show_accessory(nil)
     end,
 })
 
@@ -63,7 +65,7 @@ function sync_attachment()
         bone = ATT_BONE,
         transforms = d_bracer_config.transforms,
     })
-    apply_patch_texture(patch_owner.get_value())
+    show_accessory(accessory_owner.get_value())
     return attachment
 end
 
@@ -203,8 +205,8 @@ function register()
         id = "patch",
         slot = "patch",
         in_place = true,
-        matches_section = d_bracer_config.get_patch_stem,
-        owner = patch_owner,
+        matches_section = d_bracer_config.get_accessory,
+        owner = accessory_owner,
     })
     wd_exo.register_device({
         id = "bracer",
@@ -216,9 +218,9 @@ function register()
         callbacks = {
             actor_on_first_update = { actor_on_first_update },
             actor_on_update = { owner.drop_poll },
-            on_before_key_press = { { open_customize_on_chord, unless_captured = true } },
-            save_state = { owner.save, patch_owner.save },
-            load_state = { owner.load, patch_owner.load },
+            on_before_key_press = { { open_customize_on_chord, unless = wd_blocking.is_input_captured } },
+            save_state = { owner.save, accessory_owner.save },
+            load_state = { owner.load, accessory_owner.load },
         },
         on_start = start,
     })

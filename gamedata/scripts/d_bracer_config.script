@@ -1,17 +1,27 @@
 SECTION = "wd_bracer"
 MODEL = "wd\\bracer_rigid\\bracer_rigid"
 
-PATCH_TEXTURE_PREFIX = "wd\\bracer_rigid\\customization\\faction_patches\\patch_"
-DEFAULT_PATCH = "loners"
-BAKED_PATCH_TEXTURE = PATCH_TEXTURE_PREFIX .. DEFAULT_PATCH
-PATCH_TEXTURE_NONE = PATCH_TEXTURE_PREFIX .. "none"
+BAKED_PATCH_TEXTURE = "wd\\bracer_rigid\\customization\\faction_patches\\patch_loners"
 
 PATCH_KEY = "wd_bracer_patch"
+PHOTO_SECTION = "wd_bracer_photos"
+BAKED_PHOTO_TEXTURE = "item\\item_foto1"
+
+ACCESSORY_BONES = { patch = "patch", photo = "photo" }
+BAKED_ACCESSORY_TEXTURES = { patch = BAKED_PATCH_TEXTURE, photo = BAKED_PHOTO_TEXTURE }
+ACCESSORY_MESHES_PER_BONE = 3
+
+local accessory_by_section = {}
 
 DEFAULTS = {
     model_pos = { 0.0578507975669, 0.0000962907679, 0.000420982957 },
     model_rot = { 90.1812, -0.1302, 84.0 },
     model_scale = 0.86853166871047,
+}
+
+MOUNT_BIND = {
+    rot = { 0.014220934361219406, -0.002519485540688038, -0.0047774179838597775 },
+    pos = { 0.0001411301491316408, 0.00948802288621664, -0.0390799306333065 },
 }
 
 local FIELDS = {
@@ -35,15 +45,36 @@ resolve = cfg.resolve
 load_transforms = cfg.load_transforms
 save_global = cfg.save_global
 
-function get_patch_stem(patch_section)
-    local stem = patch_section and ini_sys:r_string_ex(patch_section, PATCH_KEY)
-    return stem ~= "" and stem or nil
+function get_patch_texture(patch_section)
+    local texture = patch_section and ini_sys:r_string_ex(patch_section, PATCH_KEY)
+    return texture ~= "" and texture or nil
 end
 
-function get_patch_texture(patch_section)
-    local stem = get_patch_stem(patch_section)
-    if not stem then
-        return PATCH_TEXTURE_NONE
+function get_photo_texture(photo_section)
+    local texture = photo_section and ini_sys:r_string_ex(PHOTO_SECTION, photo_section)
+    return texture ~= "" and texture or nil
+end
+
+local function read_accessory(section)
+    local texture = get_patch_texture(section)
+    if texture then
+        return { kind = "patch", texture = texture }
     end
-    return PATCH_TEXTURE_PREFIX .. stem
+    texture = get_photo_texture(section)
+    return texture and { kind = "photo", texture = texture } or false
+end
+
+function get_accessory(section)
+    if not section then
+        return nil
+    end
+    local accessory = accessory_by_section[section]
+    if accessory == nil then
+        accessory = read_accessory(section)
+        accessory_by_section[section] = accessory
+    end
+    if accessory then
+        return accessory.kind, accessory.texture
+    end
+    return nil
 end

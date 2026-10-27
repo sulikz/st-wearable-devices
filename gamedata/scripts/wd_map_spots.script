@@ -1,8 +1,8 @@
 local SWEEP_CHUNK = 640
-local SNAPSHOT_INTERVAL_MS = 1000
 local PAUSE_RESTART_MS = 1000
 local SWEEP_INTERVAL_MS = 100
 local REFRESH_INTERVAL_MS = 1000
+local ICON_CACHE_SECTION = "wd_map_spots"
 
 local function get_engine_max_id()
     if alife then
@@ -28,10 +28,9 @@ function new(deps)
     deps = deps or {}
     local get_max_id = deps.get_max_id or get_engine_max_id
     local sweep_chunk = deps.sweep_chunk or SWEEP_CHUNK
-    local snapshot_interval_ms = deps.snapshot_interval_ms or SNAPSHOT_INTERVAL_MS
     local get_all_spots = deps.get_all_spots
     if get_all_spots == nil then
-        get_all_spots = level.map_get_object_spots or false
+        get_all_spots = level.map_get_all_object_spots or false
     end
     local get_object_spots = deps.get_object_spots
     if get_object_spots == nil then
@@ -49,7 +48,6 @@ function new(deps)
     local sweep_max_id = 0
     local sweep_index = 1
     local last_tick_at = -1
-    local next_snapshot_at = 0
 
     local function record(list, map, spot_type, object_id)
         local spots = map[object_id]
@@ -77,37 +75,28 @@ function new(deps)
         pending = {}
         sweep_index = 1
         sweep_max_id = get_object_spots and not get_all_spots and get_max_id() or 0
-        sweeping = sweep_max_id > 0
+        sweeping = get_all_spots and true or sweep_max_id > 0
     end
 
-    local function take_snapshot(now)
-        if now < next_snapshot_at then
-            return
-        end
-        next_snapshot_at = now + snapshot_interval_ms
-        pending_entries = {}
-        pending = {}
+    local function take_snapshot()
         for _, spot in ipairs(get_all_spots() or {}) do
             record(pending_entries, pending, spot.spot_type, spot.id)
         end
         publish()
+        sweeping = false
     end
 
     function registry.is_sweeping()
-        return sweeping or (get_all_spots and true or false)
+        return sweeping
     end
 
     function registry.update()
         local now = time_global()
-        if now == last_tick_at then
+        if now == last_tick_at or not sweeping then
             return
         end
         if get_all_spots then
-            last_tick_at = now
-            take_snapshot(now)
-            return
-        end
-        if not sweeping then
+            take_snapshot()
             return
         end
         if now - last_tick_at > PAUSE_RESTART_MS then
@@ -165,7 +154,6 @@ function new(deps)
         held = {}
         published_once = false
         last_tick_at = -1
-        next_snapshot_at = 0
         start_sweep()
     end
 
@@ -183,6 +171,64 @@ end
 
 local declarations = {}
 local shared_icons = nil
+
+local function encode_icon(icon)
+    return table.concat({
+        icon.id,
+        icon.px_w,
+        icon.px_h,
+        icon.pointer and 1 or "",
+        icon.r or "",
+        icon.g or "",
+        icon.b or "",
+        icon.above or "",
+        icon.below or "",
+        icon.location_level or "",
+    }, ",")
+end
+
+local function decode_icon(value)
+    local fields = {}
+    for field in (value .. ","):gmatch("([^,]*),") do
+        fields[#fields + 1] = field ~= "" and field or false
+    end
+    local px_w = tonumber(fields[2])
+    local px_h = tonumber(fields[3])
+    if not (fields[1] and px_w and px_h) then
+        return nil
+    end
+    return {
+        id = fields[1],
+        px_w = px_w,
+        px_h = px_h,
+        pointer = fields[4] == "1",
+        r = tonumber(fields[5]),
+        g = tonumber(fields[6]),
+        b = tonumber(fields[7]),
+        above = fields[8] or nil,
+        below = fields[9] or nil,
+        location_level = tonumber(fields[10]),
+    }
+end
+
+local function save_icon_cache(icons)
+    local section = {}
+    for spot_type in pairs(declarations) do
+        local icon = icons.get(spot_type)
+        if icon then
+            section[spot_type] = encode_icon(icon)
+        end
+    end
+    wd_store.update({ [ICON_CACHE_SECTION] = section })
+end
+
+local function load_icon_cache()
+    local resolved = {}
+    for spot_type, value in pairs(wd_store.read()[ICON_CACHE_SECTION] or {}) do
+        resolved[spot_type] = decode_icon(value)
+    end
+    return resolved
+end
 
 local function read_text(xml_obj, element)
     local kid_count = 0
@@ -202,6 +248,7 @@ local function read_declaration_node(xml_obj, element)
     local node = {
         width = tonumber(attrs.width),
         height = tonumber(attrs.height),
+        location_level = tonumber(attrs.location_level),
     }
     xml_obj:iterateChildren(element, function(child)
         if not xml_obj:isElement(child) then
@@ -235,7 +282,8 @@ function load_declarations(xml_obj)
         end
     end)
     declarations = loaded
-    shared_icons = nil
+    shared_icons = new_icons({})
+    save_icon_cache(shared_icons)
 end
 
 local function read_declaration(name)
@@ -246,7 +294,7 @@ function new_icons(deps)
     deps = deps or {}
     local read_node = deps.read_node or read_declaration
     local icons = {}
-    local cache = {}
+    local cache = deps.resolved or {}
 
     function icons.get(spot_type)
         local hit = cache[spot_type]
@@ -274,6 +322,7 @@ function new_icons(deps)
                 b = mini.b,
                 above = has_variants and mini.texture_above or nil,
                 below = has_variants and mini.texture_below or nil,
+                location_level = mini.location_level,
             }
         end
         cache[spot_type] = resolved
@@ -294,7 +343,7 @@ end
 
 function get_icon(spot_type)
     if not shared_icons then
-        shared_icons = new_icons({})
+        shared_icons = new_icons({ resolved = load_icon_cache() })
     end
     return shared_icons.get(spot_type)
 end

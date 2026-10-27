@@ -1,4 +1,5 @@
 #include "common.h"
+#include "wd_arc_field.h"
 
 static const float WD_NIXIE_FLICKER = 0.14;
 static const float WD_NIXIE_LIMB = 1.6;
@@ -20,6 +21,9 @@ float4 main( v2p_nixie I ) : SV_Target
 	float3 color = lerp( WD_NIXIE_CORE, WD_NIXIE_EDGE, grazing * grazing ) * limb;
 
 	float flicker = 1.0f - WD_NIXIE_FLICKER * (0.5f + 0.5f * sin(timers.x * 41.0f) * sin(timers.x * 13.7f));
+#ifdef WD_ARC_FIELD
+	flicker *= wd_tube_surge();
+#endif
 
 	return float4( color * flicker * t_base.r, 1.0f );
 }

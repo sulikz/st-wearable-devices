@@ -3,6 +3,12 @@ LIGHT_OFFSET = { 0.001, 0.016, 0.034 }
 ANIM_SECTION = "anim_promin_hud"
 BATTERY_MA = 0.024
 SCREEN_SHADER = "wd\\crt"
+MAP_SHADER = "wd\\crt_map"
+BODY_SHADER = "wd\\crt_body"
+SPRITES_TEXTURE = "wd\\ui\\promin\\sprites"
+SCREEN = { x = 0.001, y = -0.008, w = 0.084, h = 0.0458 }
+ART_W = 1100
+ART_H = 600
 
 EMBLEMS = {
     { name = "none", label = "None" },
@@ -22,20 +28,34 @@ EMBLEMS = {
 }
 
 COLOR_GROUPS = {
-    { id = "hp", label = "HP BAR", key = "hp_color" },
-    { id = "psy", label = "PSY BAR", key = "psy_color" },
-    { id = "stam", label = "STAM BAR", key = "stam_color" },
-    { id = "rad", label = "RAD BAR", key = "rad_color" },
     { id = "faction", label = "FACTION ICON", key = "faction_color" },
-    { id = "buff", label = "STATUS ICONS", key = "buff_color" },
 }
+
+PANEL_RGB = {
+    fill = { 10, 10, 10 },
+    border = { 45, 45, 45 },
+    text = { 198, 198, 198 },
+    dim = { 61, 61, 61 },
+    track_fill = { 18, 18, 18 },
+    track_border = { 61, 61, 61 },
+    pulse = { 106, 255, 89 },
+    warn = wd_face_tones.WARN,
+    crit = wd_face_tones.CRIT,
+    tracked = { 241, 219, 175 },
+    mid = { 154, 154, 154 },
+    meta = { 122, 122, 122 },
+    focus = { 20, 20, 20 },
+    art = { 255, 255, 255 },
+}
+
+MAP_PAGE = "map_small"
+COMMS_PAGE = "comms"
+HEALTH_PAGE = "health"
 
 HAND_STEP = 0.005
 MAP_ZOOM_MIN = 30
 MAP_ZOOM_MAX = 500
 HAND_RANGE = 0.32
-RAD_FULL_GAMMA = 0.35
-RAD_FULL_ANOMALY = 1.0
 
 DEFAULTS = {
     hand_pos = { -0.069999990463257, 0, 0 },
@@ -47,19 +67,18 @@ DEFAULTS = {
     ui_rot = { 0, 90, 90 },
     ui_scale = 1.3399999713898,
     emblem = "auto",
-    hp_color = { 255, 0, 0 },
-    psy_color = { 255, 135, 0 },
-    stam_color = { 35, 165, 255 },
-    rad_color = { 180, 255, 0 },
     faction_color = { 255, 255, 255 },
-    buff_color = { 255, 135, 0 },
-    saturation = 65,
     brightness = 90,
     map_zoom = 500,
     map_x = 0,
-    map_y = 0.0010000020265579,
+    map_y = 0,
     map_scale = 1,
 }
+
+FONT = "jetbrains_mono"
+SENSOR_LEVELS = { geiger = 1, artefacts = 2 }
+OFF_TEXT = "OFF"
+UNAVAILABLE_TEXT = "UNAVAILABLE"
 
 TIERS = {
     {
@@ -67,7 +86,7 @@ TIERS = {
         section = SECTION,
         model = "wd\\promin\\promin_t1",
         ui = "d_promin_ui",
-        pages = { "health" },
+        pages = { COMMS_PAGE, HEALTH_PAGE },
         consumption = BATTERY_MA,
         sensors = {},
         bays = { "map" },
@@ -78,7 +97,7 @@ TIERS = {
         section = "wd_promin_2",
         model = "wd\\promin\\promin_t2",
         ui = "d_promin_ui",
-        pages = { "health" },
+        pages = { COMMS_PAGE, HEALTH_PAGE },
         consumption = 0.016,
         sensors = {},
         bays = { "map", "conn", "side" },
@@ -98,8 +117,7 @@ MODULES = {
         section = "wd_promin_module_map",
         model = "wd\\promin\\promin_s_m_map",
         bay = "map",
-        pages = { "main", "map_small" },
-        hides = { "health" },
+        pages = { MAP_PAGE },
         consumption = 0.004,
     },
     {
@@ -112,6 +130,13 @@ MODULES = {
         name = "side",
         section = "wd_promin_module_side",
         bay = "side",
+        sensor_level = SENSOR_LEVELS.geiger,
+    },
+    {
+        name = "side_2",
+        section = "wd_promin_module_side_2",
+        bay = "side",
+        sensor_level = SENSOR_LEVELS.artefacts,
     },
 }
 
@@ -154,13 +179,7 @@ local FAMILY_FIELDS = {
     { "ui_rot", true },
     { "ui_scale", false },
     { "emblem", false },
-    { "hp_color", true },
-    { "psy_color", true },
-    { "stam_color", true },
-    { "rad_color", true },
     { "faction_color", true },
-    { "buff_color", true },
-    { "saturation", false },
     { "brightness", false },
     { "map_zoom", false },
     { "map_x", false },
@@ -182,13 +201,7 @@ local VARIANT_FIELDS = {
 local USER_FIELDS = {
     "hand_pos",
     "hand_rot",
-    "hp_color",
-    "psy_color",
-    "stam_color",
-    "rad_color",
     "faction_color",
-    "buff_color",
-    "saturation",
     "brightness",
     "map_zoom",
 }
@@ -252,4 +265,66 @@ end
 
 function get_battery_consumption()
     return cfg.get_active_tier().consumption or BATTERY_MA
+end
+
+local function new_px_space(img_w, img_h)
+    local space = {}
+    function space.x(px)
+        return SCREEN.x + px * SCREEN.w / img_w
+    end
+    function space.y(py)
+        return SCREEN.y + py * SCREEN.h / img_h
+    end
+    function space.w(pw)
+        return pw * SCREEN.w / img_w
+    end
+    function space.h(ph)
+        return ph * SCREEN.h / img_h
+    end
+    function space.box(px, py, pw, ph)
+        return { space.x(px), space.y(py), space.w(pw), space.h(ph) }
+    end
+    function space.place(widget, px, py, pw, ph)
+        wd_screen.place_widget(widget, space.x(px), space.y(py), space.w(pw), space.h(ph))
+    end
+    function space.place_box(box, px, py, pw, ph)
+        box.place(space.x(px), space.y(py), space.w(pw), space.h(ph))
+    end
+    return space
+end
+
+local px_space = new_px_space(ART_W, ART_H)
+
+function get_px()
+    return px_space
+end
+
+PANEL_STYLE = {
+    border_w = px_space.h(1.5),
+    text_h = px_space.h(18),
+    pad = px_space.w(10),
+    gap = px_space.w(8),
+    row_h = px_space.h(32),
+}
+
+function get_ui_level()
+    return wd_screen.get_brightness_level(cfg.transforms.brightness)
+end
+
+function get_dimmed_tint(red, green, blue)
+    return wd_screen.get_dimmed_color(get_ui_level(), red, green, blue)
+end
+
+function get_tint(rgb)
+    return get_dimmed_tint(rgb[1], rgb[2], rgb[3])
+end
+
+local STATE_ROLES = { ok = "text", warn = "warn", crit = "crit" }
+
+function get_state_role(value, rising, warn_at, crit_at)
+    return STATE_ROLES[wd_face_tones.get_state(value, rising, warn_at, crit_at)]
+end
+
+function get_group_tint(key)
+    return get_tint(cfg.transforms[key])
 end

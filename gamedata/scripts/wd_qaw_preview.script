@@ -1,0 +1,81 @@
+local QAW_UI_NAME = "UIHaruQAW"
+local previews = {}
+local session_pose = nil
+local wheel_open = false
+
+function register_preview(pose, preview)
+    previews[pose] = preview
+end
+
+local function find_ready_pose(chosen)
+    local fallback = nil
+    for pose, preview in pairs(previews) do
+        if preview.is_ready() then
+            if pose == chosen then
+                return pose
+            end
+            fallback = pose
+        end
+    end
+    return fallback
+end
+
+local function begin_session()
+    local chosen = wd_mcm.get_qaw_raise_pose()
+    if not chosen or wd_inspect.is_pose_up() then
+        return
+    end
+    session_pose = find_ready_pose(chosen)
+    if session_pose then
+        previews[session_pose].show()
+    end
+end
+
+local function on_gui_show(name)
+    if name ~= QAW_UI_NAME then
+        return
+    end
+    wheel_open = true
+    if not session_pose then
+        begin_session()
+    end
+    wd_inspect.set_requested_pose(session_pose)
+end
+
+local function on_gui_hide(name)
+    if name ~= QAW_UI_NAME then
+        return
+    end
+    wheel_open = false
+    wd_inspect.set_requested_pose(nil)
+end
+
+local function end_session()
+    previews[session_pose].hide()
+    session_pose = nil
+end
+
+local function update()
+    if session_pose and not wheel_open and not wd_inspect.is_pose_up() then
+        end_session()
+    end
+end
+
+local function reset()
+    wheel_open = false
+    if session_pose then
+        end_session()
+    end
+end
+
+function register()
+    wd_core.register({
+        id = "wd_qaw_preview",
+        callbacks = {
+            actor_on_first_update = { reset },
+            actor_on_update = { update },
+            GUI_on_show = { on_gui_show },
+            GUI_on_hide = { on_gui_hide },
+        },
+    })
+end

@@ -1,0 +1,371 @@
+local FILL_ID = wd_screen.FILL_ID
+local BOX_ROLES = { fill = "fill", border = "border" }
+
+local scratch_pos = vector2()
+
+local set_shown = wd_screen.set_shown
+local set_tint = wd_screen.set_tint
+local place_widget = wd_screen.place_widget
+
+function new_widget(parent, texture_id, binder)
+    local widget = CUIStatic()
+    widget:SetAutoDelete(true)
+    binder.set(widget, texture_id)
+    widget:SetStretchTexture(true)
+    widget:Show(false)
+    parent:AttachChild(widget)
+    return widget
+end
+
+function new(cfg)
+    local binder = cfg.binder
+    local font = cfg.font
+    local style = cfg.style
+    local tints = {}
+    local kit = { font = font, style = style, tints = tints, palette = cfg.palette, get_tint = cfg.get_tint }
+    local slots = {}
+    local text_cells = {}
+    local texts = {}
+    local blocks = {}
+
+    local function paint_tints()
+        for role, rgb in pairs(cfg.palette) do
+            tints[role] = cfg.get_tint(rgb)
+        end
+    end
+
+    local function new_slot(widget, role, texture_id)
+        local slot = { widget = widget, shown = false, role = role, tex_id = texture_id }
+        set_tint(slot, tints[role])
+        slots[#slots + 1] = slot
+        return slot
+    end
+
+    paint_tints()
+
+    function kit.new_holder(parent)
+        local holder = CUIStatic()
+        holder:SetAutoDelete(true)
+        local owner = parent or cfg.parent
+        owner:AttachChild(holder)
+        return holder
+    end
+
+    function kit.new_fill(role, parent)
+        return new_slot(new_widget(parent or cfg.parent, FILL_ID, binder), role)
+    end
+
+    function kit.new_image(texture_id, role, parent, image_binder)
+        local slot = new_slot(new_widget(parent or cfg.parent, texture_id, image_binder or binder), role, texture_id)
+        if image_binder then
+            slot.binder = image_binder
+        end
+        return slot
+    end
+
+    function kit.set_image(slot, texture_id)
+        slot.tex_id = (slot.binder or binder).bind(slot.widget, texture_id, slot.tex_id)
+    end
+
+    function kit.set_role(slot, role)
+        if slot.role == role then
+            return
+        end
+        slot.role = role
+        set_tint(slot, tints[role])
+    end
+
+    function kit.new_block(block_cfg)
+        local role = block_cfg.role or "text"
+        block_cfg.binder = binder
+        block_cfg.font = font
+        block_cfg.tint = tints[role]
+        local block = wd_text.new_block(block_cfg)
+        blocks[#blocks + 1] = { block = block, role = role }
+        return block
+    end
+
+    function kit.new_text(opts)
+        local accents = {}
+        local text = { holder = kit.new_holder(opts.parent), shown = false, role = "text" }
+        text.line = wd_text.new_line({
+            parent = text.holder,
+            binder = binder,
+            font = font,
+            max_chars = opts.chars,
+            x = 0,
+            y = 0,
+            width = opts.width,
+            height = opts.height or style.text_h,
+            align = opts.align,
+            tint = tints.text,
+            tints = accents,
+        })
+        text.line.set_visible(false)
+        texts[#texts + 1] = text
+
+        function text.repaint()
+            accents[1] = tints[text.accent_role]
+            text.line.set_tint(tints[text.role], accents)
+        end
+
+        function text.place(left, top)
+            if text.left == left and text.top == top then
+                return
+            end
+            text.left = left
+            text.top = top
+            text.holder:SetWndPos(scratch_pos:set(left, top))
+        end
+
+        function text.set_visible(flag)
+            if text.shown ~= flag then
+                text.shown = flag
+                text.line.set_visible(flag)
+            end
+        end
+
+        function text.show(value, role, accent_role)
+            text.line.set_text(value)
+            if text.role ~= role or text.accent_role ~= accent_role then
+                text.role = role
+                text.accent_role = accent_role
+                text.repaint()
+            end
+            text.set_visible(true)
+        end
+
+        return text
+    end
+
+    function kit.repaint()
+        paint_tints()
+        for _, slot in ipairs(slots) do
+            set_tint(slot, tints[slot.role])
+        end
+        for _, cell in ipairs(text_cells) do
+            cell.line.set_tint(tints[cell.role])
+        end
+        for _, entry in ipairs(blocks) do
+            entry.block.set_tint(tints[entry.role])
+        end
+        for _, text in ipairs(texts) do
+            text.repaint()
+        end
+    end
+
+    function kit.measure(text)
+        return wd_text.measure(font, text, style.text_h)
+    end
+
+    function kit.fit(text, max_width)
+        return wd_text.ellipsize(font, text, style.text_h, max_width)
+    end
+
+    function kit.get_max_chars(width)
+        return wd_text.get_max_chars(font, style.text_h, width)
+    end
+
+    function kit.new_box(roles, parent)
+        roles = roles or BOX_ROLES
+        local border_w = roles.border_w or style.border_w
+        local box = { fill = roles.fill and kit.new_fill(roles.fill, parent), edges = {} }
+        for index = 1, 4 do
+            box.edges[index] = kit.new_fill(roles.border, parent)
+        end
+        function box.place(left, top, width, height)
+            local half = border_w / 2
+            if box.fill then
+                place_widget(box.fill.widget, left, top, width, height)
+            end
+            place_widget(box.edges[1].widget, left - half, top - half, width + border_w, border_w)
+            place_widget(box.edges[2].widget, left - half, top + height - half, width + border_w, border_w)
+            place_widget(box.edges[3].widget, left - half, top - half, border_w, height + border_w)
+            place_widget(box.edges[4].widget, left + width - half, top - half, border_w, height + border_w)
+        end
+
+        function box.set_visible(flag)
+            if box.fill then
+                set_shown(box.fill, flag)
+            end
+            for _, edge in ipairs(box.edges) do
+                set_shown(edge, flag)
+            end
+        end
+
+        function box.set_role(role)
+            for _, edge in ipairs(box.edges) do
+                kit.set_role(edge, role)
+            end
+        end
+
+        return box
+    end
+
+    function kit.new_cell(opts)
+        local cell = { text_width = 0, shown = false, role = "text" }
+        local parent = opts.parent
+        if opts.box ~= false then
+            cell.box = kit.new_box(opts.roles, parent)
+        end
+        local icon = opts.icon
+        local box_x, box_y, box_w, box_h
+        if icon then
+            cell.icon = kit.new_image(icon.id, "text", parent)
+        end
+        local function read_label_width()
+            local aspect = wd_screen.get_texture_aspect(cell.label.widget)
+            cell.label_w = aspect and style.text_h * aspect
+        end
+
+        if opts.label then
+            cell.label = kit.new_image(opts.label, "text", parent)
+            read_label_width()
+        end
+        if opts.chars then
+            cell.holder = kit.new_holder(parent)
+            cell.line = wd_text.new_line({
+                parent = cell.holder,
+                binder = binder,
+                font = font,
+                max_chars = opts.chars,
+                x = 0,
+                y = 0,
+                height = style.text_h,
+                tint = tints.text,
+            })
+            cell.line.set_visible(false)
+            text_cells[#text_cells + 1] = cell
+        end
+
+        local function place_content()
+            local content_x = box_x + style.pad
+            if opts.align == "center" then
+                content_x = box_x + (box_w - cell.get_content_width()) / 2
+            elseif opts.align == "right" then
+                content_x = box_x + box_w - style.pad - cell.get_content_width()
+            end
+            if icon then
+                place_widget(cell.icon.widget, content_x, box_y + (box_h - icon.h) / 2, icon.w, icon.h)
+                content_x = content_x + icon.w + style.gap
+            end
+            if cell.holder then
+                cell.holder:SetWndPos(scratch_pos:set(content_x, box_y + (box_h - style.text_h) / 2))
+            end
+            if cell.label then
+                local label_w = cell.label_w or box_x + box_w - style.pad - content_x
+                place_widget(cell.label.widget, content_x, box_y + (box_h - style.text_h) / 2, label_w, style.text_h)
+            end
+        end
+
+        function cell.set_label(texture_id)
+            if cell.label.tex_id == texture_id then
+                return
+            end
+            kit.set_image(cell.label, texture_id)
+            local label_w = cell.label_w
+            read_label_width()
+            if box_x and cell.label_w ~= label_w then
+                place_content()
+            end
+        end
+
+        function cell.set_text(text)
+            if cell.text == text then
+                return
+            end
+            cell.text = text
+            cell.line.set_text(text)
+            cell.text_width = kit.measure(text)
+            if box_x and opts.align then
+                place_content()
+            end
+        end
+
+        function cell.get_content_width()
+            local text_width = cell.label_w or cell.text_width
+            if not icon then
+                return text_width
+            end
+            if text_width > 0 then
+                return icon.w + style.gap + text_width
+            end
+            return icon.w
+        end
+
+        function cell.place(left, top, width, height)
+            if box_x == left and box_y == top and box_w == width and box_h == height then
+                return
+            end
+            box_x, box_y, box_w, box_h = left, top, width, height
+            if cell.box then
+                cell.box.place(left, top, width, height)
+            end
+            place_content()
+        end
+
+        function cell.set_role(role)
+            if cell.role == role then
+                return
+            end
+            cell.role = role
+            if cell.icon then
+                kit.set_role(cell.icon, role)
+            end
+            if cell.label then
+                kit.set_role(cell.label, role)
+            end
+            if cell.line then
+                cell.line.set_tint(tints[role])
+            end
+        end
+
+        function cell.set_visible(flag)
+            if cell.shown == flag then
+                return
+            end
+            cell.shown = flag
+            if cell.box then
+                cell.box.set_visible(flag)
+            end
+            if cell.icon then
+                set_shown(cell.icon, flag)
+            end
+            if cell.label then
+                set_shown(cell.label, flag)
+            end
+            if cell.line then
+                cell.line.set_visible(flag)
+            end
+        end
+
+        return cell
+    end
+
+    function kit.new_bar(opts)
+        local bar = { level = kit.new_fill(opts.level, opts.parent) }
+        local bar_x, bar_y, bar_w, bar_h
+
+        function bar.place(left, top, width, height)
+            bar_x, bar_y, bar_w, bar_h = left, top, width, height
+        end
+
+        function bar.set_ratio(ratio)
+            if bar.ratio == ratio then
+                return
+            end
+            bar.ratio = ratio
+            local inset = opts.inset
+            local level_w = (bar_w - 2 * inset) * math.max(0, math.min(1, ratio))
+            place_widget(bar.level.widget, bar_x + inset, bar_y + inset, level_w, bar_h - 2 * inset)
+        end
+
+        function bar.set_visible(flag)
+            set_shown(bar.level, flag)
+        end
+
+        return bar
+    end
+
+    return kit
+end

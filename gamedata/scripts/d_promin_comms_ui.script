@@ -1,0 +1,300 @@
+local px = d_promin_config.get_px()
+
+local set_shown = wd_screen.set_shown
+
+local BG_TEXTURE = "wd_promin_page_comms"
+local TITLE_TEXTURE = "wd_promin_title_comms"
+local FLASH_MS = 300
+local CHIP_ROLES = { fill = "fill", border = "dim" }
+local TEXTS = {
+    empty = "NO TRANSMISSIONS",
+    older = "%d OLDER",
+    newer = "%d NEWER",
+}
+
+local ROWS_LAYOUT = d_promin_comms_rows_ui.LAYOUT
+local LAYOUT = {
+    track = { w = 4, min_thumb = 24 },
+    band = { chip_top = 3, chip_h = 26, chip_inset = 8, chip_chars = 12, arrow = 12 },
+}
+
+local function new_arrow(id)
+    return { id = id, w = px.w(LAYOUT.band.arrow), h = px.h(LAYOUT.band.arrow) }
+end
+
+local ARROW_UP = new_arrow("wd_comms_icon_arrow_up")
+local ARROW_DOWN = new_arrow("wd_comms_icon_arrow_down")
+
+local function new_chip(kit, arrow)
+    return kit.new_cell({ icon = arrow, chars = LAYOUT.band.chip_chars, align = "center", roles = CHIP_ROLES })
+end
+
+local function build_bands(page, kit)
+    local feed = ROWS_LAYOUT.feed
+    local band_h = ROWS_LAYOUT.band_h
+    local view = ROWS_LAYOUT.view
+    local text = ROWS_LAYOUT.text
+    page.track = { fill = kit.new_fill("track_fill"), thumb = kit.new_fill("meta") }
+    local top_box = kit.new_box()
+    px.place_box(top_box, feed.x, feed.top, feed.w, band_h)
+    page.top_band = { box = top_box, chip = new_chip(kit, ARROW_UP) }
+    local bottom_box = kit.new_box()
+    px.place_box(bottom_box, feed.x, feed.bottom - band_h, feed.w, band_h)
+    page.bottom_band = { box = bottom_box, chip = new_chip(kit, ARROW_DOWN) }
+    page.empty = kit.new_text({ chars = #TEXTS.empty, width = px.w(view.w), align = "center" })
+    page.empty.place(px.x(view.x), px.y(view.top + (view.h - text.h) / 2))
+end
+
+local function new_bare_page(chrome)
+    return {
+        chrome = chrome,
+        set_visible = chrome.set_visible,
+        update = chrome.update,
+        repaint = chrome.repaint,
+        on_wheel = function()
+            return true
+        end,
+    }
+end
+
+local function new_page(ctx, chrome, kit)
+    local view_cfg = ROWS_LAYOUT.view
+    local text_cfg = ROWS_LAYOUT.text
+    local row_chars = kit.get_max_chars(px.w(text_cfg.w))
+    local page = { chrome = chrome, kit = kit, visible = false }
+    page.feed = d_promin_comms_feed.new({
+        font = kit.font,
+        text_h = text_cfg.h,
+        width = text_cfg.w,
+        max_chars = row_chars,
+        view_h = view_cfg.h,
+        shrink = view_cfg.shrink,
+        row_h = ROWS_LAYOUT.row_h,
+        pad_top = ROWS_LAYOUT.pad_top,
+        pad_bottom = ROWS_LAYOUT.pad_bottom,
+        gap = ROWS_LAYOUT.gap,
+        divider_h = ROWS_LAYOUT.divider_h,
+    })
+    page.rows = d_promin_comms_rows_ui.new(kit, ctx.wnd, row_chars)
+    build_bands(page, kit)
+    page.sidebar = d_promin_comms_sidebar_ui.new(kit)
+
+    local feed = page.feed
+    local rows = page.rows
+    local message_count = 0
+    local synced_version = nil
+    local last_newest_id = nil
+    local flash_id = nil
+    local flash_until = 0
+    local was_reading = false
+    local jump_pending = false
+    local rendered = {}
+
+    local function set_chip_text(chip, text)
+        chip.set_text(text)
+        return chip.get_content_width() + 2 * kit.style.pad
+    end
+
+    local function draw_top_band(view)
+        local band = page.top_band
+        local feed_cfg = ROWS_LAYOUT.feed
+        local band_cfg = LAYOUT.band
+        band.box.set_visible(true)
+        local chip = band.chip
+        local older_count = view.older_count
+        if older_count == 0 then
+            chip.set_visible(false)
+            return
+        end
+        local width = set_chip_text(chip, string.format(TEXTS.older, older_count))
+        local right = px.x(feed_cfg.x + feed_cfg.w - band_cfg.chip_inset)
+        chip.place(right - width, px.y(feed_cfg.top + band_cfg.chip_top), width, px.h(band_cfg.chip_h))
+        chip.set_role("meta")
+        chip.set_visible(true)
+    end
+
+    local function draw_bottom_band(view)
+        local band = page.bottom_band
+        local chip = band.chip
+        local newer_count = view.newer_count
+        local shown = not view.live and newer_count > 0
+        band.box.set_visible(shown)
+        if not shown then
+            chip.set_visible(false)
+            return
+        end
+        local feed_cfg = ROWS_LAYOUT.feed
+        local band_cfg = LAYOUT.band
+        local new_below = view.new_below
+        local lit = new_below > 0
+        local text = lit and d_promin_comms_feed.format_new(new_below) or string.format(TEXTS.newer, newer_count)
+        local width = set_chip_text(chip, text)
+        local top = feed_cfg.bottom - ROWS_LAYOUT.band_h + band_cfg.chip_top
+        chip.place(px.x(ROWS_LAYOUT.rule.center) - width / 2, px.y(top), width, px.h(band_cfg.chip_h))
+        kit.set_role(chip.box.fill, lit and "text" or "fill")
+        chip.box.set_role(lit and "text" or "dim")
+        chip.set_role(lit and "fill" or "meta")
+        chip.set_visible(true)
+    end
+
+    local function draw_track(view)
+        local track = page.track
+        local content_h = view.content_h
+        local shown = content_h > view_cfg.h
+        set_shown(track.fill, shown)
+        set_shown(track.thumb, shown)
+        if not shown then
+            return
+        end
+        local spec = LAYOUT.track
+        local track_h = view.view_h
+        local thumb_h = math.max(spec.min_thumb, track_h * track_h / content_h)
+        local ratio = clamp(view.scroll_top / (content_h - view_cfg.h), 0, 1)
+        local track_x = ROWS_LAYOUT.track_x
+        px.place(track.fill.widget, track_x, view_cfg.top, spec.w, track_h)
+        px.place(track.thumb.widget, track_x, view_cfg.top + (track_h - thumb_h) * ratio, spec.w, thumb_h)
+    end
+
+    local function render(view)
+        local focus_entry = nil
+        if message_count > 0 then
+            focus_entry = rows.render(view, flash_id)
+            page.empty.set_visible(false)
+        else
+            rows.hide()
+            page.empty.show(TEXTS.empty, "mid")
+        end
+        draw_top_band(view)
+        draw_bottom_band(view)
+        draw_track(view)
+        page.sidebar.show(focus_entry)
+    end
+
+    local function hide_all()
+        rows.hide()
+        set_shown(page.track.fill, false)
+        set_shown(page.track.thumb, false)
+        page.top_band.box.set_visible(false)
+        page.top_band.chip.set_visible(false)
+        page.bottom_band.box.set_visible(false)
+        page.bottom_band.chip.set_visible(false)
+        page.empty.set_visible(false)
+    end
+
+    local function is_rendered(view, flashing)
+        return view.blocks == rendered.blocks
+            and view.scroll_top == rendered.scroll_top
+            and view.live == rendered.live
+            and view.seen_id == rendered.seen_id
+            and flashing == rendered.flashing
+    end
+
+    local function mark_focus_seen(reading)
+        local focus_id = was_reading and reading and feed.get_view().focus_id
+        if focus_id then
+            wd_comms.mark_seen(focus_id)
+            feed.set_seen(wd_comms.get_seen_id())
+        end
+    end
+
+    local function refresh(force, reading)
+        if not page.visible then
+            return
+        end
+        mark_focus_seen(reading)
+        local view = feed.get_view()
+        local flashing = flash_id ~= nil and time_global() < flash_until
+        if not flashing then
+            flash_id = nil
+        end
+        if not force and is_rendered(view, flashing) then
+            return
+        end
+        rendered.blocks = view.blocks
+        rendered.scroll_top = view.scroll_top
+        rendered.live = view.live
+        rendered.seen_id = view.seen_id
+        rendered.flashing = flashing
+        render(view)
+    end
+
+    local function sync_messages(allow_flash)
+        local version = wd_comms.get_version()
+        if version == synced_version then
+            return
+        end
+        synced_version = version
+        local messages = wd_comms.get_messages()
+        message_count = #messages
+        feed.set_messages(messages, version, wd_comms.get_seen_id())
+        local newest = messages[message_count]
+        local newest_id = newest and newest.id
+        if allow_flash and newest_id ~= nil and newest_id ~= last_newest_id and feed.get_view().live then
+            flash_id = newest_id
+            flash_until = time_global() + FLASH_MS
+        end
+        last_newest_id = newest_id
+    end
+
+    function page.set_visible(visible)
+        page.visible = visible
+        chrome.set_visible(visible)
+        if not visible then
+            was_reading = false
+            hide_all()
+            page.sidebar.set_visible(false)
+            return
+        end
+        sync_messages(false)
+        refresh(true, false)
+        page.sidebar.set_visible(true)
+    end
+
+    function page.update()
+        chrome.update()
+        if not page.visible then
+            return
+        end
+        sync_messages(true)
+        local reading = d_promin.is_reading()
+        if reading and not was_reading then
+            if jump_pending then
+                feed.jump_latest()
+            else
+                feed.open(wd_comms.get_seen_id())
+            end
+        end
+        if reading or not wd_inspect.is_hold_down() then
+            jump_pending = false
+        end
+        was_reading = reading
+        refresh(false, reading)
+    end
+
+    page.repaint = chrome.repaint
+
+    function page.on_wheel(direction)
+        feed.on_wheel(direction)
+        refresh(false, d_promin.is_reading())
+        return true
+    end
+
+    function page.on_page_key()
+        feed.jump_latest()
+        local reading = d_promin.is_reading()
+        jump_pending = not reading
+        refresh(false, reading)
+    end
+
+    return page
+end
+
+function build(ctx)
+    local chrome =
+        d_promin_chrome_ui.build({ init = ctx.init, bg_tex = BG_TEXTURE, title_tex = TITLE_TEXTURE, wnd = ctx.wnd })
+    local kit = chrome.kit
+    if not kit then
+        return new_bare_page(chrome)
+    end
+    return new_page(ctx, chrome, kit)
+end

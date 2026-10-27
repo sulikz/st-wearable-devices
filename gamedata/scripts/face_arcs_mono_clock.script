@@ -1,0 +1,103 @@
+local DIAL_TEXTURE = "wd\\ui\\faces\\arcs_mono\\dial_clock"
+local CLOCK_FONT = "face_clock"
+
+local WEATHER_ICONS = {
+    { match = "storm", icon = 3 },
+    { match = "thunder", icon = 3 },
+    { match = "rain", icon = 4 },
+    { match = "fog", icon = 2 },
+    { match = "partly", icon = 11 },
+    { match = "cloud", icon = 1 },
+    { match = "overcast", icon = 1 },
+    { match = "clear", icon = 0, night_icon = 10 },
+    { match = "sun", icon = 0, night_icon = 10 },
+}
+
+FACE = {
+    rect = wd_face_baked.FACE_RECT,
+    opening_radius = wd_face_baked.OPENING_RADIUS,
+    requires = { "arcs" },
+    layers = {},
+}
+
+local function get_weather_icon(hours)
+    local weather = string.lower(level.get_weather() or "")
+    for _, entry in ipairs(WEATHER_ICONS) do
+        if weather:find(entry.match, 1, true) then
+            local is_night = hours >= 20 or hours < 6
+            return is_night and entry.night_icon or entry.icon
+        end
+    end
+end
+
+local function new_clock_line(face, ctx, font, row, chars)
+    return ctx.new_text_line({ parent = face, binder = face.binder, font = font, max_chars = chars, row = row })
+end
+
+class("UIFaceArcsMonochromatic")(CUIScriptWnd)
+
+function UIFaceArcsMonochromatic:__init(ctx)
+    super()
+    self.ctx = ctx
+    self.binder = wd_screen.new_binder(ctx.shader)
+    self:Show(true)
+    self:Enable(true)
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_face_arcs_mono_clock.xml")
+    xml:InitWindow("face_arcs_mono_clock", 0, self)
+    self.dial = xml:InitStatic("face_arcs_mono_clock:face", self)
+    self.arcs = wd_face_arcs.new(self, ctx)
+    self.weather = xml:InitStatic("face_arcs_mono_clock:weather", self)
+    self.day_chip = xml:InitStatic("face_arcs_mono_clock:day_chip", self)
+    local font = wd_fonts.get_font(CLOCK_FONT)
+    self.time = new_clock_line(self, ctx, font, wd_face_baked.ARCS_MONO_TIME_ROW, wd_face_baked.ARCS_MONO_TIME_CHARS)
+    self.weekday =
+        new_clock_line(self, ctx, font, wd_face_baked.ARCS_MONO_WEEKDAY_ROW, wd_face_baked.ARCS_MONO_WEEKDAY_CHARS)
+    self.day = new_clock_line(self, ctx, font, wd_face_baked.ARCS_MONO_DAY_ROW, wd_face_baked.ARCS_MONO_DAY_CHARS)
+    self.month_year = new_clock_line(
+        self,
+        ctx,
+        font,
+        wd_face_baked.ARCS_MONO_MONTH_YEAR_ROW,
+        wd_face_baked.ARCS_MONO_MONTH_YEAR_CHARS
+    )
+    self.tinted = { self.dial, self.weather, self.day_chip }
+    ctx.fit(self.tinted)
+    self.binder.set(self.dial, "face_dial_clock", DIAL_TEXTURE)
+    self.binder.set(self.day_chip, "face_arcs_mono_clock_day_chip", wd_face_arcs.SPRITES_TEXTURE)
+end
+
+function UIFaceArcsMonochromatic:update_values()
+    local hours, minutes = self.ctx.get_time()
+    if hours ~= self.hours or minutes ~= self.minutes then
+        self.hours, self.minutes = hours, minutes
+        self.time.set_text(string.format("%02d:%02d", hours, minutes))
+        self.weekday.set_text(wd_text.get_upper(self.ctx.format_date("%a")))
+        self.day.set_text(self.ctx.format_date("%d"))
+        self.month_year.set_text(wd_text.get_upper(self.ctx.format_date("%b %Y")))
+    end
+    local text_tint = self.ctx.get_tint("ok")
+    self.time.set_tint(text_tint)
+    self.weekday.set_tint(text_tint)
+    self.month_year.set_tint(text_tint)
+    self.day.set_tint(self.ctx.get_tint("ok", wd_face_tones.BG))
+    self.arcs.update()
+    local icon = get_weather_icon(level.get_time_hours())
+    local shown = icon ~= nil
+    if shown ~= self.weather_shown then
+        self.weather_shown = shown
+        self.weather:Show(shown)
+    end
+    if icon then
+        self.last_weather = self.binder.bind(
+            self.weather,
+            "face_arcs_mono_clock_weather_" .. icon,
+            self.last_weather,
+            wd_face_arcs.SPRITES_TEXTURE
+        )
+    end
+end
+
+function new_screen(ctx)
+    return UIFaceArcsMonochromatic(ctx)
+end

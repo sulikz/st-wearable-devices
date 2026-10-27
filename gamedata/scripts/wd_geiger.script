@@ -1,0 +1,70 @@
+READING_SCALE = 2500
+REFRESH_MS = 555
+HIT_TICK = 0.1
+DIFFICULTY_FACTORS = { 0.65, 0.8, 1.0, 1.2 }
+DEFAULT_DIFFICULTY = 1
+
+ARMOUR = {
+    { slot = wd_outfit.OUTFIT_SLOT, cast = "cast_CustomOutfit" },
+    { slot = wd_vitals.HELMET_SLOT, cast = "cast_Helmet" },
+}
+
+local RADIATION_HIT = hit.radiation
+
+local belt_immunity = 0
+local link_check = nil
+
+function set_link_check(check)
+    link_check = check
+end
+
+function is_linked()
+    return link_check ~= nil and link_check()
+end
+
+function is_dose_readable()
+    return not wd_mcm.is_strict_geiger() or is_linked()
+end
+
+function get_exact_reading()
+    return level.get_env_rads() * READING_SCALE
+end
+
+function get_reading()
+    return math.floor(get_exact_reading())
+end
+
+local function get_armour_protection()
+    local actor = db.actor
+    local protection = 0
+    for _, armour in ipairs(ARMOUR) do
+        local item = actor:item_in_slot(armour.slot)
+        local cast = item and item[armour.cast](item)
+        if cast then
+            protection = protection + cast:GetDefHitTypeProtection(RADIATION_HIT)
+        end
+    end
+    return protection
+end
+
+local function add_artefact_immunity(_, item)
+    if item:is_artefact() then
+        belt_immunity = belt_immunity + item:get_artefact_immunity(RADIATION_HIT)
+    end
+end
+
+local function get_difficulty_factor()
+    if not grok_actor_damage_balancer then
+        return 1
+    end
+    local difficulty = game_difficulties.get_game_factor("type")
+    return DIFFICULTY_FACTORS[difficulty] or DIFFICULTY_FACTORS[DEFAULT_DIFFICULTY]
+end
+
+function get_shield(conditions)
+    belt_immunity = 0
+    db.actor:iterate_belt(add_artefact_immunity)
+    local booster = wd_vitals.get_booster_value(conditions, wd_vitals.BOOST.radiation_protection)
+    local per_tick = HIT_TICK * get_armour_protection() + belt_immunity + booster
+    return per_tick / (HIT_TICK * get_difficulty_factor()) * READING_SCALE
+end

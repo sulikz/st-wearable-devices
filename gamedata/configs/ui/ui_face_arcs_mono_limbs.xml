@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <face_arcs_mono_limbs>
+    <face x="-0.0134640000" y="-0.0134640000" width="0.0269280000" height="0.0269280000" stretch="1"/>
+    <part_head x="-0.0015252187" y="-0.0094668750" width="0.0031556250" height="0.0033660000" stretch="1"/>
+    <part_torso x="-0.0023667187" y="-0.0070475625" width="0.0046282500" height="0.0048386250" stretch="1"/>
+    <part_pelvis x="-0.0024193125" y="-0.0035763750" width="0.0042075000" height="0.0037867500" stretch="1"/>
+    <part_leftarm x="-0.0045756563" y="-0.0059956875" width="0.0035763750" height="0.0075735000" stretch="1"/>
+    <part_rightarm x="0.0007889063" y="-0.0063638437" width="0.0035763750" height="0.0075735000" stretch="1"/>
+    <part_leftleg x="-0.0035237813" y="-0.0014726250" width="0.0037867500" height="0.0105187500" stretch="1"/>
+    <part_rightleg x="-0.0007363125" y="-0.0012622500" width="0.0037867500" height="0.0105187500" stretch="1"/>
+    <helmet x="-0.0036289687" y="-0.0082046250" width="0.0015778125" height="0.0015778125" stretch="1"/>
+    <air x="0.0053119687" y="-0.0027348750" width="0.0029452500" height="0.0054697500" stretch="1"/>
+  </face_arcs_mono_limbs>
+</w>

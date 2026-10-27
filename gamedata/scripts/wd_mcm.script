@@ -3,15 +3,20 @@ local ID_HOLD_KEY = "hold_key"
 local ID_TAP_MS = "tap_ms"
 local ID_GUI_KEY = "gui_key"
 local ID_GUI_MOD = "gui_mod"
-local ID_DOUBLE_TAP_MS = "double_tap_ms"
 local ID_SWAP_HOLD_TOGGLE = "swap_hold_toggle"
+local ID_STRICT_GEIGER = "strict_geiger"
+local ID_QAW_RAISE = "qaw_raise"
+local DEFAULT_TAP_MS = 200
+local QAW_RAISE_NONE = "none"
+local DEFAULT_QAW_RAISE = "watch"
 
 hold_key = DIK_keys.MOUSE_4
-tap_ms = 300
+tap_ms = DEFAULT_TAP_MS
 gui_key = DIK_keys.DIK_M
 gui_mod = "alt"
-double_tap_ms = 250
 swap_hold_toggle = false
+strict_geiger = true
+qaw_raise = DEFAULT_QAW_RAISE
 
 local MOD_DIKS = {
     alt = { "DIK_LMENU", "DIK_RMENU" },
@@ -54,21 +59,11 @@ function on_mcm_load()
                 id = ID_TAP_MS,
                 type = "track",
                 val = 2,
-                def = 200,
+                def = DEFAULT_TAP_MS,
                 min = 150,
                 max = 600,
                 step = 25,
                 text = "ui_mcm_wd_tap_ms",
-            },
-            {
-                id = ID_DOUBLE_TAP_MS,
-                type = "track",
-                val = 2,
-                def = 250,
-                min = 150,
-                max = 600,
-                step = 25,
-                text = "ui_mcm_wd_double_tap_ms",
             },
             {
                 id = ID_SWAP_HOLD_TOGGLE,
@@ -91,6 +86,25 @@ function on_mcm_load()
                 def = "alt",
                 text = "ui_mcm_wd_gui_mod",
                 content = { { "none", "none" }, { "alt", "alt" }, { "ctrl", "ctrl" }, { "shift", "shift" } },
+            },
+            {
+                id = ID_STRICT_GEIGER,
+                type = "check",
+                val = 1,
+                def = true,
+                text = "ui_mcm_wd_strict_geiger",
+            },
+            {
+                id = ID_QAW_RAISE,
+                type = "list",
+                val = 0,
+                def = DEFAULT_QAW_RAISE,
+                text = "ui_mcm_wd_qaw_raise",
+                content = {
+                    { wd_inspect.POSE_WATCH, "wd_qaw_raise_watch" },
+                    { wd_inspect.POSE_PROMIN, "wd_qaw_raise_promin" },
+                    { QAW_RAISE_NONE, "wd_qaw_raise_none" },
+                },
             },
         },
     }
@@ -120,8 +134,9 @@ function on_option_change()
     tap_ms = read_option(ID_TAP_MS, tap_ms, is_positive)
     gui_key = read_option(ID_GUI_KEY, gui_key)
     gui_mod = read_option(ID_GUI_MOD, gui_mod)
-    double_tap_ms = read_option(ID_DOUBLE_TAP_MS, double_tap_ms, is_positive)
     swap_hold_toggle = read_option(ID_SWAP_HOLD_TOGGLE, swap_hold_toggle)
+    strict_geiger = read_option(ID_STRICT_GEIGER, strict_geiger)
+    qaw_raise = read_option(ID_QAW_RAISE, qaw_raise)
 end
 
 function get_hold_key_dik()
@@ -140,10 +155,17 @@ function is_gui_mod_held()
     return is_mod_held(gui_mod)
 end
 
-function get_double_tap_ms()
-    return math.max(double_tap_ms, tap_ms)
-end
-
 function is_hold_toggle_swapped()
     return swap_hold_toggle == true
+end
+
+function is_strict_geiger()
+    return strict_geiger == true
+end
+
+function get_qaw_raise_pose()
+    if qaw_raise == QAW_RAISE_NONE then
+        return nil
+    end
+    return qaw_raise
 end

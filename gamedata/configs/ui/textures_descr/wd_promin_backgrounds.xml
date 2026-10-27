@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <file name="wd\ui\promin\frame">
+    <texture id="wd_promin_frame" x="0" y="0" width="1100" height="600" />
+  </file>
+  <file name="wd\ui\promin\page_bio">
+    <texture id="wd_promin_page_bio" x="0" y="0" width="1100" height="600" />
+  </file>
+  <file name="wd\ui\promin\page_nav">
+    <texture id="wd_promin_page_nav" x="0" y="0" width="1100" height="600" />
+  </file>
+  <file name="wd\ui\promin\page_comms">
+    <texture id="wd_promin_page_comms" x="0" y="0" width="1100" height="600" />
+  </file>
+</w>

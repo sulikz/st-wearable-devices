@@ -1,7 +1,8 @@
 DEFAULT_HANDS = "actor_hud_05"
 
-local OUTFIT_SLOT = 7
+OUTFIT_SLOT = 7
 local NONE = "_none"
+local hands_by_outfit = {}
 
 function get_item()
     return db.actor and db.actor:item_in_slot(OUTFIT_SLOT)
@@ -23,5 +24,10 @@ function get_hands_section(outfit_key)
     if is_none(outfit_key) then
         return DEFAULT_HANDS
     end
-    return ini_sys:r_string_ex(outfit_key, "player_hud_section")
+    local cached = hands_by_outfit[outfit_key]
+    if cached == nil then
+        cached = ini_sys:r_string_ex(outfit_key, "player_hud_section") or false
+        hands_by_outfit[outfit_key] = cached
+    end
+    return cached or nil
 end

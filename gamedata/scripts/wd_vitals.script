@@ -1,0 +1,361 @@
+RAD_FULL_GAMMA = 0.35
+RAD_FULL_ANOMALY = 1.0
+RAD_MSV_PER_UNIT = 10000 * 0.387
+RAD_STAMINA_LOSS_PER_SV = 0.5
+RAD_STAMINA_FLOOR = 0.2
+HELMET_SLOT = 12
+CARRY_SLOTS = { wd_outfit.OUTFIT_SLOT, 13 }
+BLEED_TIERS = { 0.35, 0.7 }
+BLEED_MIN = 0.00001
+SATIETY_FLOOR = 0.1
+SATIETY_SPAN = 1.123
+LEGS = { "leftleg", "rightleg" }
+
+BOOST = {
+    hp_restore = 0,
+    power_restore = 1,
+    radiation_restore = 2,
+    bleeding_restore = 3,
+    max_weight = 4,
+    radiation_protection = 5,
+    telepatic_protection = 6,
+    chemical_burn_protection = 7,
+    burn_immunity = 8,
+    shock_immunity = 9,
+    radiation_immunity = 10,
+    telepatic_immunity = 11,
+    chemical_burn_immunity = 12,
+    expl_immunity = 13,
+    strike_immunity = 14,
+    fire_wound_immunity = 15,
+    wound_immunity = 16,
+}
+
+LIMBS = { "head", "torso", "leftarm", "rightarm", "leftleg", "rightleg" }
+
+LIMB_PARTS = {
+    { limb = "head", parts = { "head" } },
+    { limb = "torso", parts = { "torso", "pelvis" } },
+    { limb = "leftarm", parts = { "leftarm" } },
+    { limb = "rightarm", parts = { "rightarm" } },
+    { limb = "leftleg", parts = { "leftleg" } },
+    { limb = "rightleg", parts = { "rightleg" } },
+}
+
+LIMB_DATA_KEY = {
+    leftarm = "rightarm",
+    rightarm = "leftarm",
+    leftleg = "rightleg",
+    rightleg = "leftleg",
+}
+
+local limb_states = {}
+for _, limb in ipairs(LIMBS) do
+    limb_states[limb] = { perm = 1, total = 1 }
+end
+
+local function get_rad_full()
+    if grok_progressive_rad_damages then
+        return RAD_FULL_GAMMA
+    end
+    return RAD_FULL_ANOMALY
+end
+
+function get_health()
+    return db.actor.health or 0
+end
+
+function get_stamina()
+    return db.actor.power or 0
+end
+
+function get_psy()
+    local read_psy = arszi_psy and arszi_psy.get_psy_health
+    local psy = read_psy and read_psy()
+    return psy or db.actor.psy_health or 0
+end
+
+function get_radiation()
+    return (db.actor.radiation or 0) / get_rad_full()
+end
+
+function get_radiation_msv()
+    return math.floor((db.actor.radiation or 0) * RAD_MSV_PER_UNIT)
+end
+
+function get_conditions()
+    local actor = db.actor:cast_Actor()
+    return actor and actor:conditions()
+end
+
+function get_stamina_cap(conditions, msv)
+    local cap = conditions:GetMaxPower()
+    if grok_progressive_rad_damages then
+        local sievert = msv / 1000
+        cap = cap * math.max(RAD_STAMINA_FLOOR, 1 - sievert * RAD_STAMINA_LOSS_PER_SV)
+    end
+    return clamp(cap, 0, 1)
+end
+
+function get_bleeding_tier()
+    local bleeding = db.actor.bleeding or 0
+    if bleeding < BLEED_MIN then
+        return 0
+    end
+    for tier, limit in ipairs(BLEED_TIERS) do
+        if bleeding < limit then
+            return tier
+        end
+    end
+    return #BLEED_TIERS + 1
+end
+
+function get_broken_legs()
+    local injuries = zzz_player_injuries
+    local health = injuries and injuries.health
+    local broken = 0
+    if health then
+        for _, leg in ipairs(LEGS) do
+            local leg_health = health[leg]
+            if leg_health and leg_health <= 0 then
+                broken = broken + 1
+            end
+        end
+    end
+    return broken
+end
+
+local function has_new_limb_penalties()
+    local mcm = zzz_player_injuries_mcm
+    return mcm and mcm.get_config("NEW_LIMB_PENALTIES_FEATURE")
+end
+
+function get_mobility(conditions)
+    local broken_legs = has_new_limb_penalties() and 0 or get_broken_legs()
+    if conditions:IsCantWalk() then
+        return "cant_walk_stamina"
+    elseif conditions:IsCantWalkWeight() then
+        return "cant_walk_weight"
+    elseif broken_legs >= 2 then
+        return "cant_walk_legs"
+    elseif broken_legs == 1 then
+        return "cant_run_leg"
+    elseif conditions:IsLimping() then
+        return "limp"
+    elseif conditions:IsCantSprint() then
+        return "cant_sprint"
+    end
+    return "ok"
+end
+
+local DEPRIVATION_SCALE = 10000
+local THIRST = {
+    get_last = "get_last_drink",
+    get_blur_4 = "get_thirst_blur_4",
+    get_deprivation = "get_water_deprivation",
+    blur_4 = 5760,
+}
+local SLEEP = {
+    get_last = "get_last_sleep",
+    get_blur_4 = "get_sleep_blur_4",
+    get_deprivation = "get_sleep_deprivation",
+    blur_4 = 8750,
+}
+
+local function get_remaining(last, blur_4)
+    if blur_4 <= 0 then
+        return nil
+    end
+    return clamp((blur_4 - last) / blur_4, 0, 1)
+end
+
+local function get_deprivation(status, need)
+    if not status then
+        return nil
+    end
+    local get_last = status[need.get_last]
+    local get_blur_4 = status[need.get_blur_4]
+    if get_last and get_blur_4 then
+        return get_remaining(get_last(), get_blur_4())
+    end
+    local get_need_deprivation = status[need.get_deprivation]
+    if get_need_deprivation then
+        return get_remaining(get_need_deprivation() * DEPRIVATION_SCALE, need.blur_4)
+    end
+    return nil
+end
+
+local function get_inventory_bars()
+    local bars = hts_inventory_bars
+    if
+        (sota_stats_tweak_gamma or sota_stats_tweak)
+        and bars
+        and bars.get_satiety_val
+        and bars.get_thirst_val
+        and bars.get_sleep_val
+    then
+        return bars
+    end
+    return nil
+end
+
+function get_needs(conditions)
+    local bars = get_inventory_bars()
+    if bars then
+        return bars.get_satiety_val(), bars.get_thirst_val(), bars.get_sleep_val()
+    end
+    local food = math.min(clamp(conditions:GetSatiety() - SATIETY_FLOOR, 0, 1) * SATIETY_SPAN, 1)
+    return food, get_deprivation(actor_status_thirst, THIRST), get_deprivation(actor_status_sleep, SLEEP)
+end
+
+local carry_bonus = 0
+local belt_bonus_by_section = {}
+
+local function add_belt_bonus(_, item)
+    local section = item:section()
+    local bonus = belt_bonus_by_section[section]
+    if not bonus then
+        bonus = ini_sys:r_float_ex(section, "additional_inventory_weight") or 0
+        belt_bonus_by_section[section] = bonus
+    end
+    carry_bonus = carry_bonus + bonus * item:condition()
+end
+
+local booster_value = 0
+local wanted_booster
+
+local function add_booster_value(booster_type, _, value)
+    if booster_type == wanted_booster then
+        booster_value = booster_value + value
+    end
+end
+
+function get_booster_value(conditions, booster_type)
+    booster_value, wanted_booster = 0, booster_type
+    conditions:BoosterForEach(add_booster_value)
+    return booster_value
+end
+
+function get_carry_weight(conditions)
+    local actor = db.actor
+    carry_bonus = 0
+    for _, slot in ipairs(CARRY_SLOTS) do
+        local item = actor:item_in_slot(slot)
+        if item then
+            carry_bonus = carry_bonus + item:get_additional_max_weight()
+        end
+    end
+    actor:iterate_belt(add_belt_bonus)
+    local booster = get_booster_value(conditions, BOOST.max_weight)
+    return actor:get_total_weight(), actor:get_actor_max_weight() + carry_bonus + booster
+end
+
+local function get_hovered_wheel_section()
+    local wheel = haru_quick_action_wheel_mcm
+    local gui = wheel and wheel.GUI
+    if not gui then
+        return nil
+    end
+    local is_shown = gui.IsShown
+    if is_shown and not is_shown(gui) then
+        return nil
+    end
+    local index = gui.hovered_idx
+    if not index or index <= 0 then
+        return nil
+    end
+    local options = gui.options
+    local option = options and options[index]
+    return option and option.section or nil
+end
+
+local scratch_health, scratch_timed = {}, {}
+
+local function get_preview(section, health, timedhp, maxhp)
+    local injuries = zzz_player_injuries
+    local medkits, heal_helps = injuries.medkits, injuries.healhelp
+    local medkit = medkits and medkits[section]
+    local heal_help = heal_helps and heal_helps[section]
+    if not medkit and not heal_help then
+        return nil, nil
+    end
+    local preview_health, preview_timed = scratch_health, scratch_timed
+    for _, limb in ipairs(LIMBS) do
+        preview_health[limb] = health[limb]
+        preview_timed[limb] = timedhp[limb]
+    end
+    if medkit then
+        for _, limb in ipairs(LIMBS) do
+            local bonus = medkit[limb]
+            if bonus then
+                local amount = medkit.harming and bonus or math.min(bonus, maxhp[limb] - preview_health[limb])
+                preview_health[limb] = preview_health[limb] + amount
+                preview_timed[limb] = preview_timed[limb] + amount
+            end
+        end
+    end
+    if heal_help then
+        for _, limb in ipairs(LIMBS) do
+            if heal_help[limb] then
+                preview_timed[limb] = preview_timed[limb] - heal_help[limb]
+                if preview_timed[limb] < 0 then
+                    preview_timed[limb] = 0
+                end
+            end
+        end
+    end
+    for _, limb in ipairs(LIMBS) do
+        if preview_health[limb] > maxhp[limb] then
+            preview_health[limb] = maxhp[limb]
+        end
+        if preview_health[limb] <= 0 then
+            preview_health[limb] = 0
+        end
+        if preview_health[limb] < preview_timed[limb] then
+            preview_timed[limb] = health[limb]
+        end
+    end
+    return preview_health, preview_timed
+end
+
+function get_helmet_condition()
+    local helmet = db.actor:item_in_slot(HELMET_SLOT)
+    return helmet and helmet:condition()
+end
+
+function has_limbs()
+    local injuries = zzz_player_injuries
+    return injuries ~= nil and injuries.health ~= nil and injuries.maxhp ~= nil and injuries.timedhp ~= nil
+end
+
+function get_limbs()
+    if not has_limbs() then
+        for _, limb in ipairs(LIMBS) do
+            local state = limb_states[limb]
+            state.perm, state.total = 1, 1
+        end
+        return limb_states
+    end
+    local injuries = zzz_player_injuries
+    local health, maxhp, timedhp = injuries.health, injuries.maxhp, injuries.timedhp
+    local section = get_hovered_wheel_section()
+    if section then
+        local preview_health, preview_timed = get_preview(section, health, timedhp, maxhp)
+        if preview_health then
+            health, timedhp = preview_health, preview_timed
+        end
+    end
+    for _, limb in ipairs(LIMBS) do
+        local key = LIMB_DATA_KEY[limb] or limb
+        local state = limb_states[limb]
+        local max = maxhp[key]
+        if max and max > 0 then
+            local total = health[key]
+            local perm = clamp((total - (timedhp[key] or 0)) / max, 0, 1)
+            state.perm, state.total = perm, clamp(total / max, perm, 1)
+        else
+            state.perm, state.total = 1, 1
+        end
+    end
+    return limb_states
+end

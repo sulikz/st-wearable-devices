@@ -1,0 +1,288 @@
+local EDGE_EPSILON = 1e-6
+
+local DIAGONAL = math.sqrt(0.5)
+local FOLD_SPAN = 2
+
+local CANDIDATES = {
+    { east = true, south = false },
+    { east = false, south = false },
+    { east = true, south = true },
+    { east = false, south = true },
+}
+
+local function get_center(rect)
+    return (rect.x1 + rect.x2) / 2, (rect.y1 + rect.y2) / 2
+end
+
+function get_edge_point(rect, east, south)
+    local center_x, center_y = get_center(rect)
+    local half_w = (rect.x2 - rect.x1) / 2 * DIAGONAL
+    local half_h = (rect.y2 - rect.y1) / 2 * DIAGONAL
+    return center_x + (east and half_w or -half_w), center_y + (south and half_h or -half_h)
+end
+
+local function get_candidate_origin(corner, anchor, width, height, link)
+    local left, top = get_edge_point(anchor, corner.east, corner.south)
+    left = corner.east and left + link or left - link - width
+    top = corner.south and top + link or top - link - height
+    return left, top
+end
+
+local function is_overlapping(left, right)
+    return left.x1 < right.x2 - EDGE_EPSILON
+        and right.x1 < left.x2 - EDGE_EPSILON
+        and left.y1 < right.y2 - EDGE_EPSILON
+        and right.y1 < left.y2 - EDGE_EPSILON
+end
+
+local function is_inside(rect, screen)
+    return rect.x1 >= screen.x1 - EDGE_EPSILON
+        and rect.y1 >= screen.y1 - EDGE_EPSILON
+        and rect.x2 <= screen.x2 + EDGE_EPSILON
+        and rect.y2 <= screen.y2 + EDGE_EPSILON
+end
+
+local function is_free(rect, taken)
+    for _, other in ipairs(taken) do
+        if is_overlapping(rect, other) then
+            return false
+        end
+    end
+    return true
+end
+
+local function set_rect(rect, left, top, width, height)
+    rect.x1 = left
+    rect.y1 = top
+    rect.x2 = left + width
+    rect.y2 = top + height
+    return rect
+end
+
+local function set_link(cluster)
+    local rect = cluster.rect
+    local anchor = cluster.anchor
+    local center_x, center_y = get_center(anchor)
+    local east = rect.x1 >= center_x
+    local south = rect.y1 >= center_y
+    local edge_x, edge_y = get_edge_point(anchor, east, south)
+    local corner_x = east and rect.x1 or rect.x2
+    local corner_y = south and rect.y1 or rect.y2
+    if (corner_x > edge_x) ~= east or (corner_y > edge_y) ~= south then
+        return nil
+    end
+    if math.abs(corner_x - edge_x) < EDGE_EPSILON or math.abs(corner_y - edge_y) < EDGE_EPSILON then
+        return nil
+    end
+    local link = cluster.link_rect
+    link.x1 = math.min(edge_x, corner_x)
+    link.y1 = math.min(edge_y, corner_y)
+    link.x2 = math.max(edge_x, corner_x)
+    link.y2 = math.max(edge_y, corner_y)
+    link.falling = east == south
+    return link
+end
+
+function clear_list(list)
+    for index = #list, 1, -1 do
+        list[index] = nil
+    end
+    return list
+end
+
+local function clear_map(map)
+    for key in pairs(map) do
+        map[key] = nil
+    end
+    return map
+end
+
+function new(cfg)
+    local layouter = {}
+    local fold_w, fold_h = FOLD_SPAN * cfg.merge_w, FOLD_SPAN * cfg.merge_h
+    local previous_rank = {}
+    local previous_candidate = {}
+    local spare_rank = {}
+    local spare_candidate = {}
+    local scratch = {}
+    local pool = {}
+    local pooled = 0
+    local cluster_list = {}
+    local placed = {}
+    local taken = {}
+
+    local function new_cluster(item)
+        pooled = pooled + 1
+        local cluster = pool[pooled]
+        if not cluster then
+            cluster = { members = {}, spot = {}, pad = {}, link_rect = {} }
+            pool[pooled] = cluster
+        end
+        cluster.anchor = item
+        clear_list(cluster.members)[1] = item
+        cluster.rect, cluster.link, cluster.width, cluster.height = nil, nil, nil, nil
+        return cluster
+    end
+
+    local function is_before(left, right)
+        if left.tracked ~= right.tracked then
+            return left.tracked
+        end
+        local left_rank = previous_rank[left.id]
+        local right_rank = previous_rank[right.id]
+        if left_rank and right_rank then
+            return left_rank < right_rank
+        end
+        if left_rank or right_rank then
+            return left_rank ~= nil
+        end
+        return left.order < right.order
+    end
+
+    local function is_near(cluster, item)
+        local anchor_x, anchor_y = get_center(cluster.anchor)
+        local item_x, item_y = get_center(item)
+        return math.abs(anchor_x - item_x) < cfg.merge_w and math.abs(anchor_y - item_y) < cfg.merge_h
+    end
+
+    function layouter.cluster(items)
+        table.sort(items, is_before)
+        pooled = 0
+        local clusters = clear_list(cluster_list)
+        for _, item in ipairs(items) do
+            local joined = false
+            for _, cluster in ipairs(clusters) do
+                if is_near(cluster, item) then
+                    cluster.members[#cluster.members + 1] = item
+                    joined = true
+                    break
+                end
+            end
+            if not joined then
+                clusters[#clusters + 1] = new_cluster(item)
+            end
+        end
+        return clusters
+    end
+
+    local function try_candidate(index, cluster, screen)
+        local left, top =
+            get_candidate_origin(CANDIDATES[index], cluster.anchor, cluster.width, cluster.height, cfg.link)
+        set_rect(scratch, left, top, cluster.width, cluster.height)
+        if is_inside(scratch, screen) and is_free(scratch, taken) then
+            return set_rect(cluster.spot, left, top, cluster.width, cluster.height)
+        end
+        return nil
+    end
+
+    local function find_spot(cluster, screen)
+        local preferred = previous_candidate[cluster.anchor.id]
+        if preferred then
+            local rect = try_candidate(preferred, cluster, screen)
+            if rect then
+                return rect, preferred
+            end
+        end
+        for index = 1, #CANDIDATES do
+            if index ~= preferred then
+                local rect = try_candidate(index, cluster, screen)
+                if rect then
+                    return rect, index
+                end
+            end
+        end
+        return nil
+    end
+
+    local function clamp_first(cluster, screen)
+        local left, top = get_candidate_origin(CANDIDATES[1], cluster.anchor, cluster.width, cluster.height, cfg.link)
+        left = math.max(screen.x1, math.min(screen.x2 - cluster.width, left))
+        top = math.max(screen.y1, math.min(screen.y2 - cluster.height, top))
+        return set_rect(cluster.spot, left, top, cluster.width, cluster.height)
+    end
+
+    local function get_nearest(cluster)
+        local nearest, nearest_sq = nil, nil
+        local anchor_x, anchor_y = get_center(cluster.anchor)
+        for _, other in ipairs(placed) do
+            local other_x, other_y = get_center(other.anchor)
+            local dx = other_x - anchor_x
+            local dy = other_y - anchor_y
+            local distance_sq = dx * dx + dy * dy
+            if math.abs(dx) < fold_w and math.abs(dy) < fold_h and (not nearest_sq or distance_sq < nearest_sq) then
+                nearest, nearest_sq = other, distance_sq
+            end
+        end
+        return nearest
+    end
+
+    function layouter.fold(clusters)
+        clear_list(placed)
+        for _, cluster in ipairs(clusters) do
+            if cluster.rect then
+                placed[#placed + 1] = cluster
+            end
+        end
+        local kept = 0
+        for index = 1, #clusters do
+            local cluster = clusters[index]
+            local target = not (cluster.rect or cluster.anchor.tracked) and get_nearest(cluster)
+            if target then
+                for _, member in ipairs(cluster.members) do
+                    target.members[#target.members + 1] = member
+                end
+            else
+                kept = kept + 1
+                clusters[kept] = cluster
+            end
+        end
+        local folded = kept < #clusters
+        for index = #clusters, kept + 1, -1 do
+            clusters[index] = nil
+        end
+        return clusters, folded
+    end
+
+    function layouter.place(clusters, obstacles, screen)
+        clear_list(taken)
+        for _, obstacle in ipairs(obstacles) do
+            taken[#taken + 1] = obstacle
+        end
+        for _, cluster in ipairs(clusters) do
+            for _, member in ipairs(cluster.members) do
+                taken[#taken + 1] = member
+            end
+        end
+        local ranks = clear_map(spare_rank)
+        local candidates = clear_map(spare_candidate)
+        local rank = 0
+        for _, cluster in ipairs(clusters) do
+            local rect, index = nil, nil
+            if cluster.width then
+                rect, index = find_spot(cluster, screen)
+                if not rect and cluster.anchor.tracked then
+                    rect, index = clamp_first(cluster, screen), 1
+                end
+            end
+            cluster.rect = rect
+            cluster.link = rect and set_link(cluster)
+            if rect then
+                local spacing = cfg.spacing or 0
+                rank = rank + 1
+                local pad = cluster.pad
+                pad.x1 = rect.x1 - spacing
+                pad.y1 = rect.y1 - spacing
+                pad.x2 = rect.x2 + spacing
+                pad.y2 = rect.y2 + spacing
+                taken[#taken + 1] = pad
+                ranks[cluster.anchor.id] = rank
+                candidates[cluster.anchor.id] = index
+            end
+        end
+        spare_rank, previous_rank = previous_rank, ranks
+        spare_candidate, previous_candidate = previous_candidate, candidates
+        return clusters
+    end
+
+    return layouter
+end

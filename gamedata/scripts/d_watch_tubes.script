@@ -1,20 +1,23 @@
 local SECTION = d_watch_config.SECTION
 local SLOTS = 4
 
-local shown = {}
+local display_digits = {}
 
 function get_tube_bone(slot, digit)
     return "t" .. slot .. "_n" .. digit
 end
 
-function get_bone_visible_map()
-    local map = {}
-    for slot = 1, SLOTS do
-        for digit = 0, 9 do
-            map[get_tube_bone(slot, digit)] = false
-        end
+local function new_tube_switch(slot)
+    local bones = {}
+    for digit = 0, 9 do
+        bones[digit] = get_tube_bone(slot, digit)
     end
-    return map
+    return wd_attach.new_bone_switch({ name = SECTION, bones = bones })
+end
+
+local tubes = {}
+for slot = 1, SLOTS do
+    tubes[slot] = new_tube_switch(slot)
 end
 
 function get_display_digits()
@@ -33,34 +36,21 @@ function get_display_digits()
         high = has_filter and 99 or 0
         low = high
     else
-        high = level.get_time_hours()
-        low = level.get_time_minutes()
+        high, low = wd_clock.get_time(d_watch_config.transforms)
     end
-    local digits = {
-        math.floor(high / 10),
-        high % 10,
-        math.floor(low / 10),
-        low % 10,
-    }
-    if seconds_left and seconds_left > 0 and digits[1] == 0 then
-        digits[1] = nil
+    display_digits[1] = math.floor(high / 10)
+    display_digits[2] = high % 10
+    display_digits[3] = math.floor(low / 10)
+    display_digits[4] = low % 10
+    if seconds_left and seconds_left > 0 and display_digits[1] == 0 then
+        display_digits[1] = nil
     end
-    return digits
+    return display_digits
 end
 
 local function apply_digits(digits)
     for slot = 1, SLOTS do
-        local digit = digits[slot]
-        local previous = shown[slot]
-        if previous ~= digit then
-            if previous ~= nil then
-                wd_attach.set_bone_visible(SECTION, get_tube_bone(slot, previous), false)
-            end
-            if digit ~= nil then
-                wd_attach.set_bone_visible(SECTION, get_tube_bone(slot, digit), true)
-            end
-            shown[slot] = digit
-        end
+        tubes[slot].show(digits[slot])
     end
 end
 
@@ -68,9 +58,4 @@ function update()
     if wd_attach.has_attachment(SECTION) then
         apply_digits(get_display_digits())
     end
-end
-
-function reset()
-    shown = {}
-    update()
 end

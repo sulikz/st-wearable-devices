@@ -1,0 +1,116 @@
+function get_level_name()
+    return game.translate_string(level.name())
+end
+
+local function get_title_rank(task)
+    return task.storyline and 0 or 1
+end
+
+local function is_preferred(task_id, task, held_id, held)
+    local rank, held_rank = get_title_rank(task), get_title_rank(held)
+    return rank < held_rank or (rank == held_rank and task_id < held_id)
+end
+
+local GUIDE_SPOT = "secondary_task_location"
+local GUIDE_TITLE = "st_wd_guide_title"
+
+local function add_guide_title(titles, target_id, job)
+    if target_id and not titles[target_id] and level.map_has_object_spot(target_id, GUIDE_SPOT) ~= 0 then
+        titles[target_id] = string.format(game.translate_string(GUIDE_TITLE), game.translate_string(job.target_level))
+    end
+end
+
+local function add_guide_titles(titles)
+    if not tasks_guide then
+        return
+    end
+    local request = tasks_guide.guid
+    local squad = request and request.squad_id and alife_object(request.squad_id)
+    if squad then
+        add_guide_title(titles, squad:commander_id(), request)
+    end
+    local job = tasks_guide.curr_guid
+    if job then
+        add_guide_title(titles, job.id_smart, job)
+    end
+end
+
+function get_task_titles()
+    local tasks = wd_compass.get_task_info()
+    local winners = {}
+    for task_id, task in pairs(tasks) do
+        local target_id = task.t and tonumber(task.current_target)
+        if target_id then
+            local held_id = winners[target_id]
+            if not held_id or is_preferred(task_id, task, held_id, tasks[held_id]) then
+                winners[target_id] = task_id
+            end
+        end
+    end
+    local titles = {}
+    for target_id, task_id in pairs(winners) do
+        titles[target_id] = game.translate_string(tasks[task_id].t:get_title())
+    end
+    add_guide_titles(titles)
+    return titles
+end
+
+function get_tracked_task_route()
+    local target = wd_compass.get_active_task_target()
+    if not target then
+        return nil
+    end
+    local route = wd_level_transitions.get_nav_route(target.id)
+    if not route then
+        return nil
+    end
+    if route.goal_level then
+        route.goal_level = game.translate_string(route.goal_level)
+    end
+    if route.stops then
+        for _, stop in ipairs(route.stops) do
+            stop.level = game.translate_string(stop.level)
+        end
+    end
+    return route
+end
+
+function get_companions()
+    local companions = {}
+    if not (axr_companions and axr_companions.list_actor_squad_by_id) then
+        return companions
+    end
+    for _, id in ipairs(axr_companions.list_actor_squad_by_id()) do
+        local entry = db.storage[id]
+        local npc = entry and entry.object
+        if npc then
+            companions[#companions + 1] = { name = npc:character_name(), health = npc.health }
+        end
+    end
+    return companions
+end
+
+local function get_rf_packages_mod()
+    return rawget(_G, "tb_rf_receiver_packages") or rawget(_G, "TB_RF_Receiver_Packages")
+end
+
+function get_rf_package()
+    local packages = get_rf_packages_mod()
+    if not (packages and packages.tb_package_active) then
+        return nil
+    end
+    local level_id = packages.tb_package_in_level
+    return {
+        level = game.translate_string(level_id),
+        freq = packages.tb_freq,
+        is_local = level_id == level.name(),
+    }
+end
+
+function get_nearby_artefacts()
+    local names = {}
+    for index, section in ipairs(wd_sensor_artefact.list_nearby()) do
+        names[index] = ui_item.get_sec_name(section)
+    end
+    return names
+end

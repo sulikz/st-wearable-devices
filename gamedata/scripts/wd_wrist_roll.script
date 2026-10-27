@@ -1,0 +1,445 @@
+MOUNT = "wrist"
+TWIST_ANM = [[wd\left_wrist_twist.anm]]
+RETURN_MS = 334
+WINDOWS = {
+    weapon = {
+        [wd_inspect.CLIP_DRAW] = { 0.20, 0.40 },
+        [wd_inspect.CLIP_HOLSTER] = { 0.20, 1.00 },
+        [wd_inspect.CLIP_SWITCH] = { 0.07, 0.67 },
+    },
+    detector = {
+        [wd_inspect.CLIP_DRAW] = { 0.20, 0.50 },
+        [wd_inspect.CLIP_HOLSTER] = { 0.25, 0.80 },
+        [wd_inspect.CLIP_SWITCH] = { 0.07, 0.67 },
+    },
+}
+
+local KEEP_VISIBLE_LABEL = "Keep watch always visible"
+local TWIST_BONE = "l_forearm_twist"
+local PROXY_NAME = "wd_wrist_roll_proxy"
+local IDLE_ANM = "anm_idle"
+local FALLBACK_MOTION = "hand_idle_doun"
+local SOLVE_ITERATIONS = 4
+local REFRESH_INTERVAL_MS = 200
+local APPLY_EPSILON = math.rad(0.01)
+local WIDE_SUFFIX = "_16x9"
+local FULL_WINDOW = { 0, 1 }
+local X_AXIS = wd_frame.new_vec(1, 0, 0)
+local Y_AXIS = wd_frame.new_vec(0, 1, 0)
+local Z_AXIS = wd_frame.new_vec(0, 0, 1)
+local TUBE_AXIS = Z_AXIS
+local STORE_SECTION = "wd_wrist_roll"
+local ENABLED_KEY = "keep_visible"
+local TWIST_PART = 1
+local TWIST_UNIT = math.rad(10)
+
+local function new_mount_frame()
+    local bind = d_bracer_config.MOUNT_BIND
+    local frame = wd_frame.new_xyzi_frame(bind.rot[1], bind.rot[2], bind.rot[3])
+    frame.c = wd_frame.new_vec(bind.pos[1], bind.pos[2], bind.pos[3])
+    return frame
+end
+
+local mount_frame = new_mount_frame()
+local mount_inverse = wd_frame.invert_frame(mount_frame)
+local enabled = true
+local twisted = false
+local layers_primed = false
+local twist_supported = false
+local applied_twist = 0
+local twist_cache = {}
+local active_source_id = nil
+local seen_clip = nil
+local movement = nil
+local next_tick_at = 0
+local target_roll = 0
+local applied_roll = 0
+local posed_roll = 0
+local rolled_memo = nil
+local cleared = false
+local solved = { face_pos = {}, face_rot = {}, bracer_pos = {}, bracer_rot = {}, roll = 0 }
+
+local function is_enabled()
+    return enabled
+end
+
+local function save_settings()
+    wd_store.update({
+        [STORE_SECTION] = {
+            [ENABLED_KEY] = tostring(enabled),
+        },
+    })
+end
+
+function set_enabled(on)
+    enabled = on and true or false
+    next_tick_at = 0
+    save_settings()
+end
+
+function add_gui_check(fields, rows)
+    fields[ENABLED_KEY] = wd_gui.new_check(is_enabled, set_enabled)
+    rows[#rows + 1] = { ENABLED_KEY, nil, 1, KEEP_VISIBLE_LABEL }
+end
+
+local function load_settings()
+    local section = wd_store.read()[STORE_SECTION] or {}
+    enabled = section[ENABLED_KEY] ~= "false"
+end
+
+function get_rolled_pose(pos, rot, roll)
+    local in_model = wd_frame.compose_frames(mount_frame, wd_frame.new_pose_frame(pos, rot))
+    local rolled = wd_frame.compose_frames(mount_inverse, wd_frame.rotate_frame(in_model, TUBE_AXIS, roll))
+    local yaw, pitch, bank = wd_frame.get_hpb(rolled)
+    return { rolled.c.x, rolled.c.y, rolled.c.z }, { math.deg(yaw), math.deg(pitch), math.deg(bank) }
+end
+
+local function has_same_axes(lhs, rhs)
+    return lhs[1] == rhs[1] and lhs[2] == rhs[2] and lhs[3] == rhs[3]
+end
+
+local function adjust_mount_pose(pos, rot)
+    local memo = rolled_memo
+    if not (memo and memo.roll == posed_roll and has_same_axes(memo.pos, pos) and has_same_axes(memo.rot, rot)) then
+        local rolled_pos, rolled_rot = get_rolled_pose(pos, rot, posed_roll)
+        memo = {
+            roll = posed_roll,
+            pos = { pos[1], pos[2], pos[3] },
+            rot = { rot[1], rot[2], rot[3] },
+            rolled_pos = rolled_pos,
+            rolled_rot = rolled_rot,
+        }
+        rolled_memo = memo
+    end
+    return memo.rolled_pos, memo.rolled_rot
+end
+
+local function apply_roll(roll)
+    if math.abs(roll - posed_roll) < APPLY_EPSILON then
+        return
+    end
+    posed_roll = roll
+    if math.abs(roll) < APPLY_EPSILON then
+        wd_attach.set_mount_pose(MOUNT, nil)
+        return
+    end
+    wd_attach.set_mount_pose(MOUNT, adjust_mount_pose)
+end
+
+local function get_face_frame(transforms)
+    return wd_frame.compose_frames(mount_frame, wd_frame.new_pose_frame(transforms.model_pos, transforms.model_rot))
+end
+
+local function get_bracer_frame()
+    local transforms = d_bracer_config.transforms
+    return wd_frame.new_pose_frame(transforms.model_pos, transforms.model_rot, transforms.model_scale)
+end
+
+function solve_roll(twist_camera, face_frame)
+    local bracer_camera = wd_frame.compose_frames(twist_camera, get_bracer_frame())
+    local eye = wd_frame.invert_frame(bracer_camera).c
+    local roll = 0
+    for _ = 1, SOLVE_ITERATIONS do
+        local rolled_normal = wd_frame.rotate_about_axis(face_frame.j, TUBE_AXIS, roll)
+        local rolled_center = wd_frame.rotate_about_axis(face_frame.c, TUBE_AXIS, roll)
+        roll = roll + wd_frame.get_signed_angle(rolled_normal, wd_frame.subtract_vec(eye, rolled_center), TUBE_AXIS)
+    end
+    return wd_compass.normalize_angle(roll)
+end
+
+local function get_hands_visual()
+    local visual = wd_inspect.get_hands_visual()
+    return visual and visual:gsub("%.ogf$", "")
+end
+
+local function read_ini_vector(section, key)
+    if ini_sys:line_exist(section, key) then
+        return wd_frame.read_vec(ini_sys:r_vector(section, key))
+    end
+    return wd_frame.new_vec(0, 0, 0)
+end
+
+local function get_hands_offset(hud_section, suffix)
+    local rot = read_ini_vector(hud_section, "hands_orientation" .. suffix)
+    local offset = wd_frame.new_hpb_frame(math.rad(rot.x), math.rad(rot.y), math.rad(rot.z))
+    offset.c = read_ini_vector(hud_section, "hands_position" .. suffix)
+    return offset
+end
+
+function get_base_offset(hud_section, suffix)
+    local rot = read_ini_vector(hud_section, "base_hud_offset_rot" .. suffix)
+    local offset = wd_frame.rotate_frame(wd_frame.new_hpb_frame(0, 0, 0), X_AXIS, rot.x)
+    offset = wd_frame.rotate_frame(offset, Y_AXIS, rot.y)
+    offset = wd_frame.rotate_frame(offset, Z_AXIS, rot.z)
+    offset.c = read_ini_vector(hud_section, "base_hud_offset_pos" .. suffix)
+    return offset
+end
+
+local function resolve_idle_motion(hud_section, visual)
+    local base = wd_inspect.get_motion_name(hud_section, IDLE_ANM)
+    if not base then
+        return FALLBACK_MOTION
+    end
+    if not game.motion_exists then
+        return base
+    end
+    return wd_inspect.find_hands_motion(visual, base) or FALLBACK_MOTION
+end
+
+local function predict_twist(source_key)
+    local motion = resolve_idle_motion(source_key.hud_section, source_key.visual)
+    local proxy = db.actor:add_attachment(PROXY_NAME, source_key.visual)
+    if not proxy then
+        return nil
+    end
+    proxy:play_motion(motion, false, 1)
+    local twist = wd_frame.read_frame(proxy:bone_transform(TWIST_BONE))
+    db.actor:remove_attachment(PROXY_NAME)
+    local hands_twist = wd_frame.compose_frames(get_hands_offset(source_key.hud_section, source_key.suffix), twist)
+    return wd_frame.compose_frames(get_base_offset(source_key.hud_section, source_key.suffix), hands_twist)
+end
+
+local function get_cached_twist(source_key)
+    local cached = twist_cache[source_key.key]
+    if cached == nil then
+        cached = predict_twist(source_key) or false
+        twist_cache[source_key.key] = cached
+    end
+    return cached or nil
+end
+
+local function resolve_source_key(source)
+    local visual = get_hands_visual()
+    local hud_section = visual and ini_sys:r_string_ex(source:section(), "hud")
+    if not hud_section then
+        return nil
+    end
+    local suffix = utils_xml.is_widescreen() and WIDE_SUFFIX or ""
+    return {
+        key = hud_section .. "|" .. visual .. "|" .. suffix,
+        hud_section = hud_section,
+        visual = visual,
+        suffix = suffix,
+    }
+end
+
+local function get_source()
+    local actor = db.actor
+    local detector = actor:active_detector()
+    if detector then
+        return detector
+    end
+    local item = actor:active_item()
+    if not item or IsMelee(item) or IsBolt(item) or wd_hands_empty.is_managed_section(item:section()) then
+        return nil
+    end
+    return item
+end
+
+local function copy_axes(target, source)
+    target[1], target[2], target[3] = source[1], source[2], source[3]
+end
+
+local function is_solved_for(twist, face, face_transforms, bracer_transforms)
+    return solved.twist == twist
+        and solved.face == face
+        and has_same_axes(solved.face_pos, face_transforms.model_pos)
+        and has_same_axes(solved.face_rot, face_transforms.model_rot)
+        and has_same_axes(solved.bracer_pos, bracer_transforms.model_pos)
+        and has_same_axes(solved.bracer_rot, bracer_transforms.model_rot)
+        and solved.bracer_scale == bracer_transforms.model_scale
+end
+
+local function get_solved_roll(twist, face)
+    local face_transforms = face.get_transforms()
+    local bracer_transforms = d_bracer_config.transforms
+    if not is_solved_for(twist, face, face_transforms, bracer_transforms) then
+        solved.roll = solve_roll(twist, get_face_frame(face_transforms))
+        solved.twist = twist
+        solved.face = face
+        copy_axes(solved.face_pos, face_transforms.model_pos)
+        copy_axes(solved.face_rot, face_transforms.model_rot)
+        copy_axes(solved.bracer_pos, bracer_transforms.model_pos)
+        copy_axes(solved.bracer_rot, bracer_transforms.model_rot)
+        solved.bracer_scale = bracer_transforms.model_scale
+    end
+    return solved.roll
+end
+
+local function refresh_target(face, source)
+    target_roll = 0
+    local source_key = source and resolve_source_key(source)
+    local twist = source_key and get_cached_twist(source_key)
+    if twist then
+        target_roll = get_solved_roll(twist, face)
+    end
+end
+
+local function get_window(clip)
+    return WINDOWS[clip.detector and "detector" or "weapon"][clip.kind] or FULL_WINDOW
+end
+
+local function track_clip(inspecting)
+    if not inspecting then
+        twisted = false
+    end
+    local clip = wd_inspect.get_hand_clip()
+    if clip == seen_clip then
+        return nil
+    end
+    seen_clip = clip
+    if not (inspecting and clip and clip.pose) then
+        return nil
+    end
+    twisted = clip.pose == wd_inspect.POSE_WATCH and clip.kind ~= wd_inspect.CLIP_HOLSTER
+    return clip
+end
+
+local function get_bracer_roll_offset()
+    return math.rad(d_bracer_config.DEFAULTS.model_rot[3] - d_bracer_config.transforms.model_rot[3])
+end
+
+local function get_goals()
+    if not enabled then
+        return 0, 0
+    end
+    if not twisted then
+        return target_roll, 0
+    end
+    return target_roll, wd_compass.normalize_angle(target_roll + get_bracer_roll_offset())
+end
+
+local function is_near(lhs, rhs)
+    return math.abs(wd_compass.normalize_angle(lhs - rhs)) < APPLY_EPSILON
+end
+
+local function is_heading_to(roll_goal, twist_goal)
+    local roll, twist = applied_roll, applied_twist
+    if movement then
+        roll, twist = movement.roll_goal, movement.twist_goal
+    end
+    return is_near(roll, roll_goal) and is_near(twist, twist_goal)
+end
+
+local function start_movement(roll_goal, twist_goal, started, length, window)
+    movement = {
+        roll_from = applied_roll,
+        roll_turn = wd_compass.normalize_angle(roll_goal - applied_roll),
+        twist_from = applied_twist,
+        twist_turn = twist_goal - applied_twist,
+        roll_goal = roll_goal,
+        twist_goal = twist_goal,
+        started = started,
+        length = math.max(length, 1),
+        window = window,
+    }
+end
+
+local function advance_movement(now)
+    local phase = clamp((now - movement.started) / movement.length, 0, 1)
+    local window = movement.window
+    local eased = wd_hands_offset.ease_smooth((phase - window[1]) / (window[2] - window[1]))
+    applied_roll = wd_compass.normalize_angle(movement.roll_from + movement.roll_turn * eased)
+    applied_twist = movement.twist_from + movement.twist_turn * eased
+    if phase >= 1 then
+        movement = nil
+    end
+end
+
+local function prime_layers()
+    wd_hands_freelook.prime_layer_order()
+    wd_inspect.prime_hand_offsets()
+    wd_hands_bob.prime_left_layers()
+    twist_supported = pcall(game.play_hud_anm, TWIST_ANM, TWIST_PART, 1, 0, true, true, TWIST_BONE)
+    if not twist_supported then
+        printf("[wd_wrist_roll] engine has no hud anm pivot bone, the arm stays untwisted")
+    end
+    layers_primed = true
+end
+
+local function apply_twist(twist)
+    if twist_supported then
+        game.play_hud_anm(TWIST_ANM, TWIST_PART, 1, twist / TWIST_UNIT, true, true, TWIST_BONE)
+    end
+end
+
+local function forget_layers()
+    layers_primed = false
+end
+
+local function clear_roll()
+    active_source_id = nil
+    seen_clip = nil
+    twisted = false
+    movement = nil
+    target_roll = 0
+    applied_roll = 0
+    applied_twist = 0
+    apply_roll(0)
+    apply_twist(0)
+    cleared = true
+end
+
+function get_applied_roll()
+    return applied_roll
+end
+
+function get_target_roll()
+    return target_roll
+end
+
+function get_applied_twist()
+    return applied_twist
+end
+
+function update()
+    if not layers_primed then
+        prime_layers()
+    end
+    local face = not wd_exo.is_exo() and wd_slots.get_mounted(MOUNT)
+    if not face then
+        if not cleared then
+            clear_roll()
+        end
+        return
+    end
+    cleared = false
+    local source = get_source()
+    local source_id = source and source:id() or false
+    local inspecting = wd_inspect.is_pose_up()
+    local now = time_global()
+    local snap = enabled and source_id ~= active_source_id and not inspecting
+    active_source_id = source_id
+    if enabled and not inspecting and (snap or now >= next_tick_at) then
+        next_tick_at = now + REFRESH_INTERVAL_MS
+        refresh_target(face, source)
+    end
+    local clip = track_clip(inspecting)
+    local roll_goal, twist_goal = get_goals()
+    if snap then
+        movement = nil
+        applied_roll, applied_twist = roll_goal, twist_goal
+    elseif not is_heading_to(roll_goal, twist_goal) then
+        if clip and clip.length > 0 then
+            start_movement(roll_goal, twist_goal, clip.started, clip.length, get_window(clip))
+        else
+            start_movement(roll_goal, twist_goal, now, RETURN_MS, FULL_WINDOW)
+        end
+    end
+    if movement then
+        advance_movement(now)
+    end
+    apply_roll(applied_roll)
+    apply_twist(applied_twist)
+end
+
+function register()
+    wd_core.register({
+        id = "wd_wrist_roll",
+        callbacks = {
+            actor_on_update = { update },
+            actor_on_first_update = { forget_layers },
+        },
+        on_start = load_settings,
+    })
+end

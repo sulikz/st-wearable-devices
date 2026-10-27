@@ -4,6 +4,10 @@ local GLOBAL_SLOTS = 12
 local BUTTON_ROWS = 3
 local DEVICE_SLOTS = 10
 local SECTION_SLOTS = 6
+local CHECK_TEMPLATE = "chk_global1"
+local CHECK_CAPTION_TEMPLATE = "cap_global1"
+local CHECK_CAPTION_GAP = 30
+local CHECK_CAPTION_DROP = 2
 local LAYOUTS = {
     player = {
         xml = "ui_wd_gui.xml",
@@ -144,6 +148,7 @@ function new_enum(options, current, value_at, opts)
             return value_at(index)
         end,
         no_apply = opts.no_apply,
+        is_shown = opts.is_shown,
     }
 end
 
@@ -165,6 +170,10 @@ end
 
 function new_catalog_enum(catalog, get_index, opts)
     return new_enum(get_labels_of(catalog), get_index, get_name_at(catalog), opts)
+end
+
+function new_check(get, set)
+    return { widget = "check", get = get, set = set }
 end
 
 function register_device(spec)
@@ -329,11 +338,24 @@ local function get_static_rows(tab_spec)
     return tab_spec and resolve(tab_spec.rows) or EMPTY_ROWS
 end
 
+local function get_shown_rows(tab_spec)
+    local rows = get_static_rows(tab_spec)
+    local fields = tab_spec and devices[tab_spec.device].fields
+    local shown = {}
+    for _, row in ipairs(rows) do
+        local definition = fields[row[1]]
+        if not (definition and definition.is_shown) or definition.is_shown() then
+            shown[#shown + 1] = row
+        end
+    end
+    return shown
+end
+
 local function get_picker_slot(tab_spec)
     if not (tab_spec and tab_spec.picker) then
         return 1
     end
-    return #get_static_rows(tab_spec) + 1
+    return #get_shown_rows(tab_spec) + 1
 end
 
 local function append_rows(out, rows)
@@ -346,11 +368,10 @@ end
 local function get_slot_rows(tab_id)
     local tab_spec = tabs[tab_id]
     local picker = tab_spec and tab_spec.picker
-    local rows = get_static_rows(tab_spec)
+    local slots = get_shown_rows(tab_spec)
     if not picker then
-        return rows
+        return slots
     end
-    local slots = append_rows({}, rows)
     slots[#slots + 1] = false
     return append_rows(slots, picker.rows(picker.get()))
 end
@@ -461,6 +482,14 @@ function get_field_widget(name)
     return (definition and definition.widget) or "slider"
 end
 
+local function get_check(name)
+    return get_field_desc(name).get() and true or false
+end
+
+local function set_check(name, on)
+    get_field_desc(name).set(on)
+end
+
 function get_field_range(name)
     local definition = get_field_desc(name)
     if not definition then
@@ -538,7 +567,7 @@ function restore_tab(tab_id, source_name)
         on_change()
     end
     if GUI then
-        GUI:refresh_values()
+        GUI:refresh_tab_view()
     end
 end
 
@@ -641,6 +670,7 @@ class("UIWdGui")(CUIScriptWnd)
 function UIWdGui:__init()
     super()
     self.tab = pick_tab()
+    self.slot_rows = EMPTY_ROWS
     self.refreshing = false
     self.swallow_toggle_key = false
     self:init_controls()
@@ -719,6 +749,7 @@ function UIWdGui:init_controls()
         self:AddCallback("track_r" .. row_index, ui_events.BUTTON_CLICKED, function()
             self:on_slide(row_index)
         end, self)
+        self:init_check(xml, row, row_index)
         self.rows[row_index] = row
     end
 
@@ -764,6 +795,21 @@ function UIWdGui:init_controls()
 
     self:layout_footer()
     self:refresh_pose_buttons()
+end
+
+function UIWdGui:init_check(xml, row, row_index)
+    local caption_pos = row.cap:GetWndPos()
+    local box_y = row.lt:GetWndPos().y
+    local label_x = caption_pos.x + CHECK_CAPTION_GAP
+    row.chk = xml:InitCheck(CHECK_TEMPLATE, self.back)
+    row.chk:SetWndPos(vector2():set(caption_pos.x, box_y))
+    row.chk_cap = xml:InitStatic(CHECK_CAPTION_TEMPLATE, self.back)
+    row.chk_cap:SetWndPos(vector2():set(label_x, box_y + CHECK_CAPTION_DROP))
+    row.chk_cap:SetWndSize(vector2():set(row.val:GetWndPos().x + row.val:GetWidth() - label_x, row.chk_cap:GetHeight()))
+    self:Register(row.chk, "chk_r" .. row_index)
+    self:AddCallback("chk_r" .. row_index, ui_events.BUTTON_CLICKED, function()
+        self:on_check(row_index)
+    end, self)
 end
 
 local function get_pick_label(label, picked)
@@ -927,12 +973,13 @@ function UIWdGui:on_pick(pick_index)
 end
 
 function UIWdGui:get_row_field(row_index)
-    return get_slot_rows(self.tab)[row_index] or nil
+    return self.slot_rows[row_index] or nil
 end
 
 function UIWdGui:refresh_rows()
     self.refreshing = true
     local fields = get_slot_rows(self.tab)
+    self.slot_rows = fields
     for row_index = 1, ROW_COUNT do
         local field = fields[row_index]
         local row = self.rows[row_index]
@@ -943,13 +990,22 @@ function UIWdGui:refresh_rows()
             row.gt:Show(false)
             row.track:Show(false)
             row.cyc:Show(false)
+            row.chk:Show(false)
+            row.chk_cap:Show(false)
         else
             local name, comp = field[1], field[2]
             local widget = get_field_widget(name)
             local is_slider = widget == "slider"
             local is_cycle = widget == "cycle"
-            row.cap:Show(true)
+            local is_check = widget == "check"
+            row.cap:Show(not is_check)
             row.cap:TextControl():SetText(field[4])
+            row.chk:Show(is_check)
+            row.chk_cap:Show(is_check)
+            if is_check then
+                row.chk:SetCheck(get_check(name))
+                row.chk_cap:TextControl():SetText(field[4])
+            end
             row.lt:Show(is_slider or is_cycle)
             row.gt:Show(is_slider or is_cycle)
             row.track:Show(is_slider)
@@ -980,14 +1036,8 @@ function UIWdGui:on_nudge(row_index, direction)
     if not field then
         return
     end
-    local value = nudge_field(field[1], field[2], field[3] * direction * get_step_scale())
-    local row = self.rows[row_index]
-    if row.track and type(value) == "number" then
-        row.track:SetFValue(value)
-    end
-    local text = get_field_text(field[1], field[2])
-    row.val:TextControl():SetText(text)
-    row.cyc:TextControl():SetText(text)
+    nudge_field(field[1], field[2], field[3] * direction * get_step_scale())
+    self:refresh_tab_view()
 end
 
 function UIWdGui:on_slide(row_index)
@@ -1002,6 +1052,19 @@ function UIWdGui:on_slide(row_index)
     self.rows[row_index].val:TextControl():SetText(get_field_text(field[1], field[2]))
 end
 
+function UIWdGui:on_check(row_index)
+    if self.refreshing then
+        return
+    end
+    local field = self:get_row_field(row_index)
+    if not field then
+        return
+    end
+    local checkbox = self.rows[row_index].chk
+    set_check(field[1], checkbox:GetCheck())
+    self:refresh_tab_view()
+end
+
 function UIWdGui:is_save_blocked()
     local tab_spec = tabs[self.tab]
     return (tab_spec and tab_spec.dev and not wd_config.is_using_saved_positions()) and true or false
@@ -1014,7 +1077,7 @@ function UIWdGui:layout_footer()
     self.btn_save:Show(has_tab and not globals and not self:is_save_blocked())
     self.btn_reset:Show(has_tab and not globals)
     self.btn_default:Show(has_tab and not globals)
-    local rows_bottom = layout.rows_y + layout.rows_pitch * (#get_slot_rows(self.tab) - 1) + 26
+    local rows_bottom = layout.rows_y + layout.rows_pitch * (#self.slot_rows - 1) + 26
     local buttons_bottom = layout.buttons_y + layout.buttons_pitch * (BUTTON_ROWS - 1) + layout.buttons_height
     local content_bottom = globals and layout.globals_bottom or math.max(rows_bottom, buttons_bottom)
     self.back:SetWndSize(vector2():set(layout.width, content_bottom + 14))
@@ -1191,7 +1254,7 @@ function register()
     wd_core.register({
         id = "wd_gui",
         callbacks = {
-            on_key_press = { { on_key_press, unless_captured = true } },
+            on_key_press = { { on_key_press, unless = wd_blocking.is_input_captured } },
         },
         on_start = load_settings,
     })

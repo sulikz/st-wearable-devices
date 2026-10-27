@@ -11,7 +11,7 @@ local draw_hold_until = 0
 local foreign_clear_since = 0
 local empty_since = 0
 
-local function is_managed_section(section)
+function is_managed_section(section)
     return section == ITEM_SECTION
 end
 
@@ -68,7 +68,7 @@ end
 
 function is_drawn()
     local it = db.actor and db.actor:active_item()
-    return it ~= nil and it:section() == ITEM_SECTION
+    return it ~= nil and is_managed_section(it:section())
 end
 
 function is_available()
@@ -83,22 +83,22 @@ function hold_draw(ms)
     draw_hold_until = math.max(draw_hold_until, wd_core.get_time_ms() + ms)
 end
 
-local function is_melee_anm_active()
+local function is_melee_anm_active(now)
     if db.actor and db.actor:item_in_slot(MELEE_ANM_SLOT) then
         return true
     end
-    return wd_core.get_time_ms() < melee_hold_until
+    return now < melee_hold_until
 end
 
-local function is_foreign_hud_anim_active()
+local function is_foreign_hud_anim_active(now)
     if lam2 and lam2.is_running and lam2.is_running() then
         return true
     end
-    return is_melee_anm_active()
+    return is_melee_anm_active(now)
 end
 
 local function observe_foreign_anim(now)
-    if is_foreign_hud_anim_active() then
+    if is_foreign_hud_anim_active(now) then
         foreign_clear_since = nil
         return true
     end
