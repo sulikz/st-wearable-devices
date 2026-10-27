@@ -1,0 +1,7 @@
+<w>
+<face_arcs_mono_nav_arrow>
+	<arrow x="-0.00168300" y="-0.00168300" width="0.00336600" height="0.00336600" stretch="1">
+		<texture shader="wd\ui">face_arcs_mono_nav_arrow</texture>
+	</arrow>
+</face_arcs_mono_nav_arrow>
+</w>

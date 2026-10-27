@@ -67,12 +67,16 @@ local function get_level_offset(gvid)
     return offset.x, offset.z
 end
 
+function get_global_xyz(local_pos, gvid)
+    local offset_x, offset_z = get_level_offset(gvid)
+    return local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z
+end
+
 function get_global_pos(local_pos, gvid)
     if not local_pos then
         return nil
     end
-    local offset_x, offset_z = get_level_offset(gvid)
-    return vector():set(local_pos.x + offset_x, local_pos.y, local_pos.z + offset_z)
+    return vector():set(get_global_xyz(local_pos, gvid))
 end
 
 function get_actor_global_pos()
@@ -82,17 +86,28 @@ function get_actor_global_pos()
     return get_global_pos(db.actor:position(), db.actor:game_vertex_id())
 end
 
-function list_task_targets()
+function get_actor_global_xyz()
+    local actor = db.actor
+    if not actor then
+        return nil
+    end
+    return get_global_xyz(actor:position(), actor:game_vertex_id())
+end
+
+local NO_TASKS = {}
+local translated_title_id, translated_title = nil, nil
+
+function get_task_info()
     if not (db.actor and task_manager and task_manager.get_task_manager) then
-        return {}
+        return NO_TASKS
     end
     local manager = task_manager.get_task_manager()
-    local task_info = manager and manager.task_info
-    if not task_info then
-        return {}
-    end
+    return manager and manager.task_info or NO_TASKS
+end
+
+function list_task_targets()
     local targets = {}
-    for _, task in pairs(task_info) do
+    for _, task in pairs(get_task_info()) do
         if task.t then
             local target_id = tonumber(task.current_target)
             if target_id then
@@ -134,18 +149,34 @@ function get_active_task_target()
     return nil
 end
 
+function get_active_task_title()
+    for _, task in pairs(get_task_info()) do
+        local game_task = task.t
+        if game_task and db.actor:is_active_task(game_task) then
+            local title = game_task:get_title()
+            if title and title ~= "" then
+                if title ~= translated_title_id then
+                    translated_title_id, translated_title = title, game.translate_string(title)
+                end
+                return translated_title
+            end
+        end
+    end
+    return nil
+end
+
 function get_default_target_id()
     local target = get_active_task_target()
     return target and target.id
 end
 
-function get_target_pos_of(target_id)
+local function get_target_local_pos(target_id)
     if not target_id then
         return nil
     end
     local local_pos, gvid
-    local online = (db.storage and db.storage[target_id] and db.storage[target_id].object)
-        or level.object_by_id(target_id)
+    local stored = db.storage and db.storage[target_id]
+    local online = (stored and stored.object) or level.object_by_id(target_id)
     if online then
         local_pos = online:position()
         gvid = online:game_vertex_id()
@@ -167,7 +198,24 @@ function get_target_pos_of(target_id)
     if not (local_pos and gvid) then
         return nil
     end
+    return local_pos, gvid
+end
+
+function get_target_pos_of(target_id)
+    local local_pos, gvid = get_target_local_pos(target_id)
+    if not local_pos then
+        return nil
+    end
     return get_global_pos(local_pos, gvid), gvid
+end
+
+function get_target_global_xyz(target_id)
+    local local_pos, gvid = get_target_local_pos(target_id)
+    if not local_pos then
+        return nil
+    end
+    local pos_x, pos_y, pos_z = get_global_xyz(local_pos, gvid)
+    return pos_x, pos_y, pos_z, gvid
 end
 
 function new(cfg)
@@ -175,10 +223,6 @@ function new(cfg)
     local actor_pos = cfg.actor_pos or get_actor_global_pos
     local target_id = cfg.target_id or get_default_target_id
     local target_pos = cfg.target_pos or get_target_pos_of
-
-    function compass.get_actor_pos()
-        return actor_pos()
-    end
 
     function compass.get_target()
         local id = target_id()

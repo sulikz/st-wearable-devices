@@ -1,25 +1,349 @@
 local SHADER = "wd\\ui"
+local DDS_MAGIC = 0x20534444
+local DDS_HEIGHT_OFFSET = 12
+local DDS_MIPS_OFFSET = 28
+local DDS_FOURCC_OFFSET = 84
+local DDS_BIT_COUNT_OFFSET = 88
+local DDS_ALPHA_MASK_OFFSET = 104
+local DDS_DATA_OFFSET = 128
+local DDS_DX10_DATA_OFFSET = 148
+local FOURCC_DXT1 = 0x31545844
+local FOURCC_DXT5 = 0x35545844
+local FOURCC_DX10 = 0x30315844
+local ALPHA_MASK_HIGH = 0xFF000000
+local DXGI_KINDS = {
+    [28] = "rgba",
+    [29] = "rgba",
+    [87] = "rgba",
+    [91] = "rgba",
+    [71] = "bc1",
+    [72] = "bc1",
+    [77] = "bc3",
+    [78] = "bc3",
+}
+local BYTE = 256
+local ALPHA_WORD = 0x1000000
+
+PAINTED_ALPHA_MIN = 16
+
+local headers = {}
+local layouts = {}
+local scratch_rect = Frect()
+local scratch_pos = vector2()
+local scratch_size = vector2()
 
 GLOW_RANGE = 0.3
 GLOW_COLOR = { r = 0.16, g = 0.16, b = 0.16, a = 0.8 }
 
-function get_alpha(percent)
+local function get_lod_skip()
+    local console = get_console()
+    local lod = console and console:get_integer("texture_lod") or 0
+    if lod < 2 then
+        return 0
+    end
+    if lod < 4 then
+        return 1
+    end
+    return 2
+end
+
+local function read_header(texture_name)
+    local cached = headers[texture_name]
+    if cached ~= nil then
+        return cached
+    end
+    local header = false
+    local reader = getFS():r_open("$game_textures$", texture_name .. ".dds")
+    if reader and reader:r_u32() == DDS_MAGIC then
+        reader:r_seek(DDS_HEIGHT_OFFSET)
+        local height = reader:r_u32()
+        local width = reader:r_u32()
+        reader:r_seek(DDS_MIPS_OFFSET)
+        local mips = reader:r_u32()
+        if width > 0 and height > 0 then
+            header = { width = width, height = height, mips = mips > 0 and mips or 1, reader = reader }
+        end
+    end
+    headers[texture_name] = header
+    return header
+end
+
+local function get_reduced_size(header)
+    local width, height, mips = header.width, header.height, header.mips
+    local skip = get_lod_skip()
+    while mips > 1 and skip > 0 do
+        width = math.floor(width / 2)
+        height = math.floor(height / 2)
+        mips = mips - 1
+        skip = skip - 1
+    end
+    return math.max(width, 1), math.max(height, 1)
+end
+
+function get_loaded_size(texture_name)
+    local header = read_header(texture_name)
+    if not header then
+        return nil
+    end
+    return get_reduced_size(header)
+end
+
+function get_lod_scale(texture_name)
+    local header = read_header(texture_name)
+    if not header then
+        return 1
+    end
+    local width = get_reduced_size(header)
+    return width / header.width
+end
+
+local function read_layout(texture_name)
+    local cached = layouts[texture_name]
+    if cached ~= nil then
+        return cached
+    end
+    local layout = false
+    local header = read_header(texture_name)
+    local reader = header and header.reader
+    if reader then
+        reader:r_seek(DDS_FOURCC_OFFSET)
+        local fourcc = reader:r_u32()
+        local kind, data = nil, DDS_DATA_OFFSET
+        if fourcc == FOURCC_DXT1 then
+            kind = "bc1"
+        elseif fourcc == FOURCC_DXT5 then
+            kind = "bc3"
+        elseif fourcc == FOURCC_DX10 then
+            reader:r_seek(DDS_DATA_OFFSET)
+            kind, data = DXGI_KINDS[reader:r_u32()], DDS_DX10_DATA_OFFSET
+        elseif fourcc == 0 then
+            reader:r_seek(DDS_BIT_COUNT_OFFSET)
+            local bits = reader:r_u32()
+            reader:r_seek(DDS_ALPHA_MASK_OFFSET)
+            if bits == 32 and reader:r_u32() == ALPHA_MASK_HIGH then
+                kind = "rgba"
+            end
+        end
+        if kind then
+            layout = {
+                reader = reader,
+                kind = kind,
+                data = data,
+                width = header.width,
+                blocks = math.ceil(header.width / 4),
+            }
+        end
+    end
+    layouts[texture_name] = layout
+    return layout
+end
+
+local function is_rgba_row_painted(layout, row, x1, x2)
+    local reader = layout.reader
+    reader:r_seek(layout.data + (row * layout.width + x1) * 4)
+    local painted = PAINTED_ALPHA_MIN * ALPHA_WORD
+    for _ = x1, x2 - 1 do
+        if reader:r_u32() >= painted then
+            return true
+        end
+    end
+    return false
+end
+
+local function get_bc3_alpha(low, high, index)
+    if index == 0 then
+        return low
+    elseif index == 1 then
+        return high
+    elseif low > high then
+        return ((8 - index) * low + (index - 1) * high) / 7
+    elseif index < 6 then
+        return ((6 - index) * low + (index - 1) * high) / 5
+    end
+    return index == 6 and 0 or 255
+end
+
+local function is_block_row_painted(layout, row, x1, x2)
+    local reader = layout.reader
+    local block_row, texel_row = math.floor(row / 4), row % 4
+    local size = layout.kind == "bc3" and 16 or 8
+    for block = math.floor(x1 / 4), math.floor((x2 - 1) / 4) do
+        reader:r_seek(layout.data + (block_row * layout.blocks + block) * size)
+        local first = math.max(x1 - block * 4, 0)
+        local last = math.min(x2 - 1 - block * 4, 3)
+        if layout.kind == "bc3" then
+            local low, high = reader:r_u8(), reader:r_u8()
+            local bits, scale = 0, 1
+            for _ = 1, 6 do
+                bits = bits + reader:r_u8() * scale
+                scale = scale * BYTE
+            end
+            for column = first, last do
+                local index = math.floor(bits / 2 ^ (3 * (texel_row * 4 + column))) % 8
+                if get_bc3_alpha(low, high, index) >= PAINTED_ALPHA_MIN then
+                    return true
+                end
+            end
+        else
+            local low, high, bits = reader:r_u16(), reader:r_u16(), reader:r_u32()
+            for column = first, last do
+                if low > high or math.floor(bits / 2 ^ (2 * (texel_row * 4 + column))) % 4 ~= 3 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function is_row_painted(layout, row, x1, x2)
+    if layout.kind == "rgba" then
+        return is_rgba_row_painted(layout, row, x1, x2)
+    end
+    return is_block_row_painted(layout, row, x1, x2)
+end
+
+function get_painted_rows(texture_name, x1, y1, x2, y2)
+    if y2 <= y1 or x2 <= x1 then
+        return false
+    end
+    local layout = read_layout(texture_name)
+    if not layout then
+        return nil
+    end
+    local scale = get_lod_scale(texture_name)
+    local left, right = math.floor(x1 / scale), math.ceil(x2 / scale)
+    local first, last = math.floor(y1 / scale), math.ceil(y2 / scale) - 1
+    local top = first
+    while top <= last and not is_row_painted(layout, top, left, right) do
+        top = top + 1
+    end
+    if top > last then
+        return false
+    end
+    local bottom = last
+    while not is_row_painted(layout, bottom, left, right) do
+        bottom = bottom - 1
+    end
+    return top * scale - y1, (bottom + 1) * scale - y1
+end
+
+function rescale_texture_rect(wnd, texture_name)
+    local header = read_header(texture_name)
+    if not header then
+        return
+    end
+    local width, height = get_reduced_size(header)
+    if width == header.width and height == header.height then
+        return
+    end
+    local scale_x, scale_y = width / header.width, height / header.height
+    local rect = wnd:GetTextureRect()
+    wnd:SetTextureRect(scratch_rect:set(rect.x1 * scale_x, rect.y1 * scale_y, rect.x2 * scale_x, rect.y2 * scale_y))
+end
+
+function get_texture_aspect(wnd)
+    local rect = wnd:GetTextureRect()
+    local rect_h = rect.y2 - rect.y1
+    if rect_h > 0 then
+        return (rect.x2 - rect.x1) / rect_h
+    end
+end
+
+FILL_ID = "wd_fill"
+
+function set_shown(slot, flag)
+    if slot.shown ~= flag then
+        slot.shown = flag
+        slot.widget:Show(flag)
+    end
+end
+
+function set_tint(slot, tint)
+    if slot.tint ~= tint then
+        slot.tint = tint
+        slot.widget:SetTextureColor(tint)
+    end
+end
+
+function place_widget(widget, left, top, width, height)
+    widget:SetWndPos(scratch_pos:set(left, top))
+    widget:SetWndSize(scratch_size:set(width, height))
+end
+
+function set_texture_rect(slot, x1, y1, x2, y2)
+    if slot.rect_x1 == x1 and slot.rect_y1 == y1 and slot.rect_x2 == x2 and slot.rect_y2 == y2 then
+        return
+    end
+    slot.rect_x1, slot.rect_y1, slot.rect_x2, slot.rect_y2 = x1, y1, x2, y2
+    slot.widget:SetTextureRect(scratch_rect:set(x1, y1, x2, y2))
+end
+
+function reset_texture_rect(slot)
+    slot.rect_x1 = nil
+end
+
+function place_slot(slot, left, top, width, height)
+    if slot.left ~= left or slot.top ~= top then
+        slot.left = left
+        slot.top = top
+        slot.widget:SetWndPos(scratch_pos:set(left, top))
+    end
+    if slot.width ~= width or slot.height ~= height then
+        slot.width = width
+        slot.height = height
+        slot.widget:SetWndSize(scratch_size:set(width, height))
+    end
+end
+
+function get_brightness_level(percent)
     return clamp(math.floor((percent or 0) * 255 / 100 + 0.5), 0, 255)
+end
+
+function get_dimmed_color(level, red, green, blue)
+    local scale = level / 255
+    return GetARGB(255, math.floor(red * scale + 0.5), math.floor(green * scale + 0.5), math.floor(blue * scale + 0.5))
+end
+
+function set_windows_color(windows, color)
+    for _, window in ipairs(windows) do
+        window:SetTextureColor(color)
+    end
+end
+
+function new_color_group(windows)
+    local group = { windows = windows }
+    local current = nil
+
+    function group.set(color)
+        if color ~= current then
+            current = color
+            set_windows_color(windows, color)
+        end
+    end
+
+    return group
+end
+
+function tint_windows(windows, level)
+    set_windows_color(windows, get_dimmed_color(level, 255, 255, 255))
 end
 
 function new_binder(shader)
     local binder = {}
 
-    function binder.set(wnd, tex)
+    function binder.set(wnd, tex, texture_file)
         wnd:InitTextureEx(tex, shader)
+        if texture_file then
+            rescale_texture_rect(wnd, texture_file)
+        end
     end
 
-    function binder.bind(wnd, tex, prev)
+    function binder.bind(wnd, tex, prev, texture_file)
         if prev ~= tex then
-            wnd:InitTextureEx(tex, shader)
-            return tex
+            binder.set(wnd, tex, texture_file)
         end
-        return prev
+        return tex
     end
 
     return binder
@@ -55,31 +379,26 @@ function new_hud(cfg)
         return instance
     end
 
-    function hud.clear()
-        instance = nil
-    end
-
-    function hud.apply_alpha()
-        if instance and cfg.get_brightness then
-            instance:set_alpha(get_alpha(cfg.get_brightness()))
+    function hud.apply_brightness()
+        if instance then
+            tint_windows(instance.tinted, get_brightness_level(cfg.get_brightness()))
         end
     end
 
     function hud.show()
         if instance == nil then
             instance = cfg.create()
-            hud.apply_alpha()
-            if cfg.on_create then
-                cfg.on_create(instance)
-            end
+            hud.apply_brightness()
         end
         return instance
     end
 
     function hud.close()
-        if instance and instance:IsShown() then
-            get_hud():RemoveDialogToRender(instance)
-            Unregister_UI(cfg.name)
+        if instance then
+            if instance:IsShown() then
+                get_hud():RemoveDialogToRender(instance)
+                Unregister_UI(cfg.name)
+            end
             instance = nil
         end
     end
@@ -88,7 +407,6 @@ function new_hud(cfg)
 end
 
 function new_static_hud(cfg)
-    local hud
     local UICls = class(cfg.class_name)(CUIScriptWnd) or _G[cfg.class_name]
 
     function UICls:__init()
@@ -99,15 +417,8 @@ function new_static_hud(cfg)
         xml:ParseFile(cfg.xml_file)
         xml:InitWindow(cfg.window, 0, self)
         self.static = xml:InitStatic(cfg.node, self)
-        default_binder.set(self.static, cfg.texture)
-    end
-
-    function UICls:set_alpha(alpha)
-        self.static:SetTextureColor(GetARGB(alpha, 255, 255, 255))
-    end
-
-    function UICls:__finalize()
-        hud.clear()
+        self.tinted = { self.static }
+        default_binder.set(self.static, cfg.texture, cfg.texture_file)
     end
 
     function UICls:set_shown(shown)
@@ -117,12 +428,11 @@ function new_static_hud(cfg)
         end
     end
 
-    hud = new_hud({
+    return new_hud({
         name = cfg.class_name,
         create = function()
             return UICls()
         end,
         get_brightness = cfg.get_brightness,
     })
-    return hud
 end

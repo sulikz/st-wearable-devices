@@ -6,5 +6,6 @@ function normal(shader, t_base, t_second, t_detail)
 		: sorting	(1, true)
 
 	shader:dx10texture	("s_base",	t_base)
+	shader:dx10texture	("s_wdnrm",	t_base .. "_bump")
 	shader:dx10sampler	("smp_base")
 end

@@ -13,10 +13,16 @@ function on_game_start()
     wd_toxic.register()
     wd_hands_highport.register()
     wd_hands_bob.register()
+    wd_wrist_roll.register()
     wd_map_spots.register()
     wd_level_transitions.register()
     wd_debug_menu.register()
     wd_glow_tune.register()
+    wd_stash.register()
+    wd_comms.register()
+    wd_qaw_preview.register()
+    wd_screen_fx.register()
+    wd_arc_field.register()
     local devices = {
         d_bracer,
         d_glowstick,

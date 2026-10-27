@@ -47,8 +47,8 @@ local function get_active_item_fov(fallback)
     return base_fov + addition
 end
 
-local function refresh_settings()
-    if not allow_settings_refresh() then
+local function refresh_settings(now)
+    if not allow_settings_refresh(now) then
         return
     end
     local console = get_console()
@@ -158,7 +158,7 @@ end
 
 local layers_primed = false
 
-local function prime_layer_order()
+function prime_layer_order()
     if layers_primed then
         return
     end
@@ -178,14 +178,14 @@ function apply()
     end
     prime_layer_order()
     local body_dir = actor:direction()
-    local cam_dir = device().cam_dir
+    local cam_dir = wd_core.get_render_device().cam_dir
     if not (body_dir and cam_dir) then
         return
     end
-    refresh_settings()
+    local now_ms = time_global()
+    refresh_settings(now_ms)
     local cam_heading = wd_compass.get_heading(cam_dir)
     local yaw_split = wd_compass.normalize_angle(wd_compass.get_heading(body_dir) - cam_heading)
-    local now_ms = time_global()
     local engaged = update_engagement(yaw_split, cam_heading, now_ms)
     step_ramp(engaged, now_ms)
     if not wd_inspect.is_pose_held() then

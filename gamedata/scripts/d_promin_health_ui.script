@@ -1,880 +1,669 @@
-local scratch_size = vector2()
-local scratch_pos = vector2()
+local px = d_promin_config.get_px()
+local baked = d_promin_bio_baked
+local boost = wd_vitals.BOOST
 
-local binder = wd_screen.new_binder(d_promin_config.SCREEN_SHADER)
+local body_binder = wd_screen.new_binder(d_promin_config.BODY_SHADER)
 
-local LIMBS = { "head", "torso", "leftarm", "rightarm", "leftleg", "rightleg" }
+local set_shown = wd_screen.set_shown
+local place_widget = wd_screen.place_widget
 
-local DATA_KEY = {
-    leftarm = "rightarm",
-    rightarm = "leftarm",
-    leftleg = "rightleg",
-    rightleg = "leftleg",
-}
+BACKGROUND = "wd_promin_page_bio"
+TITLE_TEXTURE = "wd_promin_title_bio"
+SLOW_REFRESH_MS = 250
 
-local NEEDS = { "food", "water", "sleep" }
+local NONE = "\151"
+local NO_TIMER = "--:--"
+local TIMER_TEXT = "%02d:%02d"
+local PERCENT_TEXT = "%d %%"
+local MSV_TEXT = "%d mSv"
+local NO_DOSE = "-- mSv"
+local WEIGHT_TEXT = "%d/%d KG"
+local WEIGHT_SHORT_TEXT = "%d/%d"
+local GEIGER_TEXT = "%d"
+local MIN_GEIGER = -999
+local MAX_GEIGER = 9999
+local GEIGER_FRAME = "wd_bio_geiger"
+local GEIGER_UNIT = "wd_bio_geiger_unit"
+local MAX_TIMER_SECONDS = 99 * 60 + 59
+local REAPPLY_SECONDS = 0.5
 
-local SYS_COLOR = { health = "hp_color", stam = "stam_color", psy = "psy_color", rad = "rad_color" }
-
-local TM_NODES = { "tm_h1", "tm_h2", "tm_m1", "tm_m2" }
-
-local HELMET_SLOT = 12
-
-function get_ui_alpha()
-    return wd_screen.get_alpha(d_promin_config.transforms.brightness)
-end
-
-local function get_hovered_wheel_section()
-    local qaw = haru_quick_action_wheel_mcm
-    local gui = qaw and qaw.GUI
-    if not gui then
-        return nil
-    end
-    if gui.IsShown and not gui:IsShown() then
-        return nil
-    end
-    local idx = gui.hovered_idx
-    if not idx or idx <= 0 then
-        return nil
-    end
-    local opt = gui.options and gui.options[idx]
-    return opt and opt.section or nil
-end
-
-local function compute_preview(sec, health, timedhp, maxhp)
-    local mk = zzz_player_injuries.medkits and zzz_player_injuries.medkits[sec]
-    local hh = zzz_player_injuries.healhelp and zzz_player_injuries.healhelp[sec]
-    if not mk and not hh then
-        return nil, nil
-    end
-
-    local pv_h, pv_b = {}, {}
-    for _, limb in ipairs(LIMBS) do
-        pv_h[limb] = health[limb]
-        pv_b[limb] = timedhp[limb]
-    end
-
-    if mk then
-        for _, limb in ipairs(LIMBS) do
-            local bonus = mk[limb]
-            if bonus then
-                if mk.harming then
-                    pv_h[limb] = pv_h[limb] + bonus
-                    pv_b[limb] = pv_b[limb] + bonus
-                elseif pv_h[limb] + bonus > maxhp[limb] then
-                    local amt = maxhp[limb] - pv_h[limb]
-                    pv_h[limb] = pv_h[limb] + amt
-                    pv_b[limb] = pv_b[limb] + amt
-                else
-                    pv_h[limb] = pv_h[limb] + bonus
-                    pv_b[limb] = pv_b[limb] + bonus
-                end
-            end
-        end
-    end
-    if hh then
-        for _, limb in ipairs(LIMBS) do
-            if hh[limb] then
-                pv_b[limb] = pv_b[limb] - hh[limb]
-                if pv_b[limb] < 0 then
-                    pv_b[limb] = 0
-                end
-            end
-        end
-    end
-    for _, limb in ipairs(LIMBS) do
-        if pv_h[limb] > maxhp[limb] then
-            pv_h[limb] = maxhp[limb]
-        end
-        if pv_h[limb] <= 0 then
-            pv_h[limb] = 0
-        end
-        if pv_h[limb] < pv_b[limb] then
-            pv_b[limb] = health[limb]
-        end
-    end
-    return pv_h, pv_b
-end
-
-local SCREEN = { x = 0.001, y = -0.008, w = 0.084, h = 0.0458 }
-
-local function new_px_space(img_w, img_h)
-    local space = {}
-    function space.x(px)
-        return SCREEN.x + px * SCREEN.w / img_w
-    end
-    function space.y(py)
-        return SCREEN.y + py * SCREEN.h / img_h
-    end
-    function space.w(pw)
-        return pw * SCREEN.w / img_w
-    end
-    function space.h(ph)
-        return ph * SCREEN.h / img_h
-    end
-    function space.box(px, py, pw, ph)
-        return { space.x(px), space.y(py), space.w(pw), space.h(ph) }
-    end
-    return space
-end
-
-local px_v2 = new_px_space(1100, 600)
-
-function get_px()
-    return px_v2
-end
-
-local DIG_TEX = {}
-for digit = 0, 9 do
-    DIG_TEX[digit] = "dig2_" .. digit
-end
-local GHOST_DIG_TEX = "dig2_g0"
-
-local LAYOUT_V2 = {
-    idle_digit_tex = DIG_TEX[0],
-    bg = px_v2.box(0, 0, 1100, 600),
-    sil = px_v2.box(236, 200, 106, 251),
-    emblem = px_v2.box(74, 16, 40, 42),
-    bat_icon = px_v2.box(137, 29, 32, 17),
-    hlm_icon = px_v2.box(187, 224, 38, 35),
-    limb_bar = { full_w = px_v2.w(65), h = px_v2.h(13) },
-    limb_xy = {
-        head = { px_v2.x(111), px_v2.y(236) },
-        torso = { px_v2.x(399), px_v2.y(236) },
-        leftarm = { px_v2.x(111), px_v2.y(331) },
-        rightarm = { px_v2.x(399), px_v2.y(331) },
-        leftleg = { px_v2.x(111), px_v2.y(426) },
-        rightleg = { px_v2.x(399), px_v2.y(426) },
+EFFECTS = {
+    { name = "HEALING", icon = "heart", boosters = { boost.hp_restore } },
+    { name = "BLEED HEALING", icon = "bleed", boosters = { boost.bleeding_restore } },
+    { name = "STAMINA REGEN", icon = "stamina", boosters = { boost.power_restore } },
+    { name = "RAD HEALING", icon = "rad", boosters = { boost.radiation_restore } },
+    { name = "CARRY WEIGHT", icon = "weight", boosters = { boost.max_weight } },
+    {
+        name = "RESISTANCE",
+        icon = "armor",
+        boosters = {
+            boost.wound_immunity,
+            boost.fire_wound_immunity,
+            boost.strike_immunity,
+            boost.expl_immunity,
+            boost.burn_immunity,
+            boost.shock_immunity,
+        },
     },
-    sys_bar = { full_w = px_v2.w(337), h = px_v2.h(12) },
-    sys_xy = {
-        health = { px_v2.x(144), px_v2.y(94) },
-        psy = { px_v2.x(144), px_v2.y(144) },
-        stam = { px_v2.x(144), px_v2.y(494) },
-        rad = { px_v2.x(144), px_v2.y(544) },
+    {
+        name = "RAD PROTECTION",
+        icon = "prot_rad",
+        boosters = { boost.radiation_protection, boost.radiation_immunity },
     },
-    tm = {
-        x = { px_v2.x(192), px_v2.x(204), px_v2.x(223), px_v2.x(235) },
-        y = px_v2.y(30),
-        w = px_v2.w(10),
-        h = px_v2.h(13),
+    {
+        name = "PSY PROTECTION",
+        icon = "prot_psy",
+        boosters = { boost.telepatic_protection, boost.telepatic_immunity },
     },
-    bo = {
-        cx = { px_v2.x(619), px_v2.x(731), px_v2.x(843), px_v2.x(955) },
-        icon_wh = px_v2.w(54),
-        icon_y = { px_v2.y(110), px_v2.y(249) },
-        dig_y = { px_v2.y(187), px_v2.y(326) },
-        dig_dx = { px_v2.w(-32), px_v2.w(-17), px_v2.w(5), px_v2.w(20) },
-        dig_w = px_v2.w(13),
-        dig_h = px_v2.h(16),
-    },
-    nd = {
-        sx = { food = px_v2.x(638), water = px_v2.x(788), sleep = px_v2.x(938) },
-        x_dx = { px_v2.w(-49), px_v2.w(-34), px_v2.w(-19) },
-        y_dx = { px_v2.w(6), px_v2.w(21), px_v2.w(36) },
-        y = px_v2.y(523),
-        dig_w = px_v2.w(13),
-        dig_h = px_v2.h(16),
+    {
+        name = "CHEM PROTECTION",
+        icon = "prot_chem",
+        boosters = { boost.chemical_burn_protection, boost.chemical_burn_immunity },
     },
 }
 
-local BAT_EMPTY_RATIO = 0.05
-
-local BAT_LEVELS = {
-    { max = 0.25, tex = "wd_tab_bat_25" },
-    { max = 0.50, tex = "wd_tab_bat_50" },
-    { max = 0.75, tex = "wd_tab_bat_75" },
-    { max = math.huge, tex = "wd_tab_bat_full" },
+STATUS = {
+    health = { icon = "heart", icon_role = "text", format = PERCENT_TEXT },
+    psy = { icon = "psy", icon_role = "text", format = PERCENT_TEXT },
+    radiation = { icon = "rad", icon_role = "text", format = MSV_TEXT },
+    stamina = { icon = "stamina", icon_role = "text", format = PERCENT_TEXT },
+    bleeding = { icon = "bleed", name = "BLEEDING" },
+    food = { icon = "food", format = PERCENT_TEXT },
+    water = { icon = "water", format = PERCENT_TEXT },
+    sleep = { icon = "sleep", format = PERCENT_TEXT },
+    weight = { icon = "weight", icon_role = "text", name = "WEIGHT" },
 }
 
-function get_battery_tex(power_ratio)
-    if power_ratio < BAT_EMPTY_RATIO then
-        return nil
+MOBILITY = {
+    ok = { text = "MOBILITY \183 OK", role = "dim" },
+    cant_walk_stamina = { text = "CAN'T WALK \183 STAMINA", role = "crit" },
+    cant_walk_weight = { text = "CAN'T WALK \183 WEIGHT", role = "crit" },
+    cant_walk_legs = { text = "CAN'T WALK \183 LEGS", role = "crit" },
+    cant_run_leg = { text = "CAN'T RUN \183 LEG", role = "warn" },
+    limp = { text = "LIMP", role = "warn" },
+    cant_sprint = { text = "CAN'T SPRINT", role = "warn" },
+}
+
+BLEEDING_TIERS = { { text = "I", role = "text" }, { text = "II", role = "warn" }, { text = "III", role = "crit" } }
+
+GEIGER_STATES = {
+    clear = { reading = { text = "CLEAR", role = "text" }, shield = { text = "PROTECTION", role = "text" } },
+    held = { reading = { text = "ELEVATED", role = "warn" }, shield = { text = "PROTECTED", role = "text" } },
+    leaking = { reading = { text = "DANGER", role = "crit" }, shield = { text = "EXPOSED", role = "crit" } },
+}
+
+GEIGER_OFF = {
+    reading = { text = "GEIGER", role = "dim", value = d_promin_config.OFF_TEXT },
+    shield = { text = d_promin_config.UNAVAILABLE_TEXT, role = "dim", value = "--" },
+}
+
+local label_ids = {}
+
+function get_label_id(text)
+    local id = label_ids[text]
+    if not id then
+        local slug = text:lower():gsub("[^a-z0-9]+", "_"):gsub("^_+", ""):gsub("_+$", "")
+        id = "wd_bio_label_" .. slug
+        label_ids[text] = id
     end
-    for _, entry in ipairs(BAT_LEVELS) do
-        if power_ratio <= entry.max then
-            return entry.tex
-        end
-    end
+    return id
 end
 
-local function apply_shown(slot, shown)
-    if slot.shown == shown then
+local function get_icon(name)
+    return { id = "wd_bio_icon_" .. name, w = px.w(baked.ICON), h = px.h(baked.ICON) }
+end
+
+local function get_percent(ratio)
+    return math.floor(clamp(ratio, 0, 1) * 100 + 0.5)
+end
+
+local LEVEL_STEPS = baked.TRACK.w - 2 * baked.TRACK.inset
+local GEIGER = baked.GEIGER
+local GEIGER_TRACK = GEIGER.track
+local GEIGER_STEPS = GEIGER_TRACK.w - 2 * GEIGER_TRACK.inset
+local GEIGER_RANGE = GEIGER.range
+local GEIGER_DECADES = math.log10(GEIGER_RANGE.max / GEIGER_RANGE.min)
+
+local function get_snapped(ratio, steps)
+    return math.floor(clamp(ratio, 0, 1) * steps + 0.5) / steps
+end
+
+function format_timer(seconds)
+    local whole = clamp(math.floor(seconds), 0, MAX_TIMER_SECONDS)
+    return string.format(TIMER_TEXT, math.floor(whole / 60), whole % 60)
+end
+
+local function get_columns(art_x)
+    return {
+        icon = px.x(art_x),
+        name = px.x(art_x + baked.ICON_W),
+        value = px.x(art_x + baked.ICON_W + baked.NAME_W),
+    }
+end
+
+local function new_text(kit, left, top, width, align)
+    local cell = kit.new_cell({ chars = kit.get_max_chars(width - 2 * kit.style.pad), align = align, box = false })
+    cell.place(left, top, width, kit.style.row_h)
+    cell.width = width
+    return cell
+end
+
+local function new_label(kit, text, left, top, width)
+    local cell = kit.new_cell({ label = get_label_id(text), box = false })
+    cell.place(left, top, width, kit.style.row_h)
+    return cell
+end
+
+local function show_label(cell, text, role)
+    cell.set_label(get_label_id(text))
+    cell.set_role(role)
+end
+
+local function new_icon(kit, name, left, top)
+    local cell = kit.new_cell({ icon = get_icon(name), align = "center", box = false })
+    cell.place(left, top, px.w(baked.ICON_W), kit.style.row_h)
+    return cell
+end
+
+local function new_sidebar_row(kit, icon, name, top, columns)
+    return {
+        icon = new_icon(kit, icon, columns.icon, top),
+        name = new_label(kit, name, columns.name, top, px.w(baked.NAME_W)),
+        value = new_text(kit, columns.value, top, px.w(baked.VALUE_W), "right"),
+    }
+end
+
+local function build_effects(kit)
+    local rows, by_booster = {}, {}
+    local columns = get_columns(baked.EFFECTS.x)
+    local underline_w, underline_h = px.w(baked.UNDERLINE.w), px.h(baked.UNDERLINE.h)
+    local underline_x = columns.value + px.w(baked.VALUE_W) - kit.style.pad - underline_w
+    for index, effect in ipairs(EFFECTS) do
+        local art_top = baked.EFFECTS.y + (index - 1) * baked.ROW_H
+        local top = px.y(art_top)
+        local row = new_sidebar_row(kit, effect.icon, effect.name, top, columns)
+        row.effect = effect
+        row.track = kit.new_fill("dim")
+        row.level = kit.new_fill("text")
+        row.underline = { x = underline_x, y = px.y(art_top + baked.UNDERLINE.y), w = underline_w, h = underline_h }
+        row.seconds = 0
+        place_widget(row.track.widget, underline_x, row.underline.y, underline_w, underline_h)
+        for _, booster in ipairs(effect.boosters) do
+            by_booster[booster] = row
+        end
+        rows[index] = row
+    end
+    return rows, by_booster
+end
+
+local function build_status(kit)
+    local rows = {}
+    local columns = get_columns(baked.STATUS_X)
+    local track = baked.TRACK
+    local inset = px.w(track.inset)
+    local track_x, track_w, track_h = px.x(baked.STATUS_X + baked.ICON_W + track.x), px.w(track.w), px.h(track.h)
+    for _, spec in ipairs(baked.STATUS_ROWS) do
+        local top = px.y(spec.y)
+        local status = STATUS[spec.key]
+        local row = {
+            status = status,
+            icon = new_icon(kit, status.icon, columns.icon, top),
+            value = new_text(kit, columns.value, top, px.w(baked.VALUE_W), "right"),
+        }
+        if status.icon_role then
+            row.icon.set_role(status.icon_role)
+        end
+        if spec.bar then
+            row.track_top = px.y(spec.y + track.y)
+            row.bar = kit.new_bar({ level = "text", inset = inset })
+            row.bar.place(track_x, row.track_top, track_w, track_h)
+        else
+            row.name = new_label(kit, status.name, columns.name, top, px.w(baked.NAME_W))
+        end
+        rows[spec.key] = row
+    end
+    local stamina = rows.stamina
+    local tick_h = px.h(baked.TICK.h)
+    local track_top = stamina.track_top
+    stamina.cap = kit.new_fill("border")
+    stamina.tick = kit.new_fill("text")
+    stamina.cap_rect = {
+        x = track_x + inset,
+        w = track_w - 2 * inset,
+        y = track_top + inset,
+        h = track_h - 2 * inset,
+        tick_y = track_top + track_h / 2 - tick_h / 2,
+        tick_w = px.w(baked.TICK.w),
+        tick_h = tick_h,
+    }
+    return rows
+end
+
+local function build_mobility(kit)
+    local style = kit.style
+    local left, top = px.x(baked.STATUS_X), px.y(baked.MOBILITY_Y)
+    local width = px.w(baked.ICON_W + baked.NAME_W + baked.VALUE_W)
+    local cell = kit.new_cell({ label = get_label_id(MOBILITY.ok.text), icon = get_icon("walk"), box = false })
+    cell.place(left, top, width, style.row_h)
+    local border = kit.new_box({ border = "warn" })
+    border.place(left, top, width, style.row_h)
+    return { cell = cell, border = border }
+end
+
+local function new_geiger_unit(kit, row_y)
+    local unit = GEIGER.unit
+    local image = kit.new_image(GEIGER_UNIT, "art")
+    place_widget(image.widget, px.x(GEIGER.x + unit.x), px.y(row_y + unit.y), px.w(unit.w), px.h(unit.h))
+    return image
+end
+
+local function build_geiger(kit)
+    local columns = get_columns(GEIGER.x)
+    local track, marker_art = GEIGER_TRACK, GEIGER.marker
+    local inset = px.w(track.inset)
+    local track_x, track_w = px.x(GEIGER.x + track.x), px.w(track.w)
+    local block = GEIGER.block
+    local frame = kit.new_image(GEIGER_FRAME, "art")
+    place_widget(frame.widget, px.x(block.x), px.y(block.y), px.w(block.w), px.h(block.h))
+    local reading = new_sidebar_row(kit, "rad", GEIGER_OFF.reading.text, px.y(GEIGER.reading_y), columns)
+    local shield = new_sidebar_row(kit, "prot_rad", GEIGER_OFF.shield.text, px.y(GEIGER.shield_y), columns)
+    local bar = kit.new_bar({ level = "text", inset = inset })
+    bar.place(track_x, px.y(GEIGER.scale_y + track.y), track_w, px.h(track.h))
+    local marker = kit.new_fill("text")
+    return {
+        frame = frame,
+        reading = reading,
+        shield = shield,
+        bar = bar,
+        marker = marker,
+        marker_rect = {
+            x = track_x + inset,
+            w = track_w - 2 * inset,
+            y = px.y(GEIGER.scale_y + marker_art.y),
+            marker_w = px.w(marker_art.w),
+            h = px.h(marker_art.h),
+        },
+        live = { marker, new_geiger_unit(kit, GEIGER.reading_y), new_geiger_unit(kit, GEIGER.shield_y) },
+    }
+end
+
+local function get_part_cell(part)
+    local cell = baked.PARTS[part]
+    return { x = px.x(cell.x), y = px.y(cell.y), w = px.w(cell.w), h = px.h(cell.h) }
+end
+
+local function build_silhouette(kit, parent)
+    local silhouette = { tracks = {}, fills = {}, limbs = {} }
+    for _, entry in ipairs(wd_vitals.LIMB_PARTS) do
+        for _, part in ipairs(entry.parts) do
+            local cell = get_part_cell(part)
+            local track = kit.new_image("wd_bio_part_" .. part, "dim")
+            place_widget(track.widget, cell.x, cell.y, cell.w, cell.h)
+            silhouette.tracks[#silhouette.tracks + 1] = track
+        end
+    end
+    local function new_part_widget(part)
+        local widget = wd_panel.new_widget(parent, "wd_bio_part_" .. part, body_binder)
+        silhouette.fills[#silhouette.fills + 1] = widget
+        return widget, get_part_cell(part)
+    end
+    for index, entry in ipairs(wd_vitals.LIMB_PARTS) do
+        silhouette.limbs[index] = wd_silhouette.new_limb(entry, new_part_widget, d_promin_config.SPRITES_TEXTURE)
+    end
+    return silhouette
+end
+
+local function show_text(cell, text, role)
+    cell.set_text(text)
+    cell.set_role(role)
+end
+
+local function show_effect(row)
+    local active = row.seconds > 0
+    local role = active and "text" or "dim"
+    row.icon.set_role(role)
+    row.name.set_role(role)
+    row.value.set_role(role)
+    set_shown(row.track, active)
+    set_shown(row.level, active)
+    if not active then
+        row.duration, row.whole = nil, nil
+        row.value.set_text(NO_TIMER)
         return
     end
-    slot.shown = shown
-    slot.wnd:Show(shown)
-end
-
-local function apply_battery_icon(slot, power_ratio)
-    local tex = get_battery_tex(power_ratio)
-    if tex then
-        slot.tex_cache = binder.bind(slot.wnd, tex, slot.tex_cache)
+    local whole = math.floor(row.seconds)
+    if row.whole ~= whole then
+        row.whole = whole
+        row.value.set_text(format_timer(whole))
     end
-    apply_shown(slot, tex ~= nil)
+    if not row.duration or row.seconds > row.last_seconds + REAPPLY_SECONDS then
+        row.duration = row.seconds
+    end
+    row.last_seconds = row.seconds
+    local underline = row.underline
+    local ratio = get_snapped(row.seconds / row.duration, baked.UNDERLINE.w)
+    if row.ratio ~= ratio then
+        row.ratio = ratio
+        place_widget(row.level.widget, underline.x, underline.y, underline.w * ratio, underline.h)
+    end
 end
 
-local function is_helmet_worn()
-    return db.actor ~= nil and db.actor:item_in_slot(HELMET_SLOT) ~= nil
+local function show_level_row(kit, row, ratio, role, value)
+    row.bar.set_ratio(get_snapped(ratio, LEVEL_STEPS))
+    kit.set_role(row.bar.level, role)
+    row.value.set_role(role)
+    if row.shown_value ~= value then
+        row.shown_value = value
+        row.value.set_text(string.format(row.status.format, value))
+    end
+end
+
+local function show_percent_row(kit, row, ratio)
+    show_level_row(kit, row, ratio, d_promin_config.get_state_role(ratio), get_percent(ratio))
+end
+
+local function place_stamina_cap(row, cap)
+    cap = get_snapped(cap, LEVEL_STEPS)
+    if row.cap_ratio == cap then
+        return
+    end
+    row.cap_ratio = cap
+    local rect = row.cap_rect
+    local cap_x = rect.x + rect.w * cap
+    place_widget(row.cap.widget, cap_x, rect.y, rect.x + rect.w - cap_x, rect.h)
+    place_widget(row.tick.widget, cap_x, rect.tick_y, rect.tick_w, rect.tick_h)
+end
+
+local function show_unknown_row(row, text)
+    row.icon.set_role("dim")
+    row.bar.set_ratio(0)
+    row.shown_value = nil
+    show_text(row.value, text, "dim")
+end
+
+local function show_dose_row(kit, row, msv, readable)
+    if not readable then
+        show_unknown_row(row, NO_DOSE)
+        return
+    end
+    local radiation = wd_vitals.get_radiation()
+    row.icon.set_role(row.status.icon_role)
+    show_level_row(kit, row, radiation, d_promin_config.get_state_role(radiation, true), msv)
+end
+
+local function show_vitals(kit, rows, conditions, dose_readable)
+    show_percent_row(kit, rows.health, wd_vitals.get_health())
+    show_percent_row(kit, rows.psy, wd_vitals.get_psy())
+    local msv = wd_vitals.get_radiation_msv()
+    show_dose_row(kit, rows.radiation, msv, dose_readable)
+    show_percent_row(kit, rows.stamina, wd_vitals.get_stamina())
+    place_stamina_cap(rows.stamina, wd_vitals.get_stamina_cap(conditions, msv))
+end
+
+local function show_bleeding(row)
+    local tier = BLEEDING_TIERS[wd_vitals.get_bleeding_tier()]
+    local role = tier and tier.role or "dim"
+    row.icon.set_role(role)
+    row.name.set_role(role)
+    show_text(row.value, tier and tier.text or NONE, role)
+end
+
+local function show_need(kit, row, ratio)
+    if not ratio then
+        show_unknown_row(row, NONE)
+        return
+    end
+    row.icon.set_role(d_promin_config.get_state_role(ratio))
+    show_percent_row(kit, row, ratio)
+end
+
+local function get_weight_text(kit, total, max, width)
+    local text = string.format(WEIGHT_TEXT, total, max)
+    if kit.measure(text) <= width then
+        return text
+    end
+    return string.format(WEIGHT_SHORT_TEXT, total, max)
+end
+
+local function show_weight(kit, row, conditions)
+    local total, max = wd_vitals.get_carry_weight(conditions)
+    local width = row.value.width - 2 * kit.style.pad
+    local text = get_weight_text(kit, math.floor(total + 0.5), math.floor(max + 0.5), width)
+    show_text(row.value, text, total > max and "crit" or "text")
+end
+
+local function show_mobility(mobility, conditions)
+    local state = MOBILITY[wd_vitals.get_mobility(conditions)]
+    show_label(mobility.cell, state.text, state.role)
+    local alert = state.role ~= "dim"
+    if alert then
+        mobility.border.set_role(state.role)
+    end
+    mobility.border.set_visible(alert)
+end
+
+local function get_scale_position(reading)
+    if reading <= GEIGER_RANGE.min then
+        return 0
+    end
+    return get_snapped(math.log10(reading / GEIGER_RANGE.min) / GEIGER_DECADES, GEIGER_STEPS)
+end
+
+local function get_geiger_state(reading, shield)
+    if reading <= 0 then
+        return "clear"
+    elseif reading > shield then
+        return "leaking"
+    end
+    return "held"
+end
+
+local function show_geiger_row(row, label, value_text)
+    row.icon.set_role(label.role)
+    show_label(row.name, label.text, label.role)
+    show_text(row.value, value_text, label.role)
+end
+
+local function get_geiger_text(value)
+    return string.format(GEIGER_TEXT, clamp(math.floor(value), MIN_GEIGER, MAX_GEIGER))
+end
+
+local function place_geiger_marker(geiger, ratio)
+    if geiger.marker_ratio == ratio then
+        return
+    end
+    geiger.marker_ratio = ratio
+    local rect = geiger.marker_rect
+    place_widget(geiger.marker.widget, rect.x + rect.w * ratio - rect.marker_w / 2, rect.y, rect.marker_w, rect.h)
+end
+
+local function set_live_shown(geiger, flag)
+    for _, slot in ipairs(geiger.live) do
+        set_shown(slot, flag)
+    end
+end
+
+local function show_geiger_off(geiger)
+    for key, label in pairs(GEIGER_OFF) do
+        show_geiger_row(geiger[key], label, label.value)
+    end
+    geiger.bar.set_ratio(0)
+end
+
+local function show_geiger(kit, geiger, conditions, linked)
+    set_live_shown(geiger, linked)
+    if not linked then
+        show_geiger_off(geiger)
+        return
+    end
+    local reading = wd_geiger.get_exact_reading()
+    local shield = wd_geiger.get_shield(conditions)
+    local state = GEIGER_STATES[get_geiger_state(reading, shield)]
+    show_geiger_row(geiger.reading, state.reading, get_geiger_text(reading))
+    show_geiger_row(geiger.shield, state.shield, get_geiger_text(shield))
+    geiger.bar.set_ratio(get_scale_position(reading))
+    kit.set_role(geiger.bar.level, state.reading.role)
+    place_geiger_marker(geiger, get_scale_position(shield))
+end
+
+local function show_silhouette(silhouette)
+    local level = d_promin_config.get_ui_level()
+    local limbs = wd_vitals.get_limbs()
+    for _, limb in ipairs(silhouette.limbs) do
+        local state = limbs[limb.limb]
+        local perm = state.perm
+        local tone = wd_face_tones.get_state(perm)
+        if limb.tone ~= tone or limb.level ~= level then
+            limb.tone, limb.level = tone, level
+            limb.temp.set(wd_face_tones.get_body_color(level, "ok", true))
+            limb.perm.set(wd_face_tones.get_body_color(level, tone))
+        end
+        wd_silhouette.set_limb(limb, perm, state.total)
+    end
+end
+
+local function set_sidebars_shown(page, flag)
+    for _, cell in ipairs(page.cells) do
+        cell.set_visible(flag)
+    end
+    for _, slot in ipairs(page.always) do
+        set_shown(slot, flag)
+    end
+    for _, bar in ipairs(page.bars) do
+        bar.set_visible(flag)
+    end
+    if not flag then
+        set_live_shown(page.geiger, false)
+        for _, row in ipairs(page.effects) do
+            set_shown(row.track, false)
+            set_shown(row.level, false)
+        end
+        page.mobility.border.set_visible(false)
+    end
+    for _, widget in ipairs(page.silhouette.fills) do
+        widget:Show(flag)
+    end
 end
 
 local function apply_visibility(page)
     local visible = page.page_visible and not page.blanked
-    for _, element in ipairs(page.elements) do
-        element.wnd:Show(visible)
-    end
-    if page.chrome then
-        page.chrome.set_visible(visible)
+    page.chrome.set_visible(visible)
+    if page.kit then
+        set_sidebars_shown(page, visible)
+        page.allow_slow = wd_core.throttle(SLOW_REFRESH_MS)
+        page.allow_geiger = wd_core.throttle(wd_geiger.REFRESH_MS)
     end
 end
 
-local function set_blanked(page, blanked)
-    if page.blanked == blanked then
+local function collect_widgets(page)
+    local cells, always, bars = {}, {}, {}
+    local function add_row_cells(row)
+        cells[#cells + 1] = row.icon
+        cells[#cells + 1] = row.name
+        cells[#cells + 1] = row.value
+    end
+    for _, row in ipairs(page.effects) do
+        add_row_cells(row)
+    end
+    for _, row in pairs(page.status) do
+        add_row_cells(row)
+        bars[#bars + 1] = row.bar
+    end
+    cells[#cells + 1] = page.mobility.cell
+    local geiger = page.geiger
+    add_row_cells(geiger.reading)
+    add_row_cells(geiger.shield)
+    always[#always + 1] = geiger.frame
+    bars[#bars + 1] = geiger.bar
+    always[#always + 1] = page.status.stamina.cap
+    always[#always + 1] = page.status.stamina.tick
+    for _, track in ipairs(page.silhouette.tracks) do
+        always[#always + 1] = track
+    end
+    page.cells, page.always, page.bars = cells, always, bars
+end
+
+local function update_effects(page, conditions)
+    for _, row in ipairs(page.effects) do
+        row.seconds = 0
+    end
+    conditions:BoosterForEach(page.add_booster)
+    for _, row in ipairs(page.effects) do
+        show_effect(row)
+    end
+end
+
+local function update_slow(page, conditions)
+    local kit, status = page.kit, page.status
+    local food, water, sleep = wd_vitals.get_needs(conditions)
+    show_need(kit, status.food, food)
+    show_need(kit, status.water, water)
+    show_need(kit, status.sleep, sleep)
+    show_weight(kit, status.weight, conditions)
+    show_mobility(page.mobility, conditions)
+end
+
+local function update_page(page)
+    local blanked = not db.actor or not db.actor:alive()
+    if page.blanked ~= blanked then
+        page.blanked = blanked
+        apply_visibility(page)
+    end
+    if blanked then
         return
     end
-    page.blanked = blanked
-    apply_visibility(page)
-end
-
-local function bind_slot(slot, part, id)
-    local field = part .. "_tex"
-    slot[field] = binder.bind(slot[part], id, slot[field])
-end
-
-local function bind_digit(slot, id)
-    slot.tex_cache = binder.bind(slot.wnd, id, slot.tex_cache)
-end
-
-function set_number_digits(slots, value)
-    local count = #slots
-    local text = string.format("%d", value)
-    if #text > count then
-        text = string.rep("9", count)
-    end
-    local pad = count - #text
-    for index = 1, count do
-        local slot = slots[index]
-        if index <= pad then
-            slot.wnd:Show(false)
-        else
-            slot.wnd:Show(true)
-            bind_digit(slot, DIG_TEX[tonumber(text:sub(index - pad, index - pad))])
-        end
-    end
-end
-
-local function update_clock(slots)
-    local hrs = level.get_time_hours()
-    local mins = level.get_time_minutes()
-    bind_digit(slots[1], DIG_TEX[math.floor(hrs / 10)])
-    bind_digit(slots[2], DIG_TEX[hrs % 10])
-    bind_digit(slots[3], DIG_TEX[math.floor(mins / 10)])
-    bind_digit(slots[4], DIG_TEX[mins % 10])
-end
-
-local function set_ghost_digits(slots)
-    local count = #slots
-    for index = 1, count do
-        slots[index].wnd:Show(index == count)
-    end
-    bind_digit(slots[count], GHOST_DIG_TEX)
-end
-
-local MAX_BOOSTER_SECS = 99 * 60 + 59
-
-local function apply_booster(page, typ, period)
-    local slot = page.bo_by_typ[typ]
-    if not slot then
-        return
-    end
-    slot.active = true
-    local secs = math.floor(period or 0)
-    if secs > MAX_BOOSTER_SECS then
-        secs = MAX_BOOSTER_SECS
-    elseif secs < 0 then
-        secs = 0
-    end
-    local mins = math.floor(secs / 60)
-    local rem = secs % 60
-    bind_slot(slot, "icon", "wd_" .. slot.tex .. "_lit")
-    slot.icon:SetTextureColor(get_buff_tint())
-    bind_slot(slot, "d1", DIG_TEX[math.floor(mins / 10)])
-    bind_slot(slot, "d2", DIG_TEX[mins % 10])
-    bind_slot(slot, "d3", DIG_TEX[math.floor(rem / 10)])
-    bind_slot(slot, "d4", DIG_TEX[rem % 10])
-end
-
-local function track(page, wnd, bx, by, bw, bh)
-    page.elements[#page.elements + 1] = { wnd = wnd, bx = bx, by = by, bw = bw, bh = bh, is_bar = false }
-    return wnd
-end
-
-local function track_bar(page, wnd, bx, by, full_w, height, anchor)
-    local element = {
-        wnd = wnd,
-        bx = bx,
-        by = by,
-        full_w = full_w,
-        h = height,
-        anchor = anchor,
-        is_bar = true,
-        tex_cache = nil,
-    }
-    page.elements[#page.elements + 1] = element
-    return element
-end
-
-local function track_box(page, id, box)
-    return track(page, page.init(id), box[1], box[2], box[3], box[4])
-end
-
-local function seat_element(element)
-    element.wnd:SetWndPos(scratch_pos:set(element.bx, element.by))
-    element.wnd:SetWndSize(scratch_size:set(element.bw, element.bh))
-end
-
-function get_saturated_rgb(rgb, saturation_percent)
-    local ratio = clamp((saturation_percent or 100) / 100, 0, 1)
-    if ratio >= 1 then
-        return rgb[1], rgb[2], rgb[3]
-    end
-    local high = math.max(rgb[1], rgb[2], rgb[3])
-    return math.floor(high + (rgb[1] - high) * ratio + 0.5),
-        math.floor(high + (rgb[2] - high) * ratio + 0.5),
-        math.floor(high + (rgb[3] - high) * ratio + 0.5)
-end
-
-local function get_tint(rgb)
-    return GetARGB(get_ui_alpha(), get_saturated_rgb(rgb, d_promin_config.transforms.saturation))
-end
-
-function get_group_tint(key)
-    return get_tint(d_promin_config.transforms[key])
-end
-
-function get_buff_tint()
-    return get_group_tint("buff_color")
-end
-
-local function get_emblem_tex()
-    local faction = d_promin_config.get_emblem_faction()
-    return faction and ("wd_emblem_" .. faction) or nil
-end
-
-local function tint_elements(elements)
-    local white = GetARGB(get_ui_alpha(), 255, 255, 255)
-    local tints = {}
-    for _, group in ipairs(d_promin_config.COLOR_GROUPS) do
-        tints[group.key] = get_group_tint(group.key)
-    end
-    for _, element in ipairs(elements) do
-        element.wnd:SetTextureColor(tints[element.group] or white)
-    end
-end
-
-local function apply_fg_tints(page)
-    tint_elements(page.elements)
-end
-
-local function apply_emblem(chrome)
-    local tex = get_emblem_tex()
-    if tex then
-        chrome.emblem_tex = binder.bind(chrome.emblem, tex, chrome.emblem_tex)
-    end
-    chrome.emblem:Show(chrome.visible and tex ~= nil)
-end
-
-local function set_chrome_visible(chrome, visible)
-    chrome.visible = visible
-    chrome.bg:Show(visible)
-    for _, slot in ipairs(chrome.tm) do
-        slot.wnd:Show(visible)
-    end
-    apply_emblem(chrome)
-    if chrome.bat_icon then
-        apply_shown(chrome.bat_icon, false)
-    end
-    if chrome.hlm_icon then
-        apply_shown(chrome.hlm_icon, false)
-    end
-end
-
-local function update_chrome(chrome)
-    update_clock(chrome.tm)
-    apply_emblem(chrome)
-    if chrome.bat_icon then
-        apply_battery_icon(chrome.bat_icon, d_promin.get_power_ratio())
-    end
-    if chrome.hlm_icon then
-        apply_shown(chrome.hlm_icon, is_helmet_worn())
-    end
-end
-
-local function add_chrome_element(chrome, node, box, group)
-    local wnd = chrome.init(node)
-    wnd:SetStretchTexture(true)
-    local element = { wnd = wnd, bx = box[1], by = box[2], bw = box[3], bh = box[4], is_bar = false, group = group }
-    chrome.elements[#chrome.elements + 1] = element
-    seat_element(element)
-    return wnd
-end
-
-function build_chrome(cfg)
-    local layout = cfg.layout
-    local tm = layout.tm
-    local chrome = { init = cfg.init, elements = {}, tm = {} }
-
-    chrome.bg = add_chrome_element(chrome, "bg", layout.bg)
-    binder.set(chrome.bg, cfg.bg_tex)
-
-    chrome.emblem = add_chrome_element(chrome, "emblem", layout.emblem, "faction_color")
-
-    for index, node in ipairs(TM_NODES) do
-        chrome.tm[index] = {
-            wnd = add_chrome_element(chrome, node, { tm.x[index], tm.y, tm.w, tm.h }),
-            tex_cache = nil,
-        }
-    end
-
-    if layout.bat_icon then
-        chrome.bat_icon = { wnd = add_chrome_element(chrome, "bat_icon", layout.bat_icon), tex_cache = nil }
-    end
-
-    if layout.hlm_icon then
-        local helmet_wnd = add_chrome_element(chrome, "hlm_icon", layout.hlm_icon)
-        binder.set(helmet_wnd, "wd_tab_helmet")
-        chrome.hlm_icon = { wnd = helmet_wnd }
-    end
-
-    function chrome.set_visible(visible)
-        set_chrome_visible(chrome, visible)
-    end
-
-    function chrome.update()
-        update_chrome(chrome)
-    end
-
-    function chrome.repaint()
-        tint_elements(chrome.elements)
-        apply_emblem(chrome)
-    end
-
-    set_chrome_visible(chrome, true)
-    tint_elements(chrome.elements)
-    return chrome
-end
-
-local function build_bio_widgets(page, layout)
-    page.sil = track_box(page, "silhouette", layout.sil)
-    binder.set(page.sil, "wd_tab_sil_bleed")
-
-    for _, limb in ipairs(LIMBS) do
-        local pos = layout.limb_xy[limb]
-        for _, suffix in ipairs({ "_track", "_temp", "" }) do
-            local name = "bar_" .. limb .. suffix
-            page[name] =
-                track_bar(page, page.init(name), pos[1], pos[2], layout.limb_bar.full_w, layout.limb_bar.h, "L")
-        end
-    end
-
-    for _, sys in ipairs({ "health", "psy", "rad", "stam" }) do
-        local pos = layout.sys_xy[sys]
-        page["bar_" .. sys .. "_track"] = track_bar(
-            page,
-            page.init("bar_" .. sys .. "_track"),
-            pos[1],
-            pos[2],
-            layout.sys_bar.full_w,
-            layout.sys_bar.h,
-            "L"
-        )
-        local fill =
-            track_bar(page, page.init("bar_" .. sys), pos[1], pos[2], layout.sys_bar.full_w, layout.sys_bar.h, "L")
-        fill.group = SYS_COLOR[sys]
-        page["bar_" .. sys] = fill
-    end
-end
-
-local function build_widgets(page, bg_id, layout)
-    page.chrome = build_chrome({ init = page.init, layout = layout, bg_tex = bg_id })
-
-    build_bio_widgets(page, layout)
-
-    page.bo = {}
-    page.bo_by_typ = {}
-    local bo_names = { "bo_hp", "bo_bleed", "bo_rad", "bo_carry", "bo_power", "bo_ext_rad", "bo_psi", "bo_chem" }
-    local bo_boostid = {
-        BoosterID.HpRestore,
-        BoosterID.BleedingRestore,
-        BoosterID.RadiationRestore,
-        BoosterID.MaxWeight,
-        BoosterID.PowerRestore,
-        BoosterID.RadiationProtection,
-        BoosterID.TelepaticProtection,
-        BoosterID.ChemicalBurnProtection,
-    }
-    local bo = layout.bo
-    for index = 1, 8 do
-        local row = (index <= 4) and 1 or 2
-        local col = (index - 1) % 4 + 1
-        local icon_x = bo.cx[col] - bo.icon_wh / 2
-        local ic = page.init("bo_icon_" .. index)
-        if ic then
-            local slot = { tex = bo_names[index], active = false }
-            track(page, ic, icon_x, bo.icon_y[row], bo.icon_wh, bo.icon_wh)
-            ic:Show(true)
-            slot.icon = ic
-            for dig = 1, 4 do
-                local wnd = page.init("bo_dig" .. dig .. "_" .. index)
-                track(page, wnd, bo.cx[col] + bo.dig_dx[dig], bo.dig_y[row], bo.dig_w, bo.dig_h)
-                wnd:Show(true)
-                slot["d" .. dig] = wnd
-            end
-            page.bo[index] = slot
-            page.bo_by_typ[bo_boostid[index]] = slot
-        end
-    end
-
-    page.nd = {}
-    local nd = layout.nd
-    for _, need in ipairs(NEEDS) do
-        local group = { x = {}, y = {} }
-        for index = 1, 3 do
-            local x_wnd = page.init("nd_" .. need .. "_x" .. index)
-            track(page, x_wnd, nd.sx[need] + nd.x_dx[index], nd.y, nd.dig_w, nd.dig_h)
-            x_wnd:Show(true)
-            group.x[index] = { wnd = x_wnd, tex_cache = nil }
-            local y_wnd = page.init("nd_" .. need .. "_y" .. index)
-            track(page, y_wnd, nd.sx[need] + nd.y_dx[index], nd.y, nd.dig_w, nd.dig_h)
-            y_wnd:Show(true)
-            group.y[index] = { wnd = y_wnd, tex_cache = nil }
-        end
-        bind_digit(group.y[1], DIG_TEX[1])
-        bind_digit(group.y[2], DIG_TEX[0])
-        bind_digit(group.y[3], DIG_TEX[0])
-        page.nd[need] = group
-    end
-
-    apply_fg_tints(page)
-
-    page.booster_cb = function(typ, period)
-        apply_booster(page, typ, period)
-    end
-end
-
-local function place_fixed_elements(page)
-    for _, element in ipairs(page.elements) do
-        if not element.is_bar then
-            seat_element(element)
-        end
-    end
-end
-
-local function set_bar(element, ratio, tex)
-    if not element or not ratio then
-        return
-    end
-    ratio = clamp(ratio, 0.0, 1.0)
-    local width = ratio * element.full_w
-    local height = element.h
-    element.tex_cache = binder.bind(element.wnd, tex, element.tex_cache)
-    local pos_x, pos_y
-    if element.anchor == "R" then
-        pos_x, pos_y = element.bx + element.full_w - width, element.by
-    else
-        pos_x, pos_y = element.bx, element.by
-    end
-    element.wnd:SetWndPos(scratch_pos:set(pos_x, pos_y))
-    element.wnd:SetWndSize(scratch_size:set(width, height))
-end
-
-local function set_seg(element, start_ratio, end_ratio, tex)
-    if not element then
-        return
-    end
-    start_ratio = clamp(start_ratio, 0.0, 1.0)
-    end_ratio = clamp(end_ratio, 0.0, 1.0)
-    if end_ratio < start_ratio then
-        end_ratio = start_ratio
-    end
-    element.tex_cache = binder.bind(element.wnd, tex, element.tex_cache)
-    element.wnd:SetWndPos(scratch_pos:set(element.bx + start_ratio * element.full_w, element.by))
-    element.wnd:SetWndSize(scratch_size:set((end_ratio - start_ratio) * element.full_w, element.h))
-end
-
-local function set_limb(perm_e, temp_e, track_e, perm, total, max_val)
-    if not max_val or max_val <= 0 then
-        return
-    end
-    local pr = perm / max_val
-    local tr = total / max_val
-    set_seg(perm_e, 0, pr, "wd_limb_bar")
-    set_seg(temp_e, pr, tr, "wd_limb_bar_green")
-    set_seg(track_e, tr, 1.0, "wd_bar_track")
-end
-
-local function get_limb_total(limb, health, pv_h)
-    return (pv_h and pv_h[limb]) or health[limb]
-end
-
-local function get_limb_perm(limb, health, timedhp, pv_h, pv_b)
-    local perm
-    if pv_h then
-        perm = pv_h[limb] - (pv_b[limb] or 0)
-    else
-        perm = health[limb] - (timedhp[limb] or 0)
-    end
-    return perm > 0 and perm or 0
-end
-
-local function get_pct(ratio)
-    if not ratio then
-        return nil
-    end
-    return clamp(math.floor(ratio * 100 + 0.5), 0, 100)
-end
-
-local function get_actor_conditions()
-    if not db.actor then
-        return nil
-    end
-    local cast = db.actor:cast_Actor()
-    return cast and cast:conditions()
-end
-
-local need_pcts = {}
-
-local function get_needs_row_source()
-    local sota = sota_stats_tweak_gamma or sota_stats_tweak
-    local bars = hts_inventory_bars
-    if sota and bars and bars.get_satiety_val and bars.get_thirst_val and bars.get_sleep_val then
-        return bars
-    end
-end
-
-local DEPRIVATION_SCALE = 10000
-
-local THIRST = {
-    get_last = "get_last_drink",
-    get_blur_4 = "get_thirst_blur_4",
-    get_deprivation = "get_water_deprivation",
-    blur_4 = 5760,
-}
-local SLEEP = {
-    get_last = "get_last_sleep",
-    get_blur_4 = "get_sleep_blur_4",
-    get_deprivation = "get_sleep_deprivation",
-    blur_4 = 8750,
-}
-
-local function get_remaining_pct(last, blur_4)
-    if blur_4 <= 0 then
-        return nil
-    end
-    return math.floor(clamp((blur_4 - last) / blur_4, 0, 1) * 100)
-end
-
-local function get_deprivation_pct(status, need)
-    if not status then
-        return nil
-    end
-    local get_last = status[need.get_last]
-    local get_blur_4 = status[need.get_blur_4]
-    if get_last and get_blur_4 then
-        return get_remaining_pct(get_last(), get_blur_4())
-    end
-    local get_deprivation = status[need.get_deprivation]
-    if get_deprivation then
-        return get_remaining_pct(get_deprivation() * DEPRIVATION_SCALE, need.blur_4)
-    end
-end
-
-local function get_need_pcts(cond)
-    local row = get_needs_row_source()
-    if row then
-        need_pcts.food = get_pct(cond and row.get_satiety_val())
-        need_pcts.water = get_pct(row.get_thirst_val())
-        need_pcts.sleep = get_pct(row.get_sleep_val())
-        return need_pcts
-    end
-    need_pcts.food = nil
-    if cond then
-        need_pcts.food = math.min(math.floor(clamp(cond:GetSatiety() - 0.1, 0, 1) * 1.123 * 100), 100)
-    end
-    need_pcts.water = get_deprivation_pct(actor_status_thirst, THIRST)
-    need_pcts.sleep = get_deprivation_pct(actor_status_sleep, SLEEP)
-    return need_pcts
-end
-
-local function update_needs(page, cond)
-    local pcts = get_need_pcts(cond)
-    for _, need in ipairs(NEEDS) do
-        local group = page.nd[need]
-        local pct = pcts[need]
-        if pct then
-            set_number_digits(group.x, pct)
-        else
-            set_ghost_digits(group.x)
-        end
-    end
-end
-
-local function get_rad_full()
-    if grok_progressive_rad_damages then
-        return d_promin_config.RAD_FULL_GAMMA
-    end
-    return d_promin_config.RAD_FULL_ANOMALY
-end
-
-local function apply_limb(page, limb, perm, total, max_val)
-    local name = "bar_" .. limb
-    set_limb(page[name], page[name .. "_temp"], page[name .. "_track"], perm, total, max_val)
-end
-
-local function update_limbs(page)
-    local injuries = zzz_player_injuries
-    local health = injuries and injuries.health
-    local maxhp = injuries and injuries.maxhp
-    local timedhp = injuries and injuries.timedhp
-    if not (health and maxhp and timedhp) then
-        for _, limb in ipairs(LIMBS) do
-            apply_limb(page, limb, 1, 1, 1)
-        end
-        return
-    end
-
-    local pv_h, pv_b
-    local sec = get_hovered_wheel_section()
-    if sec then
-        pv_h, pv_b = compute_preview(sec, health, timedhp, maxhp)
-    end
-    for _, limb in ipairs(LIMBS) do
-        local dk = DATA_KEY[limb] or limb
-        apply_limb(
-            page,
-            limb,
-            get_limb_perm(dk, health, timedhp, pv_h, pv_b),
-            get_limb_total(dk, health, pv_h),
-            maxhp[dk]
-        )
-    end
-end
-
-local function update_bio_frame(page)
-    if not db.actor or not db.actor:alive() then
-        set_blanked(page, true)
-        return false
-    end
-
-    set_blanked(page, false)
-
-    update_limbs(page)
-
-    set_bar(page.bar_health, db.actor.health or 0, "wd_bar_sys_hp")
-    local psy = arszi_psy and arszi_psy.get_psy_health and arszi_psy.get_psy_health() or db.actor.psy_health or 0
-    set_bar(page.bar_psy, psy, "wd_bar_sys_hp")
-    set_bar(page.bar_rad, (db.actor.radiation or 0) / get_rad_full(), "wd_bar_sys_hp")
-    set_bar(page.bar_stam, db.actor.power or 0, "wd_bar_sys_stam")
-
-    local bleed = db.actor.bleeding or 0
-    page.sil:Show(bleed > 0 and wd_bleed.is_lit())
-
-    return true
-end
-
-local function update_frame(page, layout)
-    if not update_bio_frame(page) then
-        return
-    end
-
     page.chrome.update()
-    for _, slot in pairs(page.bo) do
-        slot.active = false
+    local conditions = page.kit and wd_vitals.get_conditions()
+    if not conditions then
+        return
     end
-
-    local cond = get_actor_conditions()
-    if cond then
-        cond:BoosterForEach(page.booster_cb)
+    update_effects(page, conditions)
+    if page.allow_geiger() then
+        page.dose_readable = wd_geiger.is_dose_readable()
+        show_geiger(page.kit, page.geiger, conditions, wd_geiger.is_linked())
     end
+    show_vitals(page.kit, page.status, conditions, page.dose_readable)
+    show_bleeding(page.status.bleeding)
+    show_silhouette(page.silhouette)
+    if page.allow_slow() then
+        update_slow(page, conditions)
+    end
+end
 
-    local idle_digit_tex = layout.idle_digit_tex
-    for _, slot in pairs(page.bo) do
-        if slot.active then
-            slot.cleared = false
-        elseif not slot.cleared then
-            slot.cleared = true
-            bind_slot(slot, "icon", slot.tex .. "_glyph")
-            slot.icon:SetTextureColor(GetARGB(get_ui_alpha(), 255, 255, 255))
-            bind_slot(slot, "d1", idle_digit_tex)
-            bind_slot(slot, "d2", idle_digit_tex)
-            bind_slot(slot, "d3", idle_digit_tex)
-            bind_slot(slot, "d4", idle_digit_tex)
+function build(ctx)
+    local page = { page_visible = true, blanked = false }
+    page.chrome =
+        d_promin_chrome_ui.build({ init = ctx.init, bg_tex = BACKGROUND, title_tex = TITLE_TEXTURE, wnd = ctx.wnd })
+    local kit = page.chrome.kit
+    page.kit = kit
+    if kit then
+        page.silhouette = build_silhouette(kit, ctx.wnd)
+        page.effects, page.effect_by_booster = build_effects(kit)
+        page.status = build_status(kit)
+        page.mobility = build_mobility(kit)
+        page.geiger = build_geiger(kit)
+        collect_widgets(page)
+        function page.add_booster(booster_type, seconds)
+            local row = page.effect_by_booster[booster_type]
+            if row and seconds > row.seconds then
+                row.seconds = seconds
+            end
         end
     end
 
-    update_needs(page, cond)
-end
-
-function get_layout()
-    return LAYOUT_V2
-end
-
-local function place_track_bars(page)
-    set_bar(page.bar_health_track, 1.0, "wd_bar_track")
-    set_bar(page.bar_psy_track, 1.0, "wd_bar_track")
-    set_bar(page.bar_rad_track, 1.0, "wd_bar_track")
-    set_bar(page.bar_stam_track, 1.0, "wd_bar_track")
-end
-
-local function new_page(ctx)
-    local page = {
-        init = ctx.init,
-        page_visible = true,
-        blanked = false,
-        elements = {},
-    }
     function page.set_visible(visible)
         page.page_visible = visible
         apply_visibility(page)
     end
-    return page
-end
 
-local function build_page(ctx, bg_id, layout)
-    local page = new_page(ctx)
-    build_widgets(page, bg_id, layout)
-    place_fixed_elements(page)
-    place_track_bars(page)
     function page.update()
-        update_frame(page, layout)
+        update_page(page)
     end
+
     function page.repaint()
-        apply_fg_tints(page)
         page.chrome.repaint()
     end
-    page.repaint()
-    return page
-end
 
-function build(ctx)
-    return build_page(ctx, "wd_tab_bg_nomap", LAYOUT_V2)
-end
-
-function build_main(ctx)
-    return build_page(ctx, "wd_tab_bg_main", LAYOUT_V2)
-end
-
-function build_bio(ctx)
-    local page = new_page(ctx)
-    build_bio_widgets(page, LAYOUT_V2)
-    apply_fg_tints(page)
-    place_fixed_elements(page)
-    place_track_bars(page)
-    function page.update()
-        update_bio_frame(page)
-    end
-    function page.repaint()
-        apply_fg_tints(page)
-    end
+    apply_visibility(page)
     return page
 end

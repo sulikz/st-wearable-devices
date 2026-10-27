@@ -83,8 +83,6 @@ function project_mark_into(out, player_pos, target_pos, zoom_m, screen_w, screen
     out.x = offset_x
     out.y = offset_y
     out.inside = math.abs(offset_x) <= half_w and math.abs(offset_y) <= half_h
-    out.pin_x = clamp(offset_x, -half_w, half_w)
-    out.pin_y = clamp(offset_y, -half_h, half_h)
     return out
 end
 

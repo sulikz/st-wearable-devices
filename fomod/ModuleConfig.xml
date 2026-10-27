@@ -22,6 +22,8 @@ WD Team
                             <files>
                                 <folder source="src\core\gamedata" destination="gamedata"
                                     priority="0" />
+                                <file source="src\core\THIRD_PARTY_NOTICES.md"
+                                    destination="THIRD_PARTY_NOTICES.md" priority="0" />
                             </files>
                             <typeDescriptor>
                                 <type name="Required" />

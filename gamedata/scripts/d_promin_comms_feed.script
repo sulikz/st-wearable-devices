@@ -1,0 +1,404 @@
+local DEFAULTS = {
+    clamp_lines = 3,
+    group_minutes = 5,
+}
+local STEP_LINES = 3
+local START_LABEL = "LOG START"
+local EPSILON = 1e-9
+local MINUTES_PER_HOUR = 60
+
+function format_time(entry)
+    return string.format("%02d:%02d", entry.hour, entry.minute)
+end
+
+function format_date(entry)
+    return wd_text.get_upper(wd_clock.format_day_month_year(entry.year, entry.month, entry.day))
+end
+
+function format_stamp(entry)
+    return format_time(entry) .. ", " .. format_date(entry)
+end
+
+function format_more(more)
+    return string.format(" +%d LINES", more)
+end
+
+function format_new(count)
+    return string.format("%d NEW", count)
+end
+
+local function is_same_day(entry, other)
+    return entry.year == other.year and entry.month == other.month and entry.day == other.day
+end
+
+local function get_minute_of_day(entry)
+    return entry.hour * MINUTES_PER_HOUR + entry.minute
+end
+
+local function is_follow_up(previous, entry, group_minutes)
+    return previous ~= nil
+        and previous.name == entry.name
+        and previous.faction == entry.faction
+        and get_minute_of_day(entry) - get_minute_of_day(previous) <= group_minutes
+end
+
+local function is_above(position, limit)
+    return position < limit - EPSILON
+end
+
+local function is_below(position, limit)
+    return position > limit + EPSILON
+end
+
+local function new_rule_block(rule, label, height)
+    return { kind = "rule", rule = rule, label = label, height = height }
+end
+
+function new(cfg)
+    local font = cfg.font
+    local text_h = cfg.text_h
+    local width = cfg.width
+    local max_chars = cfg.max_chars
+    local view_h = cfg.view_h
+    local shrink = cfg.shrink
+    local row_h = cfg.row_h
+    local pad_top = cfg.pad_top
+    local pad_bottom = cfg.pad_bottom
+    local gap = cfg.gap
+    local divider_h = cfg.divider_h
+    local clamp_lines = cfg.clamp_lines or DEFAULTS.clamp_lines
+    local group_minutes = cfg.group_minutes or DEFAULTS.group_minutes
+    local step = STEP_LINES * row_h
+
+    local entries = {}
+    local version = nil
+    local seen_id = 0
+    local focus_id = nil
+    local live = true
+    local rule_id = nil
+    local placed_rule = nil
+    local placed_owner = nil
+    local scroll_top = 0
+    local content_h = 0
+    local blocks = {}
+    local blocks_by_id = {}
+    local wraps = {}
+    local view = {}
+    local feed = {}
+
+    local function get_clamped(wrapped, more)
+        local lines = {}
+        for index = 1, clamp_lines - 1 do
+            lines[index] = wrapped[index]
+        end
+        local room = width - wd_text.measure(font, format_more(more), text_h)
+        lines[clamp_lines] = wd_text.ellipsize(font, wrapped[clamp_lines] .. font.ellipsis, text_h, room)
+        return lines
+    end
+
+    local function get_wrap(entry, next_wraps)
+        local wrap = wraps[entry]
+        if not wrap then
+            local wrapped = wd_text.wrap(font, entry.text, text_h, width, max_chars)
+            local more = #wrapped - clamp_lines
+            wrap = { lines = wrapped }
+            if more > 0 then
+                wrap.more = more
+                wrap.clamped = get_clamped(wrapped, more)
+            end
+        end
+        next_wraps[entry] = wrap
+        return wrap
+    end
+
+    local function get_message_block(entry, head, next_wraps)
+        local focused = entry.id == focus_id
+        local wrap = get_wrap(entry, next_wraps)
+        local lines = wrap.lines
+        local more = nil
+        if wrap.clamped and not focused then
+            lines = wrap.clamped
+            more = wrap.more
+        end
+        local headed = head or lines[1] == nil
+        local block = blocks_by_id[entry.id]
+        if block and block.lines == lines and block.head == headed and block.focus == focused then
+            block.unread = entry.id > seen_id
+            return block
+        end
+        return {
+            kind = "message",
+            entry = entry,
+            head = headed,
+            lines = lines,
+            more = more,
+            focus = focused,
+            unread = entry.id > seen_id,
+            height = pad_top + (headed and row_h or 0) + #lines * row_h + pad_bottom,
+        }
+    end
+
+    local function place_blocks(next_blocks)
+        local top = 0
+        for _, block in ipairs(next_blocks) do
+            block.top = top
+            content_h = top + block.height
+            top = content_h + gap
+        end
+        blocks = next_blocks
+    end
+
+    local function rebuild()
+        local next_blocks = { new_rule_block("start", START_LABEL, divider_h) }
+        local next_by_id = {}
+        local next_wraps = {}
+        local rule_block = nil
+        local rule_owner = nil
+        local last_entry = nil
+        for index, entry in ipairs(entries) do
+            local previous = last_entry
+            if last_entry and not is_same_day(last_entry, entry) then
+                next_blocks[#next_blocks + 1] = new_rule_block("day", format_date(entry), divider_h)
+                previous = nil
+            end
+            if rule_id and not rule_block and entry.id >= rule_id then
+                rule_block = new_rule_block("new", format_new(#entries - index + 1), divider_h)
+                next_blocks[#next_blocks + 1] = rule_block
+                rule_owner = entry.id
+                previous = nil
+            end
+            local head = not is_follow_up(previous, entry, group_minutes)
+            local block = get_message_block(entry, head, next_wraps)
+            next_blocks[#next_blocks + 1] = block
+            next_by_id[entry.id] = block
+            last_entry = entry
+        end
+        place_blocks(next_blocks)
+        placed_rule = rule_block
+        placed_owner = rule_owner
+        blocks_by_id = next_by_id
+        wraps = next_wraps
+    end
+
+    local function refocus(unfocused_id)
+        local next_blocks = {}
+        for index, block in ipairs(blocks) do
+            local entry = block.entry
+            if entry and (entry.id == focus_id or entry.id == unfocused_id) then
+                block = get_message_block(entry, block.head, wraps)
+                blocks_by_id[entry.id] = block
+            end
+            next_blocks[index] = block
+        end
+        place_blocks(next_blocks)
+    end
+
+    local function is_newer_below()
+        local last = blocks[#blocks]
+        return not live and not last.focus and is_below(content_h, scroll_top + view_h)
+    end
+
+    local function get_view_bottom()
+        if is_newer_below() then
+            return scroll_top + view_h - shrink
+        end
+        return scroll_top + view_h
+    end
+
+    local function update_view()
+        local view_bottom = get_view_bottom()
+        local older_count = 0
+        local newer_count = 0
+        local new_below = 0
+        for _, block in ipairs(blocks) do
+            if block.kind == "message" and not block.focus then
+                if is_above(block.top, scroll_top) then
+                    older_count = older_count + 1
+                end
+                if is_below(block.top + block.height, view_bottom) then
+                    newer_count = newer_count + 1
+                    if block.unread then
+                        new_below = new_below + 1
+                    end
+                end
+            end
+        end
+        view.blocks = blocks
+        view.seen_id = seen_id
+        view.scroll_top = scroll_top
+        view.view_h = view_bottom - scroll_top
+        view.content_h = content_h
+        view.live = live
+        view.focus_id = focus_id
+        view.older_count = older_count
+        view.newer_count = newer_count
+        view.new_below = new_below
+    end
+
+    local function commit()
+        local max_top = content_h - view_h
+        if live then
+            scroll_top = max_top
+        end
+        scroll_top = math.min(math.max(scroll_top, 0), max_top)
+        update_view()
+    end
+
+    local function get_focus_top(block)
+        local first = entries[1]
+        if first and first.id == focus_id then
+            return 0
+        end
+        return placed_owner == focus_id and placed_rule.top or block.top
+    end
+
+    local function reveal_focus()
+        local block = blocks_by_id[focus_id]
+        local top = get_focus_top(block)
+        local bottom = block.top + block.height
+        local above = is_above(top, scroll_top)
+        if not above and not is_below(bottom, get_view_bottom()) then
+            return
+        end
+        local room = view_h - shrink
+        if above or is_below(bottom - top, room) then
+            scroll_top = top
+        else
+            scroll_top = bottom - room
+        end
+    end
+
+    local function refresh(reveal, unfocused_id)
+        local anchor = blocks_by_id[focus_id]
+        local offset = anchor and anchor.top - scroll_top
+        if unfocused_id then
+            refocus(unfocused_id)
+        else
+            rebuild()
+        end
+        if offset then
+            scroll_top = blocks_by_id[focus_id].top - offset
+        end
+        if reveal and not live then
+            reveal_focus()
+        end
+        commit()
+    end
+
+    local function find_index(id)
+        for index, entry in ipairs(entries) do
+            if entry.id == id then
+                return index
+            end
+        end
+        return nil
+    end
+
+    local function focus_index(index)
+        local entry = entries[index]
+        if not entry then
+            return false
+        end
+        local unfocused_id = focus_id
+        focus_id = entry.id
+        live = index == #entries
+        refresh(true, unfocused_id)
+        return true
+    end
+
+    function feed.set_messages(messages, next_version, next_seen_id)
+        if next_version == version then
+            return
+        end
+        version = next_version
+        seen_id = next_seen_id
+        entries = {}
+        for index, entry in ipairs(messages) do
+            entries[index] = entry
+        end
+        if live or not find_index(focus_id) then
+            local fallback = live and entries[#entries] or entries[1]
+            focus_id = fallback and fallback.id
+        end
+        refresh(false)
+    end
+
+    function feed.set_seen(next_seen_id)
+        if next_seen_id == seen_id then
+            return
+        end
+        seen_id = next_seen_id
+        for _, block in ipairs(blocks) do
+            if block.kind == "message" then
+                block.unread = block.entry.id > seen_id
+            end
+        end
+        update_view()
+    end
+
+    function feed.open(next_seen_id)
+        seen_id = next_seen_id
+        local newest = entries[#entries]
+        focus_id = newest and newest.id
+        live = true
+        rule_id = nil
+        for _, entry in ipairs(entries) do
+            if entry.id > seen_id then
+                focus_id = entry.id
+                live = false
+                rule_id = entry.id
+                break
+            end
+        end
+        refresh(true)
+    end
+
+    function feed.on_wheel(direction)
+        local index = find_index(focus_id)
+        if not index then
+            return false
+        end
+        local block = blocks_by_id[focus_id]
+        if direction > 0 then
+            local focus_top = get_focus_top(block)
+            if is_above(focus_top, scroll_top) then
+                live = false
+                scroll_top = math.max(focus_top, scroll_top - step)
+                commit()
+                return true
+            end
+            return focus_index(index - 1)
+        end
+        local bottom = block.top + block.height
+        if is_below(bottom, get_view_bottom()) then
+            scroll_top = math.min(scroll_top + step, bottom - view_h + shrink)
+            commit()
+            return true
+        end
+        if index == #entries then
+            local changed = not live
+            live = true
+            commit()
+            return changed
+        end
+        return focus_index(index + 1)
+    end
+
+    function feed.jump_latest()
+        local newest = entries[#entries]
+        if newest and newest.id ~= focus_id then
+            focus_index(#entries)
+            return
+        end
+        live = true
+        commit()
+    end
+
+    function feed.get_view()
+        return view
+    end
+
+    rebuild()
+    commit()
+    return feed
+end

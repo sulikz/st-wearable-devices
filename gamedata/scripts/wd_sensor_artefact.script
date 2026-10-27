@@ -1,3 +1,6 @@
+MAX_DISTANCE = 30
+SCAN_INTERVAL_MS = 1000
+
 local ARTEFACT = {
     [clsid.artefact] = true,
     [clsid.artefact_s] = true,
@@ -20,15 +23,59 @@ local function get_kind(section)
 end
 
 local function is_artefact(obj)
-    return ARTEFACT[obj:clsid()] == true and KIND[get_kind(obj:section())] == true
+    return ARTEFACT[obj:clsid()] == true
+        and KIND[get_kind(obj:section())] == true
+        and not game_setup.is_world_item(obj:id())
+end
+
+function list_nearby()
+    local actor = db.actor
+    local sections = {}
+    if not actor then
+        return sections
+    end
+    level.iterate_nearest(actor:position(), MAX_DISTANCE, function(obj)
+        if obj and is_artefact(obj) then
+            sections[#sections + 1] = obj:section()
+        end
+    end)
+    return sections
 end
 
 function new(cfg)
-    cfg.sense = wd_sensor_proximity.new({
+    local scan = wd_sensor_proximity.new({
         predicate = is_artefact,
-        max_distance = cfg.max_distance or 30,
+        max_distance = cfg.max_distance or MAX_DISTANCE,
         min_repeat = 1500,
         max_repeat = 1500,
     })
-    return wd_sensor_pulse.new(cfg)
+    local next_scan_at = 0
+    local sensed = nil
+    local function rescan()
+        next_scan_at = 0
+    end
+    local is_enabled = cfg.enabled
+    cfg.enabled = function()
+        if is_enabled() then
+            return true
+        end
+        rescan()
+        return false
+    end
+    cfg.sense = function()
+        local now = time_global()
+        if now >= next_scan_at then
+            next_scan_at = now + SCAN_INTERVAL_MS
+            sensed = scan()
+        end
+        return sensed
+    end
+    local kernel = wd_sensor_pulse.new(cfg)
+    local reset_pulse = kernel.reset
+    kernel.rescan = rescan
+    function kernel.reset()
+        rescan()
+        reset_pulse()
+    end
+    return kernel
 end

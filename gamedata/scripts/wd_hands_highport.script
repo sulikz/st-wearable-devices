@@ -141,7 +141,7 @@ local function get_weapon_traits(section)
         traits = {
             group = GROUP_BY_KIND[kind] or "other",
             sight_base = resolve_sight_base(section, base),
-            carryable = kind ~= "w_melee" and class ~= "II_BOLT",
+            carryable = kind ~= "w_melee" and class ~= "II_BOLT" and not wd_hands_empty.is_managed_section(section),
         }
         traits_by_section[section] = traits
     end
@@ -166,20 +166,14 @@ local function is_carryable(section)
     return section ~= nil and get_weapon_traits(section).carryable
 end
 
-local function wants_carry(item, section)
+local function wants_carry(section)
     if not wd_inspect.is_pose_up() then
         return false
     end
     if not (db.actor and db.actor:alive()) then
         return false
     end
-    if not item then
-        return false
-    end
     if not is_carryable(section) then
-        return false
-    end
-    if wd_hands_empty.is_drawn() then
         return false
     end
     return not game.actor_weapon_lowered()
@@ -257,18 +251,14 @@ local function drop_stale_blend_move(item)
     apply_blend_move(false, item)
 end
 
-local function ease_smoothstep(ratio)
-    ratio = clamp(ratio, 0, 1)
-    return ratio * ratio * (3 - 2 * ratio)
-end
-
 function get_highport_power(elapsed_ms)
     if elapsed_ms < HIGHPORT_IN_MS then
-        return HIGHPORT_OVERSHOOT * ease_smoothstep(elapsed_ms / HIGHPORT_IN_MS)
+        return HIGHPORT_OVERSHOOT * wd_hands_offset.ease_smooth(elapsed_ms / HIGHPORT_IN_MS)
     end
     if elapsed_ms < HIGHPORT_IN_MS + HIGHPORT_SETTLE_MS then
         return HIGHPORT_OVERSHOOT
-            + (1.0 - HIGHPORT_OVERSHOOT) * ease_smoothstep((elapsed_ms - HIGHPORT_IN_MS) / HIGHPORT_SETTLE_MS)
+            + (1.0 - HIGHPORT_OVERSHOOT)
+                * wd_hands_offset.ease_smooth((elapsed_ms - HIGHPORT_IN_MS) / HIGHPORT_SETTLE_MS)
     end
     return 1.0
 end
@@ -407,7 +397,7 @@ function actor_on_update()
     local now = time_global()
     local item = db.actor and db.actor:active_item()
     local section = item and item:section()
-    local blend_move_wanted = wants_carry(item, section)
+    local blend_move_wanted = wants_carry(section)
     local highport_wanted = blend_move_wanted and wd_inspect.is_pose_held()
     set_blend_move_override(blend_move_wanted, item)
     if highport_wanted then

@@ -11,7 +11,7 @@ PARAMS = {
     promin_offset = d_promin_config.LIGHT_OFFSET,
     vektor_offset = d_vektor_config.LIGHT_OFFSET,
     vektor_led_anomaly_offset = d_vektor_config.LED_ANOMALY_OFFSET,
-    vektor_led_artefact_offset = d_vektor_config.LED_ARTEFACT_OFFSET,
+    vektor_led_rad_offset = d_vektor_config.LED_RAD_OFFSET,
 }
 
 local DEFAULTS = {
@@ -35,10 +35,10 @@ local DEFAULTS = {
         PARAMS.vektor_led_anomaly_offset[2],
         PARAMS.vektor_led_anomaly_offset[3],
     },
-    vektor_led_artefact_offset = {
-        PARAMS.vektor_led_artefact_offset[1],
-        PARAMS.vektor_led_artefact_offset[2],
-        PARAMS.vektor_led_artefact_offset[3],
+    vektor_led_rad_offset = {
+        PARAMS.vektor_led_rad_offset[1],
+        PARAMS.vektor_led_rad_offset[2],
+        PARAMS.vektor_led_rad_offset[3],
     },
 }
 
@@ -94,16 +94,16 @@ function push_lights()
         push_light(light, PARAMS.screen, PARAMS.screen_range, PARAMS[screen.offset_key], screen.get_level())
     end
     push_light(
-        get_light_of("vektor_ring"),
+        get_light_of("vektor_led_anomaly"),
         d_vektor_config.LED_ANOMALY_COLOR,
         d_vektor_config.LED_RANGE,
         PARAMS.vektor_led_anomaly_offset
     )
     push_light(
-        get_light_of("vektor_arrow"),
-        d_vektor_config.LED_ARTEFACT_COLOR,
+        get_light_of("vektor_led_rad"),
+        d_vektor_config.LED_RAD_COLOR,
         d_vektor_config.LED_RANGE,
-        PARAMS.vektor_led_artefact_offset
+        PARAMS.vektor_led_rad_offset
     )
 end
 
@@ -134,7 +134,7 @@ function register()
             promin_offset = wd_gui.new_slider(-0.2, 0.2),
             vektor_offset = wd_gui.new_slider(-0.2, 0.2),
             vektor_led_anomaly_offset = wd_gui.new_slider(-0.2, 0.2),
-            vektor_led_artefact_offset = wd_gui.new_slider(-0.2, 0.2),
+            vektor_led_rad_offset = wd_gui.new_slider(-0.2, 0.2),
         },
     })
     wd_gui.register_tab({
@@ -213,9 +213,9 @@ function register()
             { "vektor_led_anomaly_offset", 1, 0.001, "Anomaly x" },
             { "vektor_led_anomaly_offset", 2, 0.001, "Anomaly y" },
             { "vektor_led_anomaly_offset", 3, 0.001, "Anomaly z" },
-            { "vektor_led_artefact_offset", 1, 0.001, "Artefact x" },
-            { "vektor_led_artefact_offset", 2, 0.001, "Artefact y" },
-            { "vektor_led_artefact_offset", 3, 0.001, "Artefact z" },
+            { "vektor_led_rad_offset", 1, 0.001, "Rad x" },
+            { "vektor_led_rad_offset", 2, 0.001, "Rad y" },
+            { "vektor_led_rad_offset", 3, 0.001, "Rad z" },
         },
     })
 end

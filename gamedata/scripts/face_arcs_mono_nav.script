@@ -1,0 +1,121 @@
+local DIAL_TEXTURE = "wd\\ui\\faces\\arcs_mono\\dial_nav"
+local TEXT_FONT = "face_text"
+local NO_SUFFIX = ""
+local MAX_KILOMETERS = 9.9
+local NO_LINES = {}
+
+FACE = {
+    rect = wd_face_baked.FACE_RECT,
+    opening_radius = wd_face_baked.OPENING_RADIUS,
+    requires = { "target", "title", "arcs" },
+    layers = {
+        {
+            id = "compass",
+            xml_file = "ui_face_arcs_mono_nav_compass.xml",
+            window = "face_arcs_mono_nav_compass",
+            node = "face_arcs_mono_nav_compass:ring",
+            texture = "face_arcs_mono_nav_compass",
+            texture_file = "wd\\ui\\faces\\arcs_mono\\compass",
+            pivot = { 0, 0 },
+            scale = 1,
+            lift = 0.0002,
+            roll = 0,
+            driver = "north",
+        },
+        {
+            id = "arrow",
+            xml_file = "ui_face_arcs_mono_nav_arrow.xml",
+            window = "face_arcs_mono_nav_arrow",
+            node = "face_arcs_mono_nav_arrow:arrow",
+            texture = "face_arcs_mono_nav_arrow",
+            texture_file = wd_face_arcs.SPRITES_TEXTURE,
+            pivot = wd_face_baked.NAV_ARROW_PIVOT,
+            scale = 1,
+            lift = 0.0002,
+            roll = 0,
+            driver = "target",
+        },
+    },
+}
+
+class("UIFaceNav")(CUIScriptWnd)
+
+function UIFaceNav:__init(ctx)
+    super()
+    self.ctx = ctx
+    local binder = wd_screen.new_binder(ctx.shader)
+    self:Show(true)
+    self:Enable(true)
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_face_arcs_mono_nav.xml")
+    xml:InitWindow("face_arcs_mono_nav", 0, self)
+    self.dial = xml:InitStatic("face_arcs_mono_nav:face", self)
+    self.arcs = wd_face_arcs.new(self, ctx)
+    local font = wd_fonts.get_font(TEXT_FONT)
+    self.last_title = false
+    self.title = ctx.new_text_block({
+        parent = self,
+        binder = binder,
+        font = font,
+        max_chars = wd_face_baked.NAV_TITLE_CHARS,
+        lines = wd_face_baked.NAV_TITLE_LINES,
+        row = wd_face_baked.NAV_TITLE_ROW,
+        line_pitch = wd_face_baked.NAV_TITLE_PITCH,
+        align = "bottom",
+        line_align = "center",
+    })
+    self.pill = xml:InitStatic("face_arcs_mono_nav:pill", self)
+    self.distance = ctx.new_text_line({
+        parent = self,
+        binder = binder,
+        font = font,
+        max_chars = wd_face_baked.NAV_DISTANCE_CHARS,
+        row = wd_face_baked.NAV_DISTANCE_ROW,
+    })
+    self.tinted = { self.dial, self.pill }
+    ctx.fit(self.tinted)
+    binder.set(self.dial, "face_dial_nav", DIAL_TEXTURE)
+    binder.set(self.pill, "face_arcs_mono_nav_pill", wd_face_arcs.SPRITES_TEXTURE)
+end
+
+local function get_distance_text(meters)
+    local rounded = math.floor(meters + 0.5)
+    if rounded < 1000 then
+        return string.format("%03d M", rounded)
+    end
+    return string.format("%.1fKM", math.min(math.floor(meters / 100 + 0.5) / 10, MAX_KILOMETERS))
+end
+
+function UIFaceNav:update_title()
+    local title = self.ctx.get_target_title()
+    if title == self.last_title then
+        return
+    end
+    self.last_title = title
+    self.title.set_lines(title and self.title.fit_lines(title, NO_SUFFIX) or NO_LINES)
+end
+
+function UIFaceNav:update_distance()
+    local meters = self.ctx.get_target_distance()
+    local shown = meters ~= nil
+    if shown ~= self.pill_shown then
+        self.pill_shown = shown
+        self.pill:Show(shown)
+    end
+    self.distance.set_visible(shown)
+    if meters then
+        self.distance.set_text(get_distance_text(meters))
+    end
+end
+
+function UIFaceNav:update_values()
+    self:update_title()
+    self:update_distance()
+    self.title.set_tint(self.ctx.get_tint("ok"))
+    self.distance.set_tint(self.ctx.get_tint("ok", wd_face_tones.BG))
+    self.arcs.update()
+end
+
+function new_screen(ctx)
+    return UIFaceNav(ctx)
+end

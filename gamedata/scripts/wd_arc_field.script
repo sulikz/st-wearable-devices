@@ -1,0 +1,246 @@
+LANE = "wd_arc_field"
+MIN_BUS_VERSION = 7
+UPDATE_MS = 50
+ELECTRIC_HIT = "shock"
+SENSE_REACH = 25
+DEFAULT_SHAPE_RADIUS = 3
+FIELD_SHOWS = 0.3
+FADE_FROM = 0.7
+MAGNETISE_ABOVE = 1
+MAGNETISE_RATE = 0.12
+MAGNETISE_MAX = 0.6
+DEGAUSS_MIN = 0.02
+NO_DEGAUSS = -100
+ARC_BURST_HZ = 24
+FLARE_ABOVE = 0.7
+STEADY_STRENGTH = 0.6
+FLARE_LOOKBACK = 48
+COMPASS_HZ = 10
+FIELD_START = 10
+EDGE_FIELD = 20
+
+local OWNER = "Wearable Devices"
+local DESCRIPTION = "Electra field at the wrist in view space and mask magnetisation, the last degauss"
+local MIN_DISTANCE = 0.01
+local U32 = 4294967296
+local ARC_SCALE = FIELD_SHOWS * FIELD_START / (1 - FIELD_SHOWS / EDGE_FIELD)
+local ARC_CORE = ARC_SCALE / EDGE_FIELD
+
+local token = nil
+local electric_by_section = {}
+local reach_by_id = {}
+local arcs = {}
+local arc_count = 0
+local sense_origin = nil
+local origin_x, origin_z = 0, 0
+local last_update_at = nil
+local compass_sample = nil
+local compass_turn = 0
+local field_row = { 0, 0, 0, 0 }
+local degauss_row = { NO_DEGAUSS, 0, 0, 0 }
+local rows = { field_row, degauss_row }
+local published = { {}, {} }
+
+local function multiply_u32(lhs, rhs)
+    local lhs_low, rhs_low = lhs % 65536, rhs % 65536
+    local lhs_high, rhs_high = (lhs - lhs_low) / 65536, (rhs - rhs_low) / 65536
+    return (lhs_low * rhs_low + (lhs_high * rhs_low + lhs_low * rhs_high) % 65536 * 65536) % U32
+end
+
+function get_burst_hash(seed)
+    local state = (multiply_u32(seed % U32, 747796405) + 2891336453) % U32
+    local word = multiply_u32(bit.bxor(bit.rshift(state, bit.rshift(state, 28) + 4), state) % U32, 277803737)
+    return bit.bxor(bit.rshift(word, 22), word) % U32 / (U32 - 1)
+end
+
+local function is_electric(obj)
+    local section = obj:section()
+    local electric = electric_by_section[section]
+    if electric == nil then
+        electric = ini_sys:r_string_ex(section, "hit_type") == ELECTRIC_HIT
+        electric_by_section[section] = electric
+    end
+    return electric
+end
+
+local function read_shape_radius(id)
+    local radius = 0
+    local data = utils_stpk.get_object_data(alife_object(id))
+    for _, shape in ipairs(data and data.shapes or {}) do
+        if shape.radius then
+            radius = math.max(radius, shape.radius)
+        else
+            radius = math.max(radius, 0.5 * math.max(shape.v1:magnitude(), shape.v2:magnitude(), shape.v3:magnitude()))
+        end
+    end
+    return radius
+end
+
+local function get_reach(obj)
+    local id = obj:id()
+    local reach = reach_by_id[id]
+    if not reach then
+        local ok, radius = pcall(read_shape_radius, id)
+        if not (ok and radius > 0) then
+            radius = DEFAULT_SHAPE_RADIUS
+        end
+        reach = radius * obj:get_anomaly_radius()
+        reach_by_id[id] = reach
+    end
+    return reach
+end
+
+local function take_arc(obj)
+    if not (wd_sensor_anomaly.is_anomaly(obj) and is_electric(obj)) then
+        return
+    end
+    local pos = obj:position()
+    local reach = get_reach(obj)
+    local edge = math.max(sense_origin:distance_to(pos) - reach, 0)
+    if edge >= FIELD_START then
+        return
+    end
+    arc_count = arc_count + 1
+    local arc = arcs[arc_count]
+    if not arc then
+        arc = {}
+        arcs[arc_count] = arc
+    end
+    arc.x, arc.z, arc.reach, arc.edge = pos.x, pos.z, reach, edge
+end
+
+local function sense_arcs(origin)
+    arc_count = 0
+    sense_origin = origin
+    origin_x, origin_z = origin.x, origin.z
+    level.iterate_nearest(origin, FIELD_START + SENSE_REACH, take_arc)
+end
+
+local function get_fade(edge)
+    return 1 - clamp((edge / FIELD_START - FADE_FROM) / (1 - FADE_FROM), 0, 1)
+end
+
+local function get_field()
+    local field_x, field_z = 0, 0
+    for arc_index = 1, arc_count do
+        local arc = arcs[arc_index]
+        local dx, dz = origin_x - arc.x, origin_z - arc.z
+        local distance = math.max(math.sqrt(dx * dx + dz * dz), MIN_DISTANCE)
+        local pull = ARC_SCALE / (arc.edge + ARC_CORE) * get_fade(arc.edge) / distance
+        field_x, field_z = field_x + dz * pull, field_z - dx * pull
+    end
+    return field_x, field_z
+end
+
+local function get_burst_field(burst)
+    local flare = burst
+    while flare > burst - FLARE_LOOKBACK and get_burst_hash(flare) <= FLARE_ABOVE do
+        flare = flare - 1
+    end
+    local strength = flare == burst and 1 or STEADY_STRENGTH
+    local field_x, field_z = 0, 0
+    for arc_index = 1, arc_count do
+        local arc = arcs[arc_index]
+        local seed = (flare * 64 + arc_index) * 2
+        local angle = 2 * math.pi * get_burst_hash(seed)
+        local spread = arc.reach * math.sqrt(get_burst_hash(seed + 1))
+        local dx = origin_x - arc.x - spread * math.cos(angle)
+        local dz = origin_z - arc.z - spread * math.sin(angle)
+        local distance = math.max(math.sqrt(dx * dx + dz * dz), MIN_DISTANCE)
+        local pull = strength * ARC_SCALE / (distance + ARC_CORE) * get_fade(arc.edge) / distance
+        field_x, field_z = field_x + dz * pull, field_z - dx * pull
+    end
+    return field_x, field_z
+end
+
+function get_compass_turn()
+    if arc_count == 0 then
+        return 0
+    end
+    local sample = math.floor(time_global() / 1000 * COMPASS_HZ)
+    if sample ~= compass_sample then
+        compass_sample = sample
+        local field_x, field_z = get_burst_field(math.floor(sample * ARC_BURST_HZ / COMPASS_HZ))
+        compass_turn = math.atan2(field_x, 1 + field_z)
+    end
+    return compass_turn
+end
+
+local function is_worn()
+    return d_promin.is_worn() or d_vektor.is_worn() or d_watch.has_watch()
+end
+
+local function set_field(field_x, field_z, seconds, dt)
+    local strength = math.sqrt(field_x * field_x + field_z * field_z)
+    local magnetisation = field_row[4]
+    if strength > MAGNETISE_ABOVE then
+        magnetisation = math.min(MAGNETISE_MAX, magnetisation + (strength - MAGNETISE_ABOVE) * MAGNETISE_RATE * dt)
+    elseif strength < FIELD_SHOWS and magnetisation > DEGAUSS_MIN then
+        degauss_row[1], degauss_row[2] = seconds, magnetisation
+        magnetisation = 0
+    end
+    local camera = wd_core.get_render_device()
+    local right, top, dir = camera.cam_right, camera.cam_top, camera.cam_dir
+    field_row[1] = field_x * right.x + field_z * right.z
+    field_row[2] = field_x * top.x + field_z * top.z
+    field_row[3] = field_x * dir.x + field_z * dir.z
+    field_row[4] = magnetisation
+end
+
+local function clear_field()
+    arc_count = 0
+    field_row[1], field_row[2], field_row[3], field_row[4] = 0, 0, 0, 0
+    degauss_row[1], degauss_row[2] = NO_DEGAUSS, 0
+end
+
+local function publish()
+    local changed = false
+    for row_index = 1, #rows do
+        local row, sent = rows[row_index], published[row_index]
+        for column = 1, 4 do
+            if sent[column] ~= row[column] then
+                sent[column] = row[column]
+                changed = true
+            end
+        end
+    end
+    if changed then
+        shader_bus.set_array(token, 0, rows)
+    end
+end
+
+local function update()
+    local now = time_global()
+    local dt = last_update_at and (now - last_update_at) / 1000 or 0
+    last_update_at = now
+    if is_worn() then
+        sense_arcs(db.actor:position())
+        local field_x, field_z = get_field()
+        set_field(field_x, field_z, now / 1000, dt)
+    else
+        clear_field()
+    end
+    publish()
+end
+
+local function reset_level()
+    reach_by_id = {}
+    clear_field()
+end
+
+function register()
+    if not (shader_bus and shader_bus.version() >= MIN_BUS_VERSION) then
+        return
+    end
+    token = shader_bus.register(LANE, OWNER, DESCRIPTION)
+    if not token then
+        return
+    end
+    wd_core.register({
+        id = "wd_arc_field",
+        callbacks = {
+            actor_on_update = { { update, interval = UPDATE_MS } },
+            actor_on_net_destroy = { reset_level },
+        },
+    })
+end

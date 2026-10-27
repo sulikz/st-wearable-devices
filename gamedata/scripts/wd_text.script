@@ -1,0 +1,336 @@
+local MARK_LIMIT = 9
+local RESET_BYTE = 1
+local FIT_EPSILON = 1e-9
+
+local scratch_pos = vector2()
+local scratch_size = vector2()
+local scratch_rect = Frect()
+
+RESET = string.char(RESET_BYTE)
+
+function mark(index)
+    return string.char(index + 1)
+end
+
+local CYRILLIC_LOWER = "[\184\224-\255]"
+local CYRILLIC_UPPER = { [string.char(0xB8)] = string.char(0xA8) }
+for code = 0xE0, 0xFF do
+    CYRILLIC_UPPER[string.char(code)] = string.char(code - 0x20)
+end
+
+function get_upper(text)
+    local upper = string.upper(text)
+    if not string.find(upper, CYRILLIC_LOWER) then
+        return upper
+    end
+    return (string.gsub(upper, CYRILLIC_LOWER, CYRILLIC_UPPER))
+end
+
+local function get_scale(font, height)
+    return height / font.glyph_height
+end
+
+local function sum_glyphs(glyphs, text)
+    local width = 0
+    local count = 0
+    for index = 1, #text do
+        local glyph = glyphs[string.byte(text, index)]
+        if glyph then
+            width = width + glyph[3] - glyph[1]
+            count = count + 1
+        end
+    end
+    return width, count
+end
+
+function measure(font, text, height)
+    return sum_glyphs(font.glyphs, text) * get_scale(font, height)
+end
+
+function get_max_chars(font, height, width)
+    local narrowest = math.huge
+    for _, glyph in pairs(font.glyphs) do
+        narrowest = math.min(narrowest, glyph[3] - glyph[1])
+    end
+    return math.floor(width / (narrowest * get_scale(font, height)) + FIT_EPSILON)
+end
+
+function ellipsize(font, text, height, max_width)
+    if measure(font, text, height) <= max_width + FIT_EPSILON then
+        return text
+    end
+    local glyphs = font.glyphs
+    local ellipsis = font.ellipsis
+    local budget = max_width - measure(font, ellipsis, height)
+    local scale = get_scale(font, height)
+    local width = 0
+    local stop = 0
+    for index = 1, #text do
+        local glyph = glyphs[string.byte(text, index)]
+        local advance = glyph and (glyph[3] - glyph[1]) * scale or 0
+        if width + advance > budget then
+            break
+        end
+        width = width + advance
+        stop = index
+    end
+    return (string.gsub(string.sub(text, 1, stop), "%s+$", "")) .. ellipsis
+end
+
+function new_line(cfg)
+    local font = cfg.font
+    local glyphs = font.glyphs
+    local scale = get_scale(font, cfg.height)
+    local pool = cfg.max_chars
+    local tints = cfg.tints or {}
+    local default_tint = cfg.tint or GetARGB(255, 255, 255, 255)
+    local statics = {}
+    local applied = {}
+    local glyph_marks = {}
+    local placed_glyphs = {}
+    local placed_lefts = {}
+    local placed_widths = {}
+    local visible_flags = {}
+    local drawn = 0
+    local shown = true
+    local line = { statics = statics }
+
+    for index = 1, pool do
+        local static = CUIStatic()
+        static:SetAutoDelete(true)
+        cfg.binder.set(static, font.id)
+        static:SetStretchTexture(true)
+        static:Show(false)
+        cfg.parent:AttachChild(static)
+        statics[index] = static
+        visible_flags[index] = false
+    end
+
+    local function show_static(index, visible)
+        if visible_flags[index] ~= visible then
+            visible_flags[index] = visible
+            statics[index]:Show(visible)
+        end
+    end
+
+    local function paint(index)
+        local tint = tints[glyph_marks[index]] or default_tint
+        if applied[index] ~= tint then
+            applied[index] = tint
+            statics[index]:SetTextureColor(tint)
+        end
+    end
+
+    local function place(index, glyph, cursor, mark_index)
+        local static = statics[index]
+        local width = (glyph[3] - glyph[1]) * scale
+        if placed_glyphs[index] ~= glyph then
+            placed_glyphs[index] = glyph
+            static:SetTextureRect(scratch_rect:set(glyph[1], glyph[2], glyph[3], glyph[4]))
+        end
+        if placed_lefts[index] ~= cursor then
+            placed_lefts[index] = cursor
+            static:SetWndPos(scratch_pos:set(cursor, cfg.y))
+        end
+        if placed_widths[index] ~= width then
+            placed_widths[index] = width
+            static:SetWndSize(scratch_size:set(width, cfg.height))
+        end
+        glyph_marks[index] = mark_index
+        paint(index)
+        show_static(index, shown)
+        return width
+    end
+
+    function line.set_text(text)
+        text = text or ""
+        if text == line.text then
+            return
+        end
+        line.text = text
+        local cursor = cfg.x
+        if cfg.align == "center" then
+            cursor = cursor + (cfg.width - measure(font, text, cfg.height)) / 2
+        elseif cfg.align == "right" then
+            cursor = cursor + cfg.width - measure(font, text, cfg.height)
+        end
+        local count = 0
+        local mark_index = 0
+        for index = 1, #text do
+            if count == pool then
+                break
+            end
+            local byte = string.byte(text, index)
+            if byte < MARK_LIMIT then
+                mark_index = byte - RESET_BYTE
+            else
+                local glyph = glyphs[byte]
+                if glyph then
+                    count = count + 1
+                    cursor = cursor + place(count, glyph, cursor, mark_index)
+                end
+            end
+        end
+        for index = count + 1, drawn do
+            show_static(index, false)
+        end
+        drawn = count
+    end
+
+    function line.set_tint(tint, accents)
+        if tint == default_tint and not accents then
+            return
+        end
+        default_tint = tint
+        tints = accents or tints
+        for index = 1, drawn do
+            paint(index)
+        end
+    end
+
+    function line.set_visible(visible)
+        shown = visible
+        for index = 1, drawn do
+            show_static(index, visible)
+        end
+    end
+
+    return line
+end
+
+local function is_fitting(budget, text)
+    local width, count = sum_glyphs(budget.glyphs, text)
+    return width * budget.scale <= budget.max_width + FIT_EPSILON and count <= budget.max_chars
+end
+
+local function get_open_mark(line, open)
+    for index = 1, #line do
+        local byte = string.byte(line, index)
+        if byte < MARK_LIMIT then
+            open = byte ~= RESET_BYTE and string.char(byte) or nil
+        end
+    end
+    return open
+end
+
+local function carry_marks(lines)
+    local open
+    for index, line in ipairs(lines) do
+        if open then
+            lines[index] = open .. line
+        end
+        open = get_open_mark(line, open)
+    end
+end
+
+local function split_word(budget, word, lines)
+    local start = 1
+    while true do
+        local stop = start
+        while stop < #word and is_fitting(budget, string.sub(word, start, stop + 1)) do
+            stop = stop + 1
+        end
+        if stop == #word then
+            return string.sub(word, start)
+        end
+        lines[#lines + 1] = string.sub(word, start, stop)
+        start = stop + 1
+    end
+end
+
+local function wrap_paragraph(budget, paragraph, lines)
+    local current
+    for word in string.gmatch(paragraph, "%S+") do
+        local joined = current and current .. " " .. word
+        if joined and is_fitting(budget, joined) then
+            current = joined
+        else
+            if current then
+                lines[#lines + 1] = current
+            end
+            current = is_fitting(budget, word) and word or split_word(budget, word, lines)
+        end
+    end
+    if current then
+        lines[#lines + 1] = current
+    end
+end
+
+function wrap(font, text, height, max_width, max_chars)
+    local budget = {
+        glyphs = font.glyphs,
+        scale = get_scale(font, height),
+        max_width = max_width,
+        max_chars = max_chars,
+    }
+    local lines = {}
+    for paragraph in string.gmatch(text .. "\n", "(.-)\n") do
+        wrap_paragraph(budget, paragraph, lines)
+    end
+    carry_marks(lines)
+    return lines
+end
+
+function new_block(cfg)
+    local lines = {}
+    for index = 1, cfg.lines do
+        lines[index] = new_line({
+            parent = cfg.parent,
+            binder = cfg.binder,
+            font = cfg.font,
+            max_chars = cfg.max_chars,
+            tint = cfg.tint,
+            tints = cfg.tints,
+            x = cfg.x,
+            y = cfg.y + (index - 1) * cfg.line_pitch,
+            width = cfg.width,
+            height = cfg.height,
+            align = cfg.line_align,
+        })
+    end
+    local block = { lines = lines }
+
+    function block.wrap(text)
+        return wrap(cfg.font, text, cfg.height, cfg.width, cfg.max_chars)
+    end
+
+    function block.fit_lines(text, suffix)
+        local limit = #lines
+        local whole = block.wrap(text .. suffix)
+        if #whole <= limit then
+            return whole
+        end
+        local wrapped = suffix == "" and whole or block.wrap(text)
+        local room = cfg.width - measure(cfg.font, suffix, cfg.height)
+        wrapped[limit] = ellipsize(cfg.font, table.concat(wrapped, " ", limit), cfg.height, room) .. suffix
+        for index = #wrapped, limit + 1, -1 do
+            wrapped[index] = nil
+        end
+        return wrapped
+    end
+
+    function block.set_lines(texts)
+        local offset = cfg.align == "bottom" and #texts - #lines or 0
+        for index, line in ipairs(lines) do
+            line.set_text(texts[index + offset])
+        end
+    end
+
+    function block.set_text(text)
+        block.set_lines(block.wrap(text))
+    end
+
+    function block.set_tint(tint, accents)
+        for _, line in ipairs(lines) do
+            line.set_tint(tint, accents)
+        end
+    end
+
+    function block.set_visible(visible)
+        for _, line in ipairs(lines) do
+            line.set_visible(visible)
+        end
+    end
+
+    return block
+end

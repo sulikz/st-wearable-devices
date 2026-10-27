@@ -2,13 +2,13 @@ local IDLE_UPDATE_MS = 250
 local XML_FILE = "ui_wd.xml"
 local WINDOW = "wd"
 local NODE_PREFIX = "wd:"
-local DEFAULT_PAGE = "health"
-local MAP_PAGE = "map_small"
+local DEFAULT_PAGE = d_promin_config.COMMS_PAGE
+local MAP_PAGE = d_promin_config.MAP_PAGE
 
 local PAGE_BUILDERS = {
-    health = d_promin_health_ui.build,
-    main = d_promin_health_ui.build_main,
+    [d_promin_config.HEALTH_PAGE] = d_promin_health_ui.build,
     [MAP_PAGE] = d_promin_map_ui.build,
+    [d_promin_config.COMMS_PAGE] = d_promin_comms_ui.build,
 }
 
 local active_page_id = DEFAULT_PAGE
@@ -30,6 +30,7 @@ function UIPromin:__init()
     xml:ParseFile(XML_FILE)
     xml:InitWindow(WINDOW, 0, self)
     self.ctx = {
+        wnd = self,
         init = function(id)
             return xml:InitStatic(NODE_PREFIX .. id, self)
         end,
@@ -129,6 +130,32 @@ end
 
 function ensure_page(page_id)
     return singleton and singleton:ensure_page(page_id)
+end
+
+local function get_active_handle()
+    return singleton and singleton.pages[active_page_id]
+end
+
+function on_wheel(direction)
+    local handle = get_active_handle()
+    if handle and handle.on_wheel then
+        return handle.on_wheel(direction)
+    end
+    return false
+end
+
+function on_page_key()
+    local handle = get_active_handle()
+    if handle and handle.on_page_key then
+        handle.on_page_key()
+    end
+end
+
+function set_artefact_lit(lit)
+    local page = singleton and singleton.pages[MAP_PAGE]
+    if page then
+        page.set_artefact_lit(lit)
+    end
 end
 
 function update_map(state)

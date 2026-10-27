@@ -4,11 +4,14 @@ local ROOT_BONE_ID = 0
 local parents = {}
 local textures = {}
 local ui_on = {}
-local ui_transforms = {}
+local transforms = {}
 local lights = {}
 local screens_hidden = false
 local models_hidden = {}
 local screens_hidden_by_name = {}
+local mounts = {}
+local mount_poses = {}
+local switch_resets = {}
 
 function get(name)
     if not (name and db.actor) then
@@ -44,11 +47,45 @@ function has_attachment(name)
     return get(name) ~= nil
 end
 
-function set_bone_visible(name, bone, visible)
+local function set_bone_visible(name, bone, visible, passes)
     local attachment = get(name)
-    if attachment then
+    if not attachment then
+        return
+    end
+    for _ = 1, passes or 1 do
         attachment:set_bone_visible(bone, visible, true)
     end
+end
+
+function new_bone_switch(cfg)
+    local bones = cfg.bones
+    local shown = nil
+    local switch = {}
+
+    function switch.show(key)
+        local bone = bones[key]
+        if bone == shown then
+            return
+        end
+        if shown ~= nil then
+            set_bone_visible(cfg.name, shown, false)
+        end
+        if bone ~= nil then
+            set_bone_visible(cfg.name, bone, true, cfg.meshes_per_bone)
+        end
+        shown = bone
+    end
+
+    local resets = switch_resets[cfg.name] or {}
+    switch_resets[cfg.name] = resets
+    resets[#resets + 1] = function(attachment)
+        for _, bone in pairs(bones) do
+            attachment:set_bone_visible(bone, false, true)
+        end
+        shown = nil
+    end
+
+    return switch
 end
 
 function detach(name)
@@ -67,7 +104,31 @@ function detach(name)
     parents[name] = nil
     textures[name] = nil
     ui_on[name] = nil
-    ui_transforms[name] = nil
+    transforms[name] = nil
+    mounts[name] = nil
+end
+
+local function apply_model_transform(attachment, name, transform)
+    local pos, rot = transform.model_pos, transform.model_rot
+    local adjust_pose = mount_poses[mounts[name]]
+    if adjust_pose then
+        pos, rot = adjust_pose(pos, rot)
+    end
+    attachment:set_position(pos[1], pos[2], pos[3])
+    attachment:set_rotation(rot[1], rot[2], rot[3])
+    attachment:set_scale(transform.model_scale)
+end
+
+function set_mount_pose(mount, adjust_pose)
+    mount_poses[mount] = adjust_pose
+    for name, attached_mount in pairs(mounts) do
+        if attached_mount == mount then
+            local attachment = get(name)
+            if attachment then
+                apply_model_transform(attachment, name, transforms[name])
+            end
+        end
+    end
 end
 
 local function apply_ui_scale(attachment, name)
@@ -75,7 +136,7 @@ local function apply_ui_scale(attachment, name)
         attachment:set_ui_scale(0, 0, 0)
         return
     end
-    local transform = ui_transforms[name]
+    local transform = transforms[name]
     local scale = (transform and transform.ui_scale) or 1
     attachment:set_ui_scale(scale, scale, scale)
 end
@@ -272,13 +333,13 @@ function attach(desc)
     end
     textures[desc.name] = {}
     local transform = desc.transforms
+    mounts[desc.name] = desc.mount
+    transforms[desc.name] = transform
     attachment:set_type(TYPE_HUD)
     if desc.bone and not desc.parent then
         attachment:set_parent_bone(desc.bone)
     end
-    attachment:set_position(transform.model_pos[1], transform.model_pos[2], transform.model_pos[3])
-    attachment:set_rotation(transform.model_rot[1], transform.model_rot[2], transform.model_rot[3])
-    attachment:set_scale(transform.model_scale)
+    apply_model_transform(attachment, desc.name, transform)
     if desc.ui then
         attachment:set_ui(desc.ui)
         if desc.ui_bone then
@@ -287,7 +348,6 @@ function attach(desc)
         attachment:set_ui_position(transform.ui_pos[1], transform.ui_pos[2], transform.ui_pos[3])
         attachment:set_ui_rotation(transform.ui_rot[1], transform.ui_rot[2], transform.ui_rot[3])
         ui_on[desc.name] = true
-        ui_transforms[desc.name] = transform
         if transform.ui_scale or screens_hidden or screens_hidden_by_name[desc.name] then
             apply_ui_scale(attachment, desc.name)
         end
@@ -297,6 +357,9 @@ function attach(desc)
         for bone_name, visible in pairs(desc.bone_visible) do
             attachment:set_bone_visible(bone_name, visible, true)
         end
+    end
+    for _, reset_switch in ipairs(switch_resets[desc.name] or {}) do
+        reset_switch(attachment)
     end
     if models_hidden[desc.name] then
         attachment:set_bone_visible(ROOT_BONE_ID, false, true)
@@ -314,18 +377,23 @@ function reapply_transforms(name, transform)
     if not attachment then
         return false
     end
-    attachment:set_position(transform.model_pos[1], transform.model_pos[2], transform.model_pos[3])
-    attachment:set_rotation(transform.model_rot[1], transform.model_rot[2], transform.model_rot[3])
-    attachment:set_scale(transform.model_scale)
+    transforms[name] = transform
+    apply_model_transform(attachment, name, transform)
     if ui_on[name] then
         attachment:set_ui_position(transform.ui_pos[1], transform.ui_pos[2], transform.ui_pos[3])
         attachment:set_ui_rotation(transform.ui_rot[1], transform.ui_rot[2], transform.ui_rot[3])
-        ui_transforms[name] = transform
         if transform.ui_scale or screens_hidden then
             apply_ui_scale(attachment, name)
         end
     end
     return true
+end
+
+function set_ui(name, ui)
+    local attachment = ui_on[name] and get(name)
+    if attachment then
+        attachment:set_ui(ui)
+    end
 end
 
 function get_visual_of(sec)
@@ -552,7 +620,7 @@ local function get_frame_lead()
     if not speed then
         return 0, 0, 0
     end
-    local render = device()
+    local render = wd_core.get_render_device()
     local delta = math.min(render and render.f_time_delta or 0, MAX_LEAD_S)
     return speed.x * delta, speed.y * delta, speed.z * delta
 end
@@ -596,7 +664,7 @@ function new_driven_light(cfg)
 
     local function place_from_camera()
         local offset = cfg.camera_offset
-        local render = offset and device()
+        local render = offset and wd_core.get_render_device()
         if not render then
             return false
         end
@@ -648,7 +716,9 @@ function new_driven_light(cfg)
     return driven
 end
 
-function get_ui_frame(name, ui_rot_deg, att)
+local ui_frame_matrix = nil
+
+function get_ui_frame(name, ui_rot_deg, att, out)
     local attachment = att or get(name)
     if not attachment then
         return nil
@@ -658,11 +728,14 @@ function get_ui_frame(name, ui_rot_deg, att)
         return nil
     end
     local offset = get_offset_matrix(name, ui_rot_deg or { 0, 0, 0 })
-    local frame = matrix():mul_43(bone_mat, offset)
+    ui_frame_matrix = ui_frame_matrix or matrix()
+    local frame = ui_frame_matrix:mul_43(bone_mat, offset)
     local frame_i = frame.i
     local frame_j = frame.j
-    return {
-        i = { x = frame_i.x, y = frame_i.y, z = frame_i.z },
-        j = { x = frame_j.x, y = frame_j.y, z = frame_j.z },
-    }
+    out = out or { i = {}, j = {} }
+    local out_i = out.i
+    local out_j = out.j
+    out_i.x, out_i.y, out_i.z = frame_i.x, frame_i.y, frame_i.z
+    out_j.x, out_j.y, out_j.z = frame_j.x, frame_j.y, frame_j.z
+    return out
 end

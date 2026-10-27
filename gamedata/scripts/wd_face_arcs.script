@@ -1,0 +1,46 @@
+SPRITES_TEXTURE = "wd\\ui\\faces\\arcs_mono\\sprites"
+
+local ARCS = {
+    { key = "hp", read = "get_health" },
+    { key = "psy", read = "get_psy" },
+    { key = "stamina", read = "get_stamina" },
+    { key = "radiation", read = "get_radiation", rising = true, strict_gated = true },
+}
+
+function new(screen, ctx)
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_face_arcs.xml")
+    local arc_binder = wd_screen.new_binder(ctx.arc_shader)
+    local icon_binder = wd_screen.new_binder(ctx.shader)
+    local arcs = { windows = {}, icons = {} }
+    local arc_colors, icon_colors = {}, {}
+    for index, spec in ipairs(ARCS) do
+        local window = xml:InitStatic("face_arcs:arc_" .. spec.key, screen)
+        arc_binder.set(window, "face_arc_" .. spec.key, SPRITES_TEXTURE)
+        arcs.windows[index] = window
+        arc_colors[index] = wd_screen.new_color_group({ window })
+        local icon = xml:InitStatic("face_arcs:icon_" .. spec.key, screen)
+        icon_binder.set(icon, "face_vital_" .. spec.key, SPRITES_TEXTURE)
+        arcs.icons[index] = icon
+        icon_colors[index] = wd_screen.new_color_group({ icon })
+    end
+    ctx.fit(arcs.windows)
+    ctx.fit(arcs.icons)
+
+    function arcs.update()
+        local dose_readable = wd_geiger.is_dose_readable()
+        for index, spec in ipairs(ARCS) do
+            if spec.strict_gated and not dose_readable then
+                arc_colors[index].set(ctx.get_fill(0, "ok"))
+                icon_colors[index].set(ctx.get_tint("ok", wd_face_tones.LINE))
+            else
+                local ratio = wd_vitals[spec.read]()
+                local state = wd_face_tones.get_state(ratio, spec.rising)
+                arc_colors[index].set(ctx.get_fill(ratio, state))
+                icon_colors[index].set(ctx.get_tint(state))
+            end
+        end
+    end
+
+    return arcs
+end

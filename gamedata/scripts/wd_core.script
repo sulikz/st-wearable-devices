@@ -1,6 +1,8 @@
 local registry = {}
 local order = {}
+local timed = {}
 local wired = false
+local render_device = nil
 
 function register(spec)
     if type(spec) ~= "table" or not spec.id then
@@ -28,6 +30,7 @@ end
 function clear()
     registry = {}
     order = {}
+    timed = {}
     wired = false
 end
 
@@ -35,10 +38,15 @@ function get_time_ms()
     return time_global()
 end
 
+function get_render_device()
+    render_device = render_device or device()
+    return render_device
+end
+
 function throttle(interval_ms)
     local next_at = 0
-    return function()
-        local now = time_global()
+    return function(now)
+        now = now or time_global()
         if now < next_at then
             return false
         end
@@ -47,26 +55,41 @@ function throttle(interval_ms)
     end
 end
 
-local function new_wired_handler(handler)
+local function new_guarded_handler(handler)
     local fn = handler[1]
-    if handler.unless_captured then
-        local inner = fn
-        fn = function(...)
-            if wd_blocking.is_input_captured() then
-                return
-            end
-            return inner(...)
-        end
-    end
-    if not handler.interval then
+    local unless = handler.unless
+    if not unless then
         return fn
     end
-    local allow = throttle(handler.interval)
     return function(...)
-        if allow() then
-            fn(...)
+        if unless() then
+            return
+        end
+        return fn(...)
+    end
+end
+
+local function new_timed_dispatcher(entries)
+    return function(...)
+        local now = time_global()
+        for entry_index = 1, #entries do
+            local entry = entries[entry_index]
+            if now >= entry.next_at then
+                entry.next_at = now + entry.interval
+                entry.fn(...)
+            end
         end
     end
+end
+
+local function add_timed_handler(event, fn, interval_ms)
+    local entries = timed[event]
+    if not entries then
+        entries = {}
+        timed[event] = entries
+        RegisterScriptCallback(event, new_timed_dispatcher(entries))
+    end
+    entries[#entries + 1] = { fn = fn, interval = interval_ms, next_at = 0 }
 end
 
 function wire(spec)
@@ -77,10 +100,15 @@ function wire(spec)
     for event, handlers in pairs(callbacks) do
         for handler_index = 1, #handlers do
             local handler = handlers[handler_index]
-            if type(handler) == "table" then
-                RegisterScriptCallback(event, new_wired_handler(handler))
-            else
+            if type(handler) ~= "table" then
                 RegisterScriptCallback(event, handler)
+            else
+                local interval = handler.interval
+                if interval then
+                    add_timed_handler(event, new_guarded_handler(handler), interval)
+                else
+                    RegisterScriptCallback(event, new_guarded_handler(handler))
+                end
             end
         end
     end

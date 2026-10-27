@@ -1,28 +1,163 @@
 local RARE_SPOT = "treasure_searched"
-local DROPS = {
-    { section = "wd_promin_module_map", rare = 0.15 },
-    { section = "wd_promin_upgrade_kit", common = 0.05, rare = 0.15 },
+local RARE_COUNTER = "toolkit_reward_count"
+local SAVE_KEY = "wd_stash_misses"
+local TIER_SAVE_KEY = "wd_stash_tiers"
+local CYCLE_SAVE_KEY = "wd_stash_cycle"
+
+DROPS = {
+    {
+        section = "wd_promin_module_map",
+        rare = 0.10,
+        guarantee = 20,
+        is_installed = function()
+            return d_promin.is_module_installed("map")
+        end,
+    },
+    { section = "wd_promin_upgrade_kit", common = 0.075, rare = 0.175 },
+    {
+        sections = { "wd_504th_patch", "wd_8bitcat_patch", "wd_happysteam_patch", "wd_zero_patch" },
+        common = 0.08,
+        rare = 0.08,
+    },
 }
 
-local function inject_stash_loot(box)
-    local box_id = box:id()
-    if type(treasure_manager.caches[box_id]) ~= "string" then
+local misses = {}
+local granted_tiers = {}
+local cycle_drops = {}
+
+local function is_owned(drop)
+    return db.actor:object(drop.section) ~= nil or drop.is_installed()
+end
+
+local function get_chance(drop, tier)
+    local chance = drop[tier]
+    if chance and drop.guarantee then
+        return chance ^ (1 - (misses[drop.section] or 0) / (drop.guarantee - 1))
+    end
+    return chance
+end
+
+local function pick_section(drop)
+    local sections = drop.sections
+    if not sections then
+        return drop.section
+    end
+    local left = {}
+    for _, section in ipairs(sections) do
+        if not cycle_drops[section] then
+            left[#left + 1] = section
+        end
+    end
+    if #left == 0 then
+        for _, section in ipairs(sections) do
+            cycle_drops[section] = nil
+        end
+        left = sections
+    end
+    local section = left[math.random(#left)]
+    cycle_drops[section] = true
+    return section
+end
+
+local function roll_drop(drop, tier, box)
+    if drop.guarantee and is_owned(drop) then
         return
     end
-    local tier = level.map_has_object_spot(box_id, RARE_SPOT) ~= 0 and "rare" or "common"
+    local chance = get_chance(drop, tier)
+    if not chance then
+        return
+    end
+    if math.random() < chance then
+        alife_create_item(pick_section(drop), box)
+        if drop.guarantee then
+            misses[drop.section] = nil
+        end
+    elseif drop.guarantee then
+        misses[drop.section] = (misses[drop.section] or 0) + 1
+    end
+end
+
+local function has_rare_spot(box_id)
+    return level.map_has_object_spot(box_id, RARE_SPOT) ~= 0
+end
+
+local function get_tier(box_id)
+    return granted_tiers[box_id] or (has_rare_spot(box_id) and "rare" or "common")
+end
+
+local function get_rare_counter()
+    return db.actor and load_var(db.actor, RARE_COUNTER)
+end
+
+local function inject_stash_loot(box, tier)
     for _, drop in ipairs(DROPS) do
-        local chance = drop[tier]
-        if chance and math.random() < chance then
-            alife_create_item(drop.section, box)
+        local ok, err = pcall(roll_drop, drop, tier, box)
+        if not ok then
+            local label = drop.section or table.concat(drop.sections, ", ")
+            printf(string.format("[wd_stash] %s drop failed: %s", label, tostring(err)))
         end
     end
 end
 
+local function on_item_take(item)
+    misses[item:section()] = nil
+end
+
+local function prune_granted_tiers()
+    if not treasure_manager then
+        return
+    end
+    local caches = treasure_manager.caches
+    for box_id in pairs(granted_tiers) do
+        if type(caches[box_id]) ~= "string" then
+            granted_tiers[box_id] = nil
+        end
+    end
+end
+
+function save_state(m_data)
+    prune_granted_tiers()
+    m_data[SAVE_KEY] = misses
+    m_data[TIER_SAVE_KEY] = granted_tiers
+    m_data[CYCLE_SAVE_KEY] = cycle_drops
+end
+
+function load_state(m_data)
+    misses = m_data[SAVE_KEY] or {}
+    granted_tiers = m_data[TIER_SAVE_KEY] or {}
+    cycle_drops = m_data[CYCLE_SAVE_KEY] or {}
+end
+
+function register()
+    wd_core.register({
+        id = "wd_stash",
+        callbacks = {
+            actor_on_item_take = { on_item_take },
+            save_state = { save_state },
+            load_state = { load_state },
+        },
+    })
+end
+
 if treasure_manager and not _G.wd_stash_wrapped then
+    local prev_set = treasure_manager.set_random_stash
+    function treasure_manager.set_random_stash(...)
+        local counter = get_rare_counter()
+        local box_id = prev_set(...)
+        if box_id then
+            granted_tiers[box_id] = get_rare_counter() ~= counter and "rare" or "common"
+        end
+        return box_id
+    end
     local prev_spawn = treasure_manager.try_spawn_treasure
     function treasure_manager.try_spawn_treasure(box)
-        inject_stash_loot(box)
+        local box_id = box:id()
+        local tier = type(treasure_manager.caches[box_id]) == "string" and get_tier(box_id)
+        granted_tiers[box_id] = nil
         prev_spawn(box)
+        if tier then
+            inject_stash_loot(box, tier)
+        end
     end
     _G.wd_stash_wrapped = true
 end

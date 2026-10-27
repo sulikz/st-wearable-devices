@@ -1,0 +1,80 @@
+BG = wd_face_baked.BG
+TEXT = wd_face_baked.TEXT
+LINE = wd_face_baked.LINE
+WARN = { 255, 177, 89 }
+CRIT = { 255, 89, 89 }
+WARN_AT = 0.5
+CRIT_AT = 0.25
+FILL_STATE = { ok = 0, warn = 128, crit = 255 }
+
+local ALERT_RGB = { warn = WARN, crit = CRIT }
+
+function get_state(value, rising, warn_at, crit_at)
+    local reading = rising and 1 - value or value
+    if reading < (crit_at or CRIT_AT) then
+        return "crit"
+    end
+    if reading < (warn_at or WARN_AT) then
+        return "warn"
+    end
+    return "ok"
+end
+
+function get_rgb(state, ok_rgb)
+    return ALERT_RGB[state] or ok_rgb or TEXT
+end
+
+function get_tint(state, level, ok_rgb)
+    local rgb = get_rgb(state, ok_rgb)
+    return wd_screen.get_dimmed_color(level, rgb[1], rgb[2], rgb[3])
+end
+
+function get_fill_color(level, ratio, state)
+    return GetARGB(level, math.floor(clamp(ratio, 0, 1) * 255 + 0.5), 0, FILL_STATE[state])
+end
+
+function get_body_color(level, state, striped)
+    return GetARGB(level, 0, striped and 255 or 0, FILL_STATE[state])
+end
+
+function new_tinter(get_brightness)
+    local tinter = {}
+    local cache, bodies, cached_brightness, level = {}, { {}, {} }, nil, wd_screen.get_brightness_level(nil)
+
+    local function refresh_level()
+        local brightness = get_brightness()
+        if brightness ~= cached_brightness then
+            cache, bodies, cached_brightness = {}, { {}, {} }, brightness
+            level = wd_screen.get_brightness_level(brightness)
+        end
+    end
+
+    function tinter.get_tint(state, ok_rgb)
+        refresh_level()
+        local rgb = get_rgb(state, ok_rgb)
+        local tint = cache[rgb]
+        if not tint then
+            tint = get_tint(state, level, ok_rgb)
+            cache[rgb] = tint
+        end
+        return tint
+    end
+
+    function tinter.get_fill(ratio, state)
+        refresh_level()
+        return get_fill_color(level, ratio, state)
+    end
+
+    function tinter.get_body(state, striped)
+        refresh_level()
+        local colors = bodies[striped and 2 or 1]
+        local color = colors[state]
+        if not color then
+            color = get_body_color(level, state, striped)
+            colors[state] = color
+        end
+        return color
+    end
+
+    return tinter
+end

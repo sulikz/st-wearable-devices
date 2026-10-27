@@ -2,6 +2,8 @@ local SKIP = {
     [clsid.zone_campfire] = true,
     [clsid.zone_radioactive] = true,
     [clsid.zone_radio_s] = true,
+    [clsid.zone_bfuzz] = true,
+    [clsid.zone_bfuzz_s] = true,
 }
 
 local function is_enabled(obj)
@@ -22,7 +24,7 @@ local function is_enabled(obj)
     return true
 end
 
-local function is_anomaly(obj)
+function is_anomaly(obj)
     return obj:is_anomaly() and not SKIP[obj:clsid()] and is_enabled(obj)
 end
 

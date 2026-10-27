@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <face_arcs>
+    <arc_hp x="-0.0134640000" y="-0.0134640000" width="0.0134640000" height="0.0134640000" stretch="1"/>
+    <arc_psy x="0.0000000000" y="-0.0134640000" width="0.0134640000" height="0.0134640000" stretch="1"/>
+    <arc_stamina x="-0.0134640000" y="0.0000000000" width="0.0134640000" height="0.0134640000" stretch="1"/>
+    <arc_radiation x="0.0000000000" y="0.0000000000" width="0.0134640000" height="0.0134640000" stretch="1"/>
+    <icon_hp x="-0.0119820242" y="-0.0019182844" width="0.0014726250" height="0.0014726250" stretch="1"/>
+    <icon_psy x="0.0004456594" y="-0.0119820242" width="0.0014726250" height="0.0014726250" stretch="1"/>
+    <icon_stamina x="-0.0019182844" y="0.0105093992" width="0.0014726250" height="0.0014726250" stretch="1"/>
+    <icon_radiation x="0.0105093992" y="0.0004456594" width="0.0014726250" height="0.0014726250" stretch="1"/>
+  </face_arcs>
+</w>

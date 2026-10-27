@@ -189,7 +189,7 @@ local function get_sprint_state(item, item_state, raised)
 end
 
 local function get_engine_delta_ms()
-    local render = device()
+    local render = wd_core.get_render_device()
     local seconds = render and render.f_time_delta
     return seconds and seconds * 1000 or 0
 end
@@ -272,6 +272,19 @@ local function drive_side(side, speed, power)
         return
     end
     play_side(side, speed, power, true)
+end
+
+function prime_left_layers()
+    if not clip_pairs then
+        return
+    end
+    for pair_index = 1, #clip_pairs do
+        local pair = clip_pairs[pair_index]
+        if not pair.live then
+            game.play_hud_anm(pair.left.path, pair.left.part, 1, 0, true, true)
+            game.stop_hud_anm(pair.left.path, true)
+        end
+    end
 end
 
 local function stop_pair(pair, force)

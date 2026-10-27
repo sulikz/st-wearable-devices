@@ -1,0 +1,40 @@
+LANE = "wd_screen_interference"
+MIN_BUS_VERSION = 7
+UPDATE_MS = 100
+PSY_WEIGHT = 0.6
+
+local OWNER = "Wearable Devices"
+local DESCRIPTION = "device screen interference level in x: 1 in an emission or psy storm, else scaled psy strain"
+
+local token = nil
+local published_level = nil
+
+local function get_level()
+    if xr_conditions.surge_started() then
+        return 1
+    end
+    return clamp(1 - wd_vitals.get_psy(), 0, 1) * PSY_WEIGHT
+end
+
+local function update()
+    local level = get_level()
+    if level == published_level then
+        return
+    end
+    published_level = level
+    shader_bus.set(token, level, 0, 0, 0)
+end
+
+function register()
+    if not (shader_bus and shader_bus.version() >= MIN_BUS_VERSION) then
+        return
+    end
+    token = shader_bus.register(LANE, OWNER, DESCRIPTION)
+    if not token then
+        return
+    end
+    wd_core.register({
+        id = "wd_screen_fx",
+        callbacks = { actor_on_update = { { update, interval = UPDATE_MS } } },
+    })
+end

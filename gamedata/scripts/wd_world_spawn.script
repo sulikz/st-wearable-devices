@@ -1,5 +1,4 @@
 local LIFT = 0.05
-local DUMP_KEY = "DIK_HOME"
 local SAVE_KEY = "wd_world_spawned"
 local SAVE_KEY_IDS = "wd_world_spawned_ids"
 
@@ -108,11 +107,6 @@ function get_spawned_id(key)
     return spawned_ids[key]
 end
 
-function get_object_level(se_obj)
-    local vertex = game_graph():vertex(se_obj.m_game_vertex_id)
-    return alife():level_name(vertex:level_id())
-end
-
 function save_state(m_data)
     placer.save_state(m_data)
     m_data[SAVE_KEY_IDS] = spawned_ids
@@ -123,61 +117,11 @@ function load_state(m_data)
     spawned_ids = m_data[SAVE_KEY_IDS] or {}
 end
 
-function dump_position(key)
-    if key ~= DIK_keys[DUMP_KEY] or not db.actor then
-        return
-    end
-    local position = db.actor:position()
-    local message = string.format(
-        "WD SPAWN POINT level=%s x=%.2f y=%.2f z=%.2f lvid=%d gvid=%d",
-        level.name(),
-        position.x,
-        position.y,
-        position.z,
-        db.actor:level_vertex_id(),
-        db.actor:game_vertex_id()
-    )
-    printf(message)
-    if actor_menu and actor_menu.set_msg then
-        actor_menu.set_msg(1, message, 10)
-    end
-    dump_spawned_items()
-end
-
-function dump_spawned_items()
-    local sim = alife()
-    if not sim then
-        return
-    end
-    local wanted = {}
-    for _, entry in ipairs(placer.get_spawns()) do
-        wanted[entry.section] = true
-    end
-    for id = 1, 65534 do
-        local se_obj = sim:object(id)
-        if se_obj and wanted[se_obj:section_name()] then
-            local position = se_obj.position
-            local message = string.format(
-                "WD SPAWN ITEM section=%s id=%d parent=%d level=%s x=%.2f y=%.2f z=%.2f",
-                se_obj:section_name(),
-                id,
-                se_obj.parent_id,
-                get_object_level(se_obj),
-                position.x,
-                position.y,
-                position.z
-            )
-            printf(message)
-        end
-    end
-end
-
 function register()
     wd_core.register({
         id = "wd_world_spawn",
         callbacks = {
             actor_on_first_update = { spawn_missing },
-            on_key_press = { dump_position },
             save_state = { save_state },
             load_state = { load_state },
         },

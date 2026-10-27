@@ -19,7 +19,7 @@ function register()
     wd_core.register({
         id = "wd_hands_wipe",
         callbacks = {
-            on_key_release = { { fire_on_release, unless_captured = true } },
+            on_key_release = { { fire_on_release, unless = wd_blocking.is_input_captured } },
         },
     })
 end

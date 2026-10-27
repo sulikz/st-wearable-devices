@@ -1,0 +1,504 @@
+local MIN_TARGET_DISTANCE = 0.5
+local DRIVER_SIGN = -1
+local HOST_FEEDS = { target = true, title = true }
+local SCREEN_SHADERS = { arcs = "arc_shader", body = "body_shader" }
+local POSE_AXES = { "i", "j", "c" }
+
+local scratch_pos = vector2()
+local scratch_size = vector2()
+local camera_basis = {}
+
+local function get_center(rect)
+    return rect.x + rect.width / 2, rect.y + rect.height / 2
+end
+
+function new_fit(source, target)
+    local source_x, source_y = get_center(source.rect)
+    local target_x, target_y = get_center(target.rect)
+    local fit = {
+        scale = target.rect.width * target.opening_radius / (source.rect.width * source.opening_radius),
+    }
+    function fit.get_point(point_x, point_y)
+        return target_x + (point_x - source_x) * fit.scale, target_y + (point_y - source_y) * fit.scale
+    end
+    return fit
+end
+
+local function fit_windows(fit, windows)
+    for _, window in ipairs(windows) do
+        local position = window:GetWndPos()
+        window:SetWndPos(scratch_pos:set(fit.get_point(position.x, position.y)))
+        window:SetWndSize(scratch_size:set(window:GetWidth() * fit.scale, window:GetHeight() * fit.scale))
+    end
+end
+
+local function register_ui(name, show)
+    _G.wd_face_host[name] = show
+    return "wd_face_host." .. name
+end
+
+local function is_listed(list, value)
+    for _, entry in ipairs(list) do
+        if entry == value then
+            return true
+        end
+    end
+    return false
+end
+
+local function assert_wired_faces(spec, provides)
+    local config = spec.config
+    assert(
+        is_listed(config.FACES, config.DEFAULTS.face_id),
+        "wd_face_host: '" .. spec.id .. "' default face is not in its FACES list"
+    )
+    for _, face_id in ipairs(config.FACES) do
+        local face_module = wd_faces.get_module(face_id)
+        assert(face_module, "wd_face_host: '" .. spec.id .. "' lists unregistered face " .. tostring(face_id))
+        local face = face_module.FACE
+        for _, key in ipairs(face.requires) do
+            local shader = SCREEN_SHADERS[key]
+            if shader then
+                assert(
+                    config.SCREEN[shader] ~= nil,
+                    "wd_face_host: '"
+                        .. spec.id
+                        .. "' has no SCREEN."
+                        .. shader
+                        .. " for the "
+                        .. key
+                        .. " of face "
+                        .. face_id
+                )
+            else
+                assert(
+                    HOST_FEEDS[key] or provides[key] ~= nil,
+                    "wd_face_host: '" .. spec.id .. "' cannot feed '" .. key .. "' to face " .. face_id
+                )
+            end
+        end
+        for _, layer in ipairs(face.layers) do
+            local label = "wd_face_host: face " .. face_id .. " layer '" .. tostring(layer.id) .. "'"
+            assert(type(layer.lift) == "number" and layer.lift > 0, label .. " needs a positive lift")
+            assert(
+                layer.driver ~= "target" or is_listed(face.requires, "target"),
+                label .. " is target-driven but its face does not require 'target'"
+            )
+        end
+    end
+end
+
+local function get_camera_basis(render_device)
+    camera_basis.right = render_device.cam_right
+    camera_basis.top = render_device.cam_top
+    camera_basis.dir = render_device.cam_dir
+    return camera_basis
+end
+
+local function is_same_pose(pose, other)
+    for _, axis in ipairs(POSE_AXES) do
+        local vec, other_vec = pose[axis], other[axis]
+        if vec.x ~= other_vec.x or vec.y ~= other_vec.y or vec.z ~= other_vec.z then
+            return false
+        end
+    end
+    return true
+end
+
+local function set_layer_shown(entry, shown)
+    local screen = entry.hud.get()
+    if screen then
+        screen:set_shown(shown)
+    end
+end
+
+function new(spec)
+    local provides = spec.provides or {}
+    assert_wired_faces(spec, provides)
+    local host = {}
+    local config = spec.config
+    local anchor = spec.anchor
+    local target_pos = nil
+    local target_distance = nil
+    local target_title = nil
+    local screen_face_id = nil
+    local preview_face_id = nil
+    local attached_model = nil
+    local unposed_pose = nil
+    local driven_angles = {}
+    local screens = {}
+    local screen_uis = {}
+    local layers = {}
+    local needs_target = {}
+    local needs_title = {}
+    local has_layers = {}
+    local ui_frame = { i = {}, j = {} }
+    local compass = wd_compass.new({
+        target_pos = function(target_id)
+            return wd_level_transitions.get_nav_pos(target_id)
+        end,
+    })
+
+    local function get_brightness()
+        return config.transforms.brightness
+    end
+
+    local function get_shown_face_id()
+        return preview_face_id or wd_faces.get_face_id(config)
+    end
+
+    local tinter = wd_face_tones.new_tinter(get_brightness)
+
+    local function fit_text(fit, cfg)
+        local row = cfg.row
+        cfg.x, cfg.y = fit.get_point(row[1], row[2])
+        cfg.width, cfg.height = row[3] * fit.scale, row[4] * fit.scale
+        if cfg.line_pitch then
+            cfg.line_pitch = cfg.line_pitch * fit.scale
+        end
+        return cfg
+    end
+
+    local function new_ctx(fit)
+        local ctx = {
+            shader = config.SCREEN.shader,
+            arc_shader = config.SCREEN.arc_shader,
+            body_shader = config.SCREEN.body_shader,
+            get_brightness = get_brightness,
+            get_tint = tinter.get_tint,
+            get_fill = tinter.get_fill,
+            get_body = tinter.get_body,
+            get_target_distance = function()
+                return target_distance
+            end,
+            get_target_title = function()
+                return target_title
+            end,
+            get_time = function()
+                return wd_clock.get_time(config.transforms)
+            end,
+            format_date = function(pattern)
+                return wd_clock.format_date(config.transforms, pattern)
+            end,
+            fit = function(windows)
+                fit_windows(fit, windows)
+            end,
+            new_text_line = function(cfg)
+                return wd_text.new_line(fit_text(fit, cfg))
+            end,
+            new_text_block = function(cfg)
+                return wd_text.new_block(fit_text(fit, cfg))
+            end,
+        }
+        for key, provider in pairs(provides) do
+            ctx["get_" .. key] = provider
+        end
+        return ctx
+    end
+
+    for _, face_id in ipairs(config.FACES) do
+        local module_name = wd_faces.MODULES[face_id]
+        local face_module = wd_faces.get_module(face_id)
+        local face = face_module.FACE
+        local fit = new_fit(face, config.SCREEN)
+        local ctx = new_ctx(fit)
+        screens[face_id] = wd_screen.new_hud({
+            name = "UIFaceHost_" .. spec.id .. "_" .. module_name,
+            create = function()
+                return face_module.new_screen(ctx)
+            end,
+            get_brightness = get_brightness,
+        })
+        needs_target[face_id] = is_listed(face.requires, "target")
+        needs_title[face_id] = is_listed(face.requires, "title")
+        has_layers[face_id] = #face.layers > 0
+        for _, layer in ipairs(face.layers) do
+            local name = spec.id .. "_" .. module_name .. "_" .. layer.id
+            local hud = wd_screen.new_static_hud({
+                class_name = "UI_" .. name,
+                xml_file = layer.xml_file,
+                window = layer.window,
+                node = layer.node,
+                texture = layer.texture,
+                texture_file = layer.texture_file,
+                get_brightness = get_brightness,
+            })
+            layers[#layers + 1] = {
+                face_id = face_id,
+                layer = layer,
+                fit = fit,
+                name = name,
+                hud = hud,
+                ui = register_ui("show_" .. name, hud.show),
+            }
+        end
+    end
+
+    local function refresh_target(face_id, is_worn)
+        if is_worn and needs_target[face_id] then
+            target_pos, target_distance = compass.get_target()
+            target_title = needs_title[face_id] and wd_compass.get_active_task_title() or nil
+        else
+            target_pos, target_distance, target_title = nil, nil, nil
+        end
+    end
+
+    local function build_offered_faces()
+        for _, face_id in ipairs(config.FACES) do
+            if wd_faces.is_offered(config, face_id) then
+                screens[face_id].show()
+            end
+        end
+        for _, entry in ipairs(layers) do
+            if screens[entry.face_id].get() then
+                entry.hud.show()
+            end
+        end
+    end
+
+    local function show_screen(face_id)
+        local screen = screens[face_id].show()
+        build_offered_faces()
+        screen_face_id = face_id
+        refresh_target(face_id, spec.is_worn())
+        screen:update_values()
+        return screen
+    end
+
+    for _, face_id in ipairs(config.FACES) do
+        screen_uis[face_id] = register_ui(
+            "show_" .. spec.id .. "_" .. wd_faces.MODULES[face_id] .. "_screen",
+            function()
+                return show_screen(face_id)
+            end
+        )
+    end
+
+    function host.get_screen_ui()
+        return screen_uis[get_shown_face_id()]
+    end
+
+    local function get_layer_transforms(entry)
+        local transforms = config.transforms
+        local layer = entry.layer
+        local pivot_x, pivot_y = entry.fit.get_point(layer.pivot[1], layer.pivot[2])
+        local scale = transforms.ui_scale
+        local ui_pos = wd_frame.transform_point(
+            wd_frame.new_pose_frame(transforms.ui_pos, transforms.ui_rot),
+            wd_frame.new_vec(scale * pivot_x, scale * pivot_y, layer.lift)
+        )
+        return {
+            model_pos = transforms.model_pos,
+            model_rot = transforms.model_rot,
+            model_scale = transforms.model_scale,
+            ui_pos = { ui_pos.x, ui_pos.y, ui_pos.z },
+            ui_rot = transforms.ui_rot,
+            ui_scale = scale * entry.fit.scale * layer.scale,
+        }
+    end
+
+    local function get_target_angle(frame, camera)
+        if not target_pos then
+            return nil, false
+        end
+        local here_x, _, here_z = wd_compass.get_actor_global_xyz()
+        if not here_x then
+            return nil, false
+        end
+        local dir_x = target_pos.x - here_x
+        local dir_z = target_pos.z - here_z
+        if dir_x * dir_x + dir_z * dir_z < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE then
+            return nil, false
+        end
+        return wd_compass.get_dial_angle(frame, camera, dir_x, dir_z), true
+    end
+
+    local function update_driven_angle(entry, frame, camera)
+        local driver = entry.layer.driver
+        local angle
+        if driver == "north" then
+            angle = wd_compass.get_dial_angle(frame, camera, 0, 1)
+        else
+            local has_target
+            angle, has_target = get_target_angle(frame, camera)
+            if not has_target then
+                set_layer_shown(entry, false)
+            elseif angle then
+                set_layer_shown(entry, true)
+            end
+        end
+        if angle then
+            angle = wd_compass.normalize_angle(angle + wd_arc_field.get_compass_turn())
+            driven_angles[driver] = angle
+        end
+        return angle
+    end
+
+    local function get_driven_rotation(layer, angle)
+        local rot = config.transforms.ui_rot
+        return rot[1], rot[2], rot[3] + DRIVER_SIGN * math.deg(angle) + layer.roll
+    end
+
+    local function get_posed_body()
+        local parent = wd_attach.get_parent_of(anchor.body)
+        local body = wd_attach.get_from(parent, anchor.body)
+        if body and unposed_pose then
+            if is_same_pose(body:bone_transform(body:get_ui_bone()), unposed_pose) then
+                return nil
+            end
+            unposed_pose = nil
+        end
+        return body, parent
+    end
+
+    local function get_body_frame()
+        local body, parent = get_posed_body()
+        if body then
+            return wd_attach.get_ui_frame(anchor.body, config.transforms.ui_rot, body, ui_frame), parent
+        end
+    end
+
+    local function attach_layers(face_id)
+        for _, entry in ipairs(layers) do
+            if attached_model and entry.face_id == face_id then
+                local transforms = get_layer_transforms(entry)
+                local angle = driven_angles[entry.layer.driver]
+                if angle then
+                    transforms.ui_rot = { get_driven_rotation(entry.layer, angle) }
+                end
+                wd_attach.attach({
+                    name = entry.name,
+                    model = attached_model,
+                    parent = anchor.parent,
+                    mount = anchor.mount,
+                    ui = entry.ui,
+                    ui_bone = anchor.bone,
+                    transforms = transforms,
+                    bone_visible = { [anchor.bone] = false },
+                })
+            else
+                wd_attach.detach(entry.name)
+            end
+        end
+    end
+
+    function host.sync(model)
+        attached_model = model
+        local body = model and wd_attach.get(anchor.body)
+        unposed_pose = body and body:bone_transform(body:get_ui_bone())
+        attach_layers(get_shown_face_id())
+    end
+
+    function host.apply_face()
+        local face_id = get_shown_face_id()
+        refresh_target(face_id, spec.is_worn())
+        local frame = attached_model and get_body_frame()
+        if frame then
+            local camera = get_camera_basis(wd_core.get_render_device())
+            for _, entry in ipairs(layers) do
+                if entry.face_id == face_id then
+                    update_driven_angle(entry, frame, camera)
+                end
+            end
+        end
+        attach_layers(face_id)
+        screen_face_id = nil
+        wd_attach.set_ui(anchor.body, screen_uis[face_id])
+    end
+
+    local function is_face_stale(face_id)
+        return screen_face_id ~= nil and face_id ~= screen_face_id
+    end
+
+    function host.refresh_face()
+        if is_face_stale(get_shown_face_id()) then
+            host.apply_face()
+        end
+    end
+
+    function host.set_preview_face(face_id)
+        preview_face_id = face_id
+        host.refresh_face()
+    end
+
+    function host.reapply_transforms()
+        local face_id = get_shown_face_id()
+        if is_face_stale(face_id) then
+            host.apply_face()
+            return
+        end
+        for _, entry in ipairs(layers) do
+            if entry.face_id == face_id then
+                wd_attach.reapply_transforms(entry.name, get_layer_transforms(entry))
+            end
+        end
+    end
+
+    local function drive_layer(entry, attachment, frame, camera)
+        local angle = update_driven_angle(entry, frame, camera)
+        if angle and attachment then
+            attachment:set_ui_rotation(get_driven_rotation(entry.layer, angle))
+        end
+    end
+
+    function host.update_layers()
+        local face_id = get_shown_face_id()
+        if not (has_layers[face_id] and spec.is_worn()) then
+            return
+        end
+        local frame, parent = get_body_frame()
+        if not frame then
+            return
+        end
+        local camera = get_camera_basis(wd_core.get_render_device())
+        for _, entry in ipairs(layers) do
+            if entry.face_id == face_id then
+                drive_layer(entry, wd_attach.get_from(parent, entry.name), frame, camera)
+            end
+        end
+    end
+
+    function host.update()
+        local is_worn = spec.is_worn()
+        local face_id = get_shown_face_id()
+        refresh_target(face_id, is_worn)
+        local screen = is_worn and screens[face_id].get()
+        if screen then
+            screen:update_values()
+        end
+    end
+
+    function host.get_attachment_names()
+        local names = {}
+        for index, entry in ipairs(layers) do
+            names[index] = entry.name
+        end
+        return names
+    end
+
+    function host.apply_brightness()
+        for _, screen_hud in pairs(screens) do
+            screen_hud.apply_brightness()
+        end
+        local screen = screen_face_id and screens[screen_face_id].get()
+        if screen then
+            screen:update_values()
+        end
+        for _, entry in ipairs(layers) do
+            entry.hud.apply_brightness()
+        end
+    end
+
+    function host.close()
+        for _, screen_hud in pairs(screens) do
+            screen_hud.close()
+        end
+        for _, entry in ipairs(layers) do
+            entry.hud.close()
+        end
+        screen_face_id = nil
+        preview_face_id = nil
+    end
+
+    return host
+end

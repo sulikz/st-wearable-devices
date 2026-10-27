@@ -1,0 +1,152 @@
+local scratch_size = vector2()
+
+local STAMINA_LOW = 0.4
+local STAMINA_RECOVERED = 0.7
+
+local GAUGE_TEX = {
+    stamina = "face_classic_bg",
+    toxic = "face_classic_bg_toxic",
+    hp = "face_classic_bg_hp",
+}
+
+local DIGIT_TEX = {}
+for digit = 0, 9 do
+    DIGIT_TEX[digit] = "face_classic_t" .. digit
+end
+
+FACE = {
+    rect = { x = 0.002, y = 0.0015, width = 0.04, height = 0.04 },
+    opening_radius = 0.939,
+    requires = { "target", "status_bar" },
+    layers = {
+        {
+            id = "ring",
+            xml_file = "ui_face_classic_ring.xml",
+            window = "face_classic_ring",
+            node = "face_classic_ring:ring",
+            texture = "face_classic_compass",
+            pivot = { 0.022052697630934686, 0.021636614280992016 },
+            scale = 0.969,
+            lift = 0.0002,
+            roll = 0,
+            driver = "north",
+        },
+        {
+            id = "arrow",
+            xml_file = "ui_face_classic_arrow.xml",
+            window = "face_classic_arrow",
+            node = "face_classic_arrow:arrow",
+            texture = "face_classic_arrow",
+            pivot = { 0.021960937107393646, 0.029665638742291934 },
+            scale = 0.15,
+            lift = 0.0002,
+            roll = 0,
+            driver = "target",
+        },
+    },
+}
+
+class("UIFaceDefault")(CUIScriptWnd)
+
+function UIFaceDefault:__init(ctx)
+    super()
+    self.ctx = ctx
+    self.binder = wd_screen.new_binder(ctx.shader)
+    self:Show(true)
+    self:Enable(true)
+
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_face_classic.xml")
+    xml:InitWindow("face_classic", 0, self)
+
+    xml:InitStatic("face_classic:wrk_area", self)
+    self.bg = xml:InitStatic("face_classic:bg", self)
+    self.bar_fill = xml:InitStatic("face_classic:bar_fill", self)
+    self.t_segs = {
+        xml:InitStatic("face_classic:t_h10", self),
+        xml:InitStatic("face_classic:t_h1", self),
+        xml:InitStatic("face_classic:t_m10", self),
+        xml:InitStatic("face_classic:t_m1", self),
+    }
+    self.colon = xml:InitStatic("face_classic:t_colon", self)
+    self.d_segs = {
+        xml:InitStatic("face_classic:d0", self),
+        xml:InitStatic("face_classic:d1", self),
+        xml:InitStatic("face_classic:d2", self),
+    }
+
+    self.tinted = { self.bg, self.bar_fill, self.colon }
+    for _, segment in ipairs(self.t_segs) do
+        self.tinted[#self.tinted + 1] = segment
+    end
+    for _, segment in ipairs(self.d_segs) do
+        self.tinted[#self.tinted + 1] = segment
+    end
+    ctx.fit(self.tinted)
+
+    self.gauge = self.binder.bind(self.bg, GAUGE_TEX.stamina, nil)
+    self.binder.set(self.bar_fill, "face_classic_bar_fill")
+    self.binder.set(self.colon, "face_classic_t_colon")
+    self.bar_fill_w = self.bar_fill:GetWidth()
+    self.bar_fill_h = self.bar_fill:GetHeight()
+    self.last_time = {}
+    self.last_dist = {}
+    self.stamina_low = false
+end
+
+function UIFaceDefault:set_status_bar(gauge, ratio)
+    self.gauge = self.binder.bind(self.bg, GAUGE_TEX[gauge], self.gauge)
+    local fill = clamp(ratio, 0, 1)
+    self.bar_fill:SetWndSize(scratch_size:set(self.bar_fill_w * fill, self.bar_fill_h))
+end
+
+function UIFaceDefault:update_status_bar()
+    local mode = self.ctx.get_status_bar()
+    if mode == "toxic" or (mode == "dynamic" and wd_toxic.is_draining()) then
+        self:set_status_bar("toxic", wd_toxic.get_filter_capacity() or 0)
+        return
+    end
+    local actor = db.actor
+    local power = actor and actor.power or 0
+    if mode == "dynamic" then
+        self.stamina_low = power < (self.stamina_low and STAMINA_RECOVERED or STAMINA_LOW)
+        mode = self.stamina_low and "stamina" or "hp"
+    end
+    if mode == "hp" then
+        self:set_status_bar("hp", actor and actor.health or 0)
+        return
+    end
+    self:set_status_bar("stamina", power)
+end
+
+function UIFaceDefault:update_timer()
+    local hours, minutes = self.ctx.get_time()
+    local digits = { math.floor(hours / 10), hours % 10, math.floor(minutes / 10), minutes % 10 }
+    for index = 1, 4 do
+        if self.last_time[index] ~= digits[index] then
+            self.last_time[index] = digits[index]
+            self.binder.set(self.t_segs[index], DIGIT_TEX[digits[index]])
+        end
+    end
+end
+
+function UIFaceDefault:set_distance(meters)
+    local value = clamp(math.floor((meters or 0) + 0.5), 0, 999)
+    local digits = { math.floor(value / 100), math.floor(value / 10) % 10, value % 10 }
+    for index = 1, 3 do
+        if self.last_dist[index] ~= digits[index] then
+            self.last_dist[index] = digits[index]
+            self.binder.set(self.d_segs[index], DIGIT_TEX[digits[index]])
+        end
+    end
+end
+
+function UIFaceDefault:update_values()
+    self:update_timer()
+    self:set_distance(self.ctx.get_target_distance())
+    self:update_status_bar()
+end
+
+function new_screen(ctx)
+    return UIFaceDefault(ctx)
+end

@@ -1,0 +1,42 @@
+ROW_H = 32
+ICON_W = 32
+NAME_W = 172
+VALUE_W = 96
+ICON = 16
+EFFECTS = { x = 75, y = 75, count = 9 }
+STATUS_X = 725
+STATUS_ROWS = {
+    { key = "health", y = 75, bar = true },
+    { key = "psy", y = 107, bar = true },
+    { key = "radiation", y = 139, bar = true },
+    { key = "stamina", y = 171, bar = true },
+    { key = "bleeding", y = 220, bar = false },
+    { key = "food", y = 269, bar = true },
+    { key = "water", y = 301, bar = true },
+    { key = "sleep", y = 333, bar = true },
+    { key = "weight", y = 382, bar = false },
+}
+MOBILITY_Y = 414
+TRACK = { x = 8, y = 10.75, w = 156, h = 10.5, inset = 1.5 }
+UNDERLINE = { w = 46, y = 26, h = 2 }
+TICK = { w = 1.5, h = 15.5 }
+GEIGER = {
+    x = 75,
+    reading_y = 382,
+    scale_y = 414,
+    shield_y = 446,
+    track = { x = 8, y = 6, w = 284, h = 10.5, inset = 1.5 },
+    marker = { y = 3, w = 2, h = 16.5 },
+    range = { min = 10, max = 1000 },
+    block = { x = 73, y = 380, w = 304, h = 100 },
+    unit = { x = 158, y = 10, w = 36, h = 14 },
+}
+PARTS = {
+    head = { x = 510, y = 80, w = 84, h = 92 },
+    torso = { x = 487, y = 143, w = 124, h = 128 },
+    pelvis = { x = 486, y = 233, w = 112, h = 100 },
+    leftarm = { x = 431, y = 170, w = 96, h = 200 },
+    rightarm = { x = 569, y = 160, w = 96, h = 200 },
+    leftleg = { x = 457, y = 280, w = 104, h = 284 },
+    rightleg = { x = 528, y = 286, w = 104, h = 284 },
+}

@@ -1,19 +1,16 @@
 #include "common.h"
 #include "wd_occlude.h"
+#include "wd_crt_input.h"
+#include "wd_screen_fx.h"
 
 #define WD_UI_ZWRITE_AREF	0.02
-
-struct	ui_vert_out
-{
- 	float2 	tc0		: TEXCOORD0;
-	float4	cpos	: TEXCOORD1;
-	float4	c		: COLOR0;
-};
 
 float4 	main ( ui_vert_out I )	: SV_Target
 {
 	wd_occlude( I.cpos );
 	float4 r	= s_base.Sample( smp_base, I.tc0 ) * I.c;
 	clip( r.a - WD_UI_ZWRITE_AREF );
+	// face layers turn on their own about the dial, so the bar and torn rows could not line up with the screen under them
+	r.rgb		= apply_screen_fx( r.rgb, float2( 0.0, 0.0 ), I.metric / CRT_PITCH, I.panel, false );
 	return r;
 }

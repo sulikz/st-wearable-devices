@@ -1,0 +1,136 @@
+local DIAL_TEXTURE = "wd\\ui\\faces\\arcs_mono\\dial_limbs"
+
+local LIMBS = wd_vitals.LIMB_PARTS
+
+AIR_WARN_SECONDS = 180
+AIR_CRIT_SECONDS = 60
+
+FACE = {
+    rect = wd_face_baked.FACE_RECT,
+    opening_radius = wd_face_baked.OPENING_RADIUS,
+    requires = { "arcs", "body" },
+    layers = {},
+    is_available = function()
+        return wd_vitals.has_limbs()
+    end,
+}
+
+class("UIFaceLimbs")(CUIScriptWnd)
+
+local function get_cell(window)
+    local position = window:GetWndPos()
+    return { x = position.x, y = position.y, w = window:GetWidth(), h = window:GetHeight() }
+end
+
+function UIFaceLimbs:__init(ctx)
+    super()
+    self.ctx = ctx
+    local binder = wd_screen.new_binder(ctx.shader)
+    local body_binder = wd_screen.new_binder(ctx.body_shader)
+    local sprites = wd_face_arcs.SPRITES_TEXTURE
+    self:Show(true)
+    self:Enable(true)
+    local xml = CScriptXmlInit()
+    xml:ParseFile("ui_face_arcs_mono_limbs.xml")
+    xml:InitWindow("face_arcs_mono_limbs", 0, self)
+    self.dial = xml:InitStatic("face_arcs_mono_limbs:face", self)
+    binder.set(self.dial, "face_dial_limbs", DIAL_TEXTURE)
+    self.arcs = wd_face_arcs.new(self, ctx)
+    local windows = {}
+    local function new_window(node, texture_id, layer_binder)
+        local window = xml:InitStatic("face_arcs_mono_limbs:" .. node, self)
+        layer_binder.set(window, texture_id, sprites)
+        windows[#windows + 1] = window
+        return window
+    end
+    local tracks = {}
+    for _, spec in ipairs(LIMBS) do
+        for _, part in ipairs(spec.parts) do
+            tracks[#tracks + 1] = new_window("part_" .. part, "face_arcs_mono_limbs_fill_" .. part, binder)
+        end
+    end
+    self.track_color = wd_screen.new_color_group(tracks)
+    self.parts = {}
+    for _, layer in ipairs(wd_silhouette.LAYERS) do
+        for _, spec in ipairs(LIMBS) do
+            for _, part in ipairs(spec.parts) do
+                local windows_by_layer = self.parts[part] or {}
+                windows_by_layer[layer] = new_window("part_" .. part, "face_arcs_mono_limbs_fill_" .. part, body_binder)
+                self.parts[part] = windows_by_layer
+            end
+        end
+    end
+    self.helmet = new_window("helmet", "face_arcs_mono_limbs_helmet", binder)
+    self.helmet_color = wd_screen.new_color_group({ self.helmet })
+    self.tinted = { self.dial }
+    if wd_toxic.is_installed() then
+        local track = new_window("air", "face_arcs_mono_limbs_air", binder)
+        self.tinted[2] = track
+        self.air = { track = track, fill = new_window("air", "face_arcs_mono_limbs_air_fill", body_binder) }
+    end
+    ctx.fit(windows)
+    ctx.fit({ self.dial })
+    local function get_part_window(part, layer)
+        local window = self.parts[part][layer]
+        return window, get_cell(window)
+    end
+    self.limbs = {}
+    for index, spec in ipairs(LIMBS) do
+        self.limbs[index] = wd_silhouette.new_limb(spec, get_part_window, sprites)
+    end
+    local air = self.air
+    if air then
+        air.slots = { wd_silhouette.new_fill(air.fill, get_cell(air.fill)) }
+        air.fill_color = wd_screen.new_color_group({ air.fill })
+        wd_silhouette.measure(air, air.slots[1], sprites)
+    end
+end
+
+function UIFaceLimbs:update_helmet()
+    local condition = wd_vitals.get_helmet_condition()
+    local shown = condition ~= nil
+    if shown ~= self.helmet_shown then
+        self.helmet_shown = shown
+        self.helmet:Show(shown)
+    end
+    if condition then
+        self.helmet_color.set(self.ctx.get_tint(wd_face_tones.get_state(condition)))
+    end
+end
+
+function UIFaceLimbs:update_air()
+    local air = self.air
+    if not air then
+        return
+    end
+    local seconds_left = wd_toxic.get_filter_time_left()
+    local state = seconds_left and wd_face_tones.get_state(seconds_left, false, AIR_WARN_SECONDS, AIR_CRIT_SECONDS)
+        or "ok"
+    air.fill_color.set(self.ctx.get_body(state))
+    local capacity = wd_toxic.get_filter_capacity() or 0
+    if air.capacity ~= capacity then
+        air.capacity = capacity
+        wd_silhouette.crop_to(air.slots, air, capacity)
+    end
+end
+
+function UIFaceLimbs:update_values()
+    local ctx = self.ctx
+    local limbs = wd_vitals.get_limbs()
+    self.track_color.set(ctx.get_tint("ok", wd_face_tones.LINE))
+    for _, limb in ipairs(self.limbs) do
+        local state = limbs[limb.limb]
+        local perm = state.perm
+        local tone = wd_face_tones.get_state(perm)
+        limb.perm.set(ctx.get_body(tone))
+        limb.temp.set(ctx.get_body(tone, true))
+        wd_silhouette.set_limb(limb, perm, state.total)
+    end
+    self:update_helmet()
+    self:update_air()
+    self.arcs.update()
+end
+
+function new_screen(ctx)
+    return UIFaceLimbs(ctx)
+end

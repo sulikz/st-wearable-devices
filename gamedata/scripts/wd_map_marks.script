@@ -7,6 +7,7 @@ SPOT_BY_CATEGORY = {
     barman = "ui_pda2_barman_location",
     special = "ui_pda2_special_location",
     quest_npc = "ui_pda2_quest_npc_location",
+    bed = "ui_pda2_actor_sleep_location",
     quest = "storyline_task_location",
     quest_secondary = "secondary_task_location",
     campfire = "campfire_lit",
@@ -41,6 +42,7 @@ local PRIORITY_RELATION = 0
 local PRIORITY_ICON = 1
 local PRIORITY_CATEGORY = 2
 local IMMOBILE_CATEGORIES = {
+    bed = true,
     stash = true,
     stash_rare = true,
     stash_player = true,
@@ -83,6 +85,13 @@ local function get_engine_relation_status(object_id)
     return "neutral"
 end
 
+local function is_held_ahead(held, priority, location_level)
+    if held.priority ~= priority then
+        return held.priority > priority
+    end
+    return held.location_level >= location_level
+end
+
 local function get_live_category(category, object_id, is_campfire_lit)
     if not CAMPFIRE_CATEGORIES[category] then
         return category
@@ -105,9 +114,15 @@ function new(deps)
     local get_icon = deps.get_icon or function(spot_type)
         return wd_map_spots.get_icon(spot_type)
     end
+    local position = {}
     local get_position = deps.get_position
         or function(object_id)
-            return wd_compass.get_target_pos_of(object_id)
+            local pos_x, pos_y, pos_z, gvid = wd_compass.get_target_global_xyz(object_id)
+            if not pos_x then
+                return nil
+            end
+            position.x, position.y, position.z = pos_x, pos_y, pos_z
+            return position, gvid
         end
     local get_level_id = deps.get_level_id or function(gvid)
         return wd_compass.get_level_id_of(gvid)
@@ -174,9 +189,11 @@ function new(deps)
                 spot_type = status and RELATION_SPOT_BY_STATUS[status]
             end
             local category = spot_type and get_live_category(CATEGORY_BY_SPOT[spot_type], entry.id, is_campfire_lit)
-            local icon = (spot_type and not category) and get_icon(spot_type) or nil
+            local declared = spot_type and get_icon(spot_type)
+            local icon = (not category) and declared or nil
+            local location_level = declared and declared.location_level or 0
             local priority = category and PRIORITY_CATEGORY or (relation and PRIORITY_RELATION or PRIORITY_ICON)
-            if (category or icon) and not (held and held.priority >= priority) then
+            if (category or icon) and not (held and is_held_ahead(held, priority, location_level)) then
                 local distance_sq = distances[entry.id]
                 if distance_sq == nil then
                     local level_id, pos_x, pos_z, pos_y = locate(category, entry.id)
@@ -201,6 +218,7 @@ function new(deps)
                         category = category,
                         icon = icon,
                         priority = priority,
+                        location_level = location_level,
                         distance_sq = distance_sq,
                         pos_x = pos_x_by_id[entry.id],
                         pos_z = pos_z_by_id[entry.id],

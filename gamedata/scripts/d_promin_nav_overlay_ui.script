@@ -1,0 +1,316 @@
+local scratch_pos = vector2()
+
+local binder = wd_screen.new_binder(d_promin_config.SCREEN_SHADER)
+
+local px = d_promin_config.get_px()
+
+LAYOUT = {
+    label = { w = px.w(220), h = px.h(16), pitch = px.h(18), pad = px.h(4) },
+    link_len = px.h(10),
+    link_overlap = px.h(2),
+    label_spacing = px.h(4),
+    merge = { w = px.w(36), h = px.h(28) },
+    zoom = { x2 = px.x(675), y = px.y(518), max_bar_w = px.w(90), bar_h = px.h(3), tick_h = px.h(10), chars = 8 },
+}
+
+TRACKED_ID = "tracked"
+MARK_LABELS = 8
+
+local LINK_RISE = "wd_nav_icon_link_rise"
+local LINK_FALL = "wd_nav_icon_link_fall"
+local FOLD_PASSES = 2
+local TRACKED_LABEL_LINES = 2
+local OVERLAY_ROLES = { fill = "fill", border = "text" }
+local TRACKED_ROLES = { fill = "fill", border = "tracked" }
+local CLUSTER_SUFFIX = " +%d"
+local SCALE_STEPS = { 1, 2, 5 }
+local DIST_TEXT = "%d M"
+
+local set_shown = wd_screen.set_shown
+local place_widget = wd_screen.place_widget
+
+function get_scale_distance(max_m)
+    if not (max_m and max_m > 0) then
+        return nil
+    end
+    local magnitude = 10 ^ math.floor(math.log10(max_m) + 1e-9)
+    local distance = magnitude
+    for _, step in ipairs(SCALE_STEPS) do
+        if step * magnitude <= max_m then
+            distance = step * magnitude
+        end
+    end
+    return distance
+end
+
+function set_label_item(item, id, title, tracked, order, center_x, center_y, icon_w, icon_h)
+    item.id = id
+    item.title = title
+    item.tracked = tracked
+    item.order = order
+    item.x1 = center_x - icon_w / 2
+    item.y1 = center_y - icon_h / 2
+    item.x2 = center_x + icon_w / 2
+    item.y2 = center_y + icon_h / 2
+    return item
+end
+
+local function new_layout_cache(block, font)
+    local cache = { current = {}, previous = {} }
+
+    local function build_layout(title, extra)
+        local suffix = extra > 0 and string.format(CLUSTER_SUFFIX, extra) or ""
+        local lines = block.fit_lines(wd_text.get_upper(title), suffix)
+        local width = 0
+        for _, line in ipairs(lines) do
+            width = math.max(width, wd_text.measure(font, line, LAYOUT.label.h))
+        end
+        return { lines = lines, width = width }
+    end
+
+    function cache.get(title, extra)
+        local by_extra = cache.current[title]
+        if not by_extra then
+            by_extra = cache.previous[title] or {}
+            cache.current[title] = by_extra
+        end
+        local layout = by_extra[extra]
+        if not layout then
+            layout = build_layout(title, extra)
+            by_extra[extra] = layout
+        end
+        return layout
+    end
+
+    function cache.rotate()
+        local spare = cache.previous
+        for title in pairs(spare) do
+            spare[title] = nil
+        end
+        cache.previous, cache.current = cache.current, spare
+    end
+
+    return cache
+end
+
+local function build_label(kit, lines, link, roles)
+    local label = LAYOUT.label
+    local holder = kit.new_holder()
+    local box = kit.new_box(roles, holder)
+    local block = kit.new_block({
+        role = roles.border,
+        parent = holder,
+        max_chars = wd_text.get_max_chars(kit.font, label.h, label.w),
+        lines = lines,
+        x = label.pad,
+        y = label.pad,
+        width = label.w,
+        height = label.h,
+        line_pitch = label.pitch,
+    })
+    block.set_visible(false)
+    return {
+        link = link,
+        holder = holder,
+        box = box,
+        block = block,
+        shown = false,
+        is_placed = false,
+        placed = {},
+        linked = {},
+    }
+end
+
+local function get_label_size(layout)
+    local count = #layout.lines
+    if count == 0 then
+        return nil
+    end
+    local label = LAYOUT.label
+    return layout.width + 2 * label.pad, (count - 1) * label.pitch + label.h + 2 * label.pad
+end
+
+local function set_label_shown(label, flag)
+    if label.shown ~= flag then
+        label.shown = flag
+        label.block.set_visible(flag)
+        label.box.set_visible(flag)
+        if not flag then
+            set_shown(label.link, false)
+        end
+    end
+end
+
+local function take_rect(last, rect)
+    if last.x1 == rect.x1 and last.y1 == rect.y1 and last.x2 == rect.x2 and last.y2 == rect.y2 then
+        return false
+    end
+    last.x1, last.y1, last.x2, last.y2 = rect.x1, rect.y1, rect.x2, rect.y2
+    return true
+end
+
+local function show_label_at(label, rect, link_rect)
+    label.block.set_lines(label.layout.lines)
+    if take_rect(label.placed, rect) then
+        label.holder:SetWndPos(scratch_pos:set(rect.x1, rect.y1))
+        label.box.place(0, 0, rect.x2 - rect.x1, rect.y2 - rect.y1)
+    end
+    local link = label.link
+    if link_rect and take_rect(label.linked, link_rect) then
+        local overlap = LAYOUT.link_overlap
+        link.tex_id = binder.bind(link.widget, link_rect.falling and LINK_FALL or LINK_RISE, link.tex_id)
+        place_widget(
+            link.widget,
+            link_rect.x1 - overlap,
+            link_rect.y1 - overlap,
+            link_rect.x2 - link_rect.x1 + 2 * overlap,
+            link_rect.y2 - link_rect.y1 + 2 * overlap
+        )
+    end
+    set_label_shown(label, true)
+    set_shown(link, link_rect ~= nil)
+end
+
+local function build_zoom(kit)
+    local zoom = {
+        cell = kit.new_cell({ chars = LAYOUT.zoom.chars, roles = OVERLAY_ROLES }),
+        bar = kit.new_fill("text"),
+        left_tick = kit.new_fill("text"),
+        right_tick = kit.new_fill("text"),
+        shown = false,
+        rect = { x1 = 0, y1 = 0, x2 = 0, y2 = 0 },
+    }
+    zoom.slots = { zoom.bar, zoom.left_tick, zoom.right_tick }
+    return zoom
+end
+
+local function set_zoom_shown(zoom, flag)
+    if zoom.shown ~= flag then
+        zoom.shown = flag
+        zoom.cell.set_visible(flag)
+        for _, slot in ipairs(zoom.slots) do
+            set_shown(slot, flag)
+        end
+    end
+end
+
+local function set_zoom_distance(zoom, style, zoom_m, screen_h)
+    local layout = LAYOUT.zoom
+    local units_per_m = screen_h / zoom_m
+    local distance = get_scale_distance(layout.max_bar_w / units_per_m)
+    local bar_w = distance * units_per_m
+    local cell = zoom.cell
+    cell.set_text(string.format(DIST_TEXT, distance))
+    local width = style.pad + cell.text_width + style.gap + bar_w + style.pad
+    local left = layout.x2 - width
+    cell.place(left, layout.y, width, style.row_h)
+    local bar_x = left + style.pad + cell.text_width + style.gap
+    local tick_y = layout.y + (style.row_h - layout.tick_h) / 2
+    place_widget(zoom.bar.widget, bar_x, tick_y + layout.tick_h - layout.bar_h, bar_w, layout.bar_h)
+    place_widget(zoom.left_tick.widget, bar_x, tick_y, layout.bar_h, layout.tick_h)
+    place_widget(zoom.right_tick.widget, bar_x + bar_w - layout.bar_h, tick_y, layout.bar_h, layout.tick_h)
+    local half = style.border_w / 2
+    local rect = zoom.rect
+    rect.x1 = left - half
+    rect.y1 = layout.y - half
+    rect.x2 = layout.x2 + half
+    rect.y2 = layout.y + style.row_h + half
+end
+
+function new(kit, screen, link_layer)
+    local overlay = {
+        labels = {},
+        links = {},
+        layouter = wd_map_labels.new({
+            link = LAYOUT.link_len,
+            spacing = LAYOUT.label_spacing,
+            merge_w = LAYOUT.merge.w,
+            merge_h = LAYOUT.merge.h,
+        }),
+    }
+    for index = 1, MARK_LABELS do
+        overlay.links[index] = kit.new_image(LINK_RISE, "text", link_layer)
+        overlay.labels[index] = build_label(kit, 1, overlay.links[index], OVERLAY_ROLES)
+    end
+    overlay.links[MARK_LABELS + 1] = kit.new_image(LINK_RISE, "tracked", link_layer)
+    overlay.label = build_label(kit, TRACKED_LABEL_LINES, overlay.links[MARK_LABELS + 1], TRACKED_ROLES)
+    overlay.labels[MARK_LABELS + 1] = overlay.label
+    overlay.zoom = build_zoom(kit)
+    local mark_cache = new_layout_cache(overlay.labels[1].block, kit.font)
+    local tracked_cache = new_layout_cache(overlay.label.block, kit.font)
+
+    local function size_clusters(clusters)
+        local next_mark_label = 0
+        for _, cluster in ipairs(clusters) do
+            local anchor = cluster.anchor
+            local label, cache
+            if anchor.tracked then
+                label, cache = overlay.label, tracked_cache
+            elseif next_mark_label < MARK_LABELS then
+                next_mark_label = next_mark_label + 1
+                label, cache = overlay.labels[next_mark_label], mark_cache
+            end
+            cluster.label = label
+            cluster.width, cluster.height = nil, nil
+            if label then
+                label.layout = cache.get(anchor.title, #cluster.members - 1)
+                cluster.width, cluster.height = get_label_size(label.layout)
+            end
+        end
+    end
+
+    function overlay.layout(items, obstacles)
+        local layouter = overlay.layouter
+        local clusters = layouter.cluster(items)
+        size_clusters(clusters)
+        layouter.place(clusters, obstacles, screen)
+        for _ = 1, FOLD_PASSES do
+            local folded
+            clusters, folded = layouter.fold(clusters)
+            if not folded then
+                break
+            end
+            size_clusters(clusters)
+            layouter.place(clusters, obstacles, screen)
+        end
+        for _, cluster in ipairs(clusters) do
+            if cluster.rect then
+                cluster.label.is_placed = true
+                show_label_at(cluster.label, cluster.rect, cluster.link)
+            end
+        end
+        for _, label in ipairs(overlay.labels) do
+            if not label.is_placed then
+                set_label_shown(label, false)
+            end
+            label.is_placed = false
+        end
+        mark_cache.rotate()
+        tracked_cache.rotate()
+    end
+
+    function overlay.update_zoom(zoom_m)
+        local zoom = overlay.zoom
+        local screen_h = screen.y2 - screen.y1
+        if not (zoom_m and zoom_m > 0 and screen_h > 0) then
+            set_zoom_shown(zoom, false)
+            return nil
+        end
+        if zoom.zoom ~= zoom_m or zoom.screen_h ~= screen_h then
+            zoom.zoom = zoom_m
+            zoom.screen_h = screen_h
+            set_zoom_distance(zoom, kit.style, zoom_m, screen_h)
+        end
+        set_zoom_shown(zoom, true)
+        return zoom.rect
+    end
+
+    function overlay.hide()
+        for _, label in ipairs(overlay.labels) do
+            set_label_shown(label, false)
+        end
+        set_zoom_shown(overlay.zoom, false)
+    end
+
+    return overlay
+end

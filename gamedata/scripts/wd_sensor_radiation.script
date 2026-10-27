@@ -10,8 +10,8 @@ local function get_rad_sense()
     if not db.actor then
         return nil
     end
-    local env = math.floor(level.get_env_rads() * 2500)
-    local rads = env > 0 and env or math.floor(db.actor.radiation * 10000 * 0.387)
+    local env = wd_geiger.get_reading()
+    local rads = env > 0 and env or wd_vitals.get_radiation_msv()
     if rads <= 0 then
         return nil
     end

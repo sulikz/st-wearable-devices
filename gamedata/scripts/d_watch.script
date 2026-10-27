@@ -129,8 +129,8 @@ function sync_attachment()
         name = SECTION,
         model = model,
         parent = d_bracer_config.SECTION,
+        mount = wd_wrist_roll.MOUNT,
         transforms = model_transforms,
-        bone_visible = d_watch_tubes.get_bone_visible_map(),
     })
     if not attachment then
         wd_attach.detach(LED_RAD_NAME)
@@ -143,13 +143,14 @@ function sync_attachment()
             name = led_name,
             model = model,
             parent = d_bracer_config.SECTION,
+            mount = wd_wrist_roll.MOUNT,
             transforms = model_transforms,
             bone_visible = { wpn_body = false },
         })
     end
     apply_skin_textures()
     apply_nixie_color()
-    d_watch_tubes.reset()
+    d_watch_tubes.update()
     return attachment
 end
 
@@ -210,9 +211,28 @@ local function register_gui()
     local nixie = wd_gui.new_catalog_enum(d_watch_config.NIXIE_COLORS, d_watch_config.get_nixie_index)
     nixie.on_change = reapply_nixie
 
+    local fields = {
+        model_pos = wd_gui.new_slider(-0.3, 0.3),
+        model_rot = wd_gui.new_slider(-180, 180),
+        model_scale = wd_gui.new_slider(0.01, 3),
+        skin = skin,
+        nixie = nixie,
+        clock = has_clock and new_clock_field() or nil,
+    }
+    local appearance_rows = {}
+    if #d_watch_config.SKINS > 1 then
+        appearance_rows[#appearance_rows + 1] = { "skin", nil, 1, "Skin" }
+    end
+    appearance_rows[#appearance_rows + 1] = { "nixie", nil, 1, "Nixie color" }
+    if has_clock then
+        appearance_rows[#appearance_rows + 1] = { "clock", nil, 1, "Clock" }
+    end
+    wd_clock.add_gui_rows(fields, appearance_rows, d_watch_config, d_watch_tubes.update)
+    wd_wrist_roll.add_gui_check(fields, appearance_rows)
+
     wd_gui.register_device({
         id = "watch",
-        label = "Metro",
+        label = "Watch",
         is_worn = is_attachment_present,
         store = function()
             return d_watch_config.transforms
@@ -227,24 +247,9 @@ local function register_gui()
         on_apply = function()
             reapply_transforms()
         end,
-        fields = {
-            model_pos = wd_gui.new_slider(-0.3, 0.3),
-            model_rot = wd_gui.new_slider(-180, 180),
-            model_scale = wd_gui.new_slider(0.01, 3),
-            skin = skin,
-            nixie = nixie,
-            clock = has_clock and new_clock_field() or nil,
-        },
+        fields = fields,
     })
 
-    local appearance_rows = {}
-    if #d_watch_config.SKINS > 1 then
-        appearance_rows[#appearance_rows + 1] = { "skin", nil, 1, "Skin" }
-    end
-    appearance_rows[#appearance_rows + 1] = { "nixie", nil, 1, "Nixie color" }
-    if has_clock then
-        appearance_rows[#appearance_rows + 1] = { "clock", nil, 1, "Clock" }
-    end
     wd_gui.register_tab({
         device = "watch",
         id = "watch_skin",
@@ -284,6 +289,9 @@ function register()
         owner = owner,
         is_present = is_attachment_present,
         resync = sync_attachment,
+        get_transforms = function()
+            return d_watch_config.transforms
+        end,
     })
     wd_exo.register_device({
         id = "watch",

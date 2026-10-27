@@ -1,13 +1,7 @@
 #include "common.h"
 #include "wd_occlude.h"
-
-struct	ui_vert_out
-{
- 	float2 	tc0		: TEXCOORD0;
-	float2 	panel	: TEXCOORD1;
-	float4	cpos	: TEXCOORD2;
-	float4	c		: COLOR0;
-};
+#include "wd_crt_input.h"
+#include "wd_screen_fx.h"
 
 float3 crt_pattern ( float2 grid )
 {
@@ -28,16 +22,36 @@ float3 crt_pattern ( float2 grid )
 	return scan * mask * boost;
 }
 
+#ifndef WD_CRT_SAMPLE
+float4 sample_panel_texel ( ui_vert_out I )
+{
+	float4 texel	= s_base.Sample( smp_base, I.tc0 );
+#ifdef WD_GREYSCALE
+	texel.rgb	= dot( texel.rgb, float3( 0.299, 0.587, 0.114 ) );
+#endif
+	return texel * I.c;
+}
+#define WD_CRT_SAMPLE(I) sample_panel_texel( I )
+#endif
+
+#include "wd_crt_field.h"
+
 float4 	main ( ui_vert_out I )	: SV_Target
 {
 	wd_occlude( I.cpos );
-	float4 r	= s_base.Sample( smp_base, I.tc0 ) * I.c;
-
-	float2 norm	= saturate( (I.panel - PANEL_ORIGIN) / PANEL_SIZE );
-	r.rgb		*= crt_pattern( norm * CRT_RES );
+	float2 raw	= (I.panel - PANEL_ORIGIN) / PANEL_SIZE;
+	float2 norm	= saturate( raw );
+	float2 grid	= I.metric / CRT_PITCH;
+#ifdef WD_ARC_FIELD
+	float4 r	= wd_field_sample( I, raw, norm, grid );
+#else
+	float4 r	= WD_CRT_SAMPLE( I );
+#endif
+	r.rgb		*= crt_pattern( grid );
 
 	float vig	= pow( saturate( 16.0 * norm.x * (1.0 - norm.x) * norm.y * (1.0 - norm.y) ), 0.25 );
 	r.rgb		*= lerp( 1.0, vig, EDGE_FADE );
 
+	r.rgb		= apply_screen_fx( r.rgb, norm, grid, I.panel, true );
 	return r;
 }

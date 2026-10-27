@@ -1,0 +1,109 @@
+FONTS = {
+    jetbrains_mono = { texture = "wd\\ui\\fonts\\jetbrains_mono", id = "wd_font_jetbrains_mono" },
+    face_text = { texture = "wd\\ui\\faces\\shared\\text", id = "wd_font_face_text" },
+    face_clock = { texture = "wd\\ui\\faces\\arcs_mono\\glyphs", id = "wd_font_face_clock" },
+}
+
+local ELLIPSIS = "..."
+
+local ELLIPSIS_BYTE = 133
+local FIRST_PRINTABLE = 32
+local LAST_CODE = 255
+local FALLBACK_CODES = { 63, 32 }
+local REPLACEMENTS = {
+    [0x85] = 46,
+    [0x91] = 39,
+    [0x92] = 39,
+    [0x93] = 34,
+    [0x94] = 34,
+    [0x96] = 45,
+    [0x97] = 45,
+    [0xA0] = 32,
+    [0xAB] = 34,
+    [0xBB] = 34,
+}
+
+local SECTION = "symbol_coords"
+local RECT_PATTERN = "^([%d.]+)%s*,%s*([%d.]+)%s*,%s*([%d.]+)"
+
+local cache = {}
+
+local function read_glyphs(ini)
+    if not ini:line_exist(SECTION, "height") then
+        return nil
+    end
+    local glyph_height = ini:r_float(SECTION, "height")
+    local glyphs = {}
+    for index = 0, ini:line_count(SECTION) - 1 do
+        local _, key, value = ini:r_line(SECTION, index, "", "")
+        local code = tonumber(key)
+        local x1, y1, x2 = string.match(value or "", RECT_PATTERN)
+        if code and x1 then
+            x1, y1, x2 = tonumber(x1), tonumber(y1), tonumber(x2)
+            if x2 > x1 then
+                glyphs[code] = { x1, y1, x2, y1 + glyph_height }
+            end
+        end
+    end
+    return glyph_height, glyphs
+end
+
+local function scale_glyphs(glyphs, scale)
+    for _, rect in pairs(glyphs) do
+        for index = 1, 4 do
+            rect[index] = rect[index] * scale
+        end
+    end
+end
+
+local function get_fallback(glyphs, code)
+    local glyph = glyphs[REPLACEMENTS[code]]
+    if glyph then
+        return glyph
+    end
+    for _, fallback in ipairs(FALLBACK_CODES) do
+        glyph = glyphs[fallback]
+        if glyph then
+            return glyph
+        end
+    end
+end
+
+local function fill_missing(glyphs)
+    for code = FIRST_PRINTABLE, LAST_CODE do
+        if not glyphs[code] then
+            glyphs[code] = get_fallback(glyphs, code)
+        end
+    end
+end
+
+function get_font(name)
+    local loaded = cache[name]
+    if loaded then
+        return loaded
+    end
+    local font = FONTS[name]
+    if not font then
+        return nil
+    end
+    local ini_name = font.texture .. ".ini"
+    local path = getFS():update_path("$game_textures$", ini_name)
+    local ini = ini_file(ini_name, 1, 1, 0, path)
+    local glyph_height, glyphs = read_glyphs(ini)
+    if not glyph_height then
+        return nil
+    end
+    local scale = wd_screen.get_lod_scale(font.texture)
+    scale_glyphs(glyphs, scale)
+    local ellipsis = glyphs[ELLIPSIS_BYTE] and string.char(ELLIPSIS_BYTE) or ELLIPSIS
+    fill_missing(glyphs)
+    loaded = {
+        texture = font.texture,
+        id = font.id,
+        glyph_height = glyph_height * scale,
+        glyphs = glyphs,
+        ellipsis = ellipsis,
+    }
+    cache[name] = loaded
+    return loaded
+end

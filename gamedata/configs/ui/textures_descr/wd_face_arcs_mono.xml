@@ -1,0 +1,45 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <file name="wd\ui\faces\arcs_mono\dial_clock">
+    <texture id="face_dial_clock" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\faces\arcs_mono\dial_nav">
+    <texture id="face_dial_nav" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\faces\arcs_mono\dial_limbs">
+    <texture id="face_dial_limbs" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\faces\arcs_mono\compass">
+    <texture id="face_arcs_mono_nav_compass" x="0" y="0" width="512" height="512" />
+  </file>
+  <file name="wd\ui\faces\arcs_mono\sprites">
+    <texture id="face_arc_hp" x="10" y="104" width="256" height="256" />
+    <texture id="face_arc_psy" x="266" y="104" width="256" height="256" />
+    <texture id="face_arc_stamina" x="10" y="360" width="256" height="256" />
+    <texture id="face_arc_radiation" x="266" y="360" width="256" height="256" />
+    <texture id="face_arcs_mono_limbs_fill_head" x="654" y="105" width="60" height="64" />
+    <texture id="face_arcs_mono_limbs_fill_torso" x="640" y="189" width="88" height="92" />
+    <texture id="face_arcs_mono_limbs_fill_leftarm" x="552" y="189" width="68" height="144" />
+    <texture id="face_arcs_mono_limbs_fill_rightarm" x="748" y="189" width="68" height="144" />
+    <texture id="face_arcs_mono_limbs_fill_pelvis" x="644" y="301" width="80" height="72" />
+    <texture id="face_arcs_mono_limbs_fill_leftleg" x="602" y="393" width="72" height="200" />
+    <texture id="face_arcs_mono_limbs_fill_rightleg" x="694" y="393" width="72" height="200" />
+    <texture id="face_vital_hp" x="846" y="105" width="32" height="32" />
+    <texture id="face_vital_psy" x="898" y="105" width="32" height="32" />
+    <texture id="face_vital_stamina" x="846" y="157" width="32" height="32" />
+    <texture id="face_vital_radiation" x="898" y="157" width="32" height="32" />
+    <texture id="face_arcs_mono_limbs_helmet" x="846" y="209" width="30" height="30" />
+    <texture id="face_arcs_mono_limbs_air" x="896" y="209" width="56" height="104" />
+    <texture id="face_arcs_mono_limbs_air_fill" x="846" y="333" width="56" height="104" />
+    <texture id="face_arcs_mono_clock_weather_0" x="10" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_clock_weather_1" x="94" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_clock_weather_2" x="178" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_clock_weather_3" x="262" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_clock_weather_4" x="346" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_clock_weather_10" x="430" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_clock_weather_11" x="514" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_nav_arrow" x="608" y="10" width="64" height="64" />
+    <texture id="face_arcs_mono_nav_pill" x="692" y="10" width="193" height="65" />
+    <texture id="face_arcs_mono_clock_day_chip" x="905" y="10" width="69" height="54" />
+  </file>
+</w>

@@ -23,12 +23,6 @@
 	<string id="ui_mcm_wd_tap_ms_desc">
 		<text>This controls hold timeout for watch inspection.</text>
 	</string>
-	<string id="ui_mcm_wd_double_tap_ms">
-		<text>Double tap threshold (ms)</text>
-	</string>
-	<string id="ui_mcm_wd_double_tap_ms_desc">
-		<text>This controls double tap timeout for switching Promin screens.</text>
-	</string>
 	<string id="ui_mcm_wd_swap_hold_toggle">
 		<text>Swap which device inspection is toggled/held</text>
 	</string>
@@ -44,6 +38,27 @@
 	<string id="ui_mcm_wd_gui_mod_desc">
 		<text>Hold this modifier together with the WD GUI key to open it.</text>
 	</string>
+	<string id="ui_mcm_wd_strict_geiger">
+		<text>Strict Rads</text>
+	</string>
+	<string id="ui_mcm_wd_strict_geiger_desc">
+		<text>With this option ON radiation bars will only work with an environmental module installed in the Promin.</text>
+	</string>
+	<string id="ui_mcm_wd_qaw_raise">
+		<text>Auto-raise on QAW</text>
+	</string>
+	<string id="ui_mcm_wd_qaw_raise_desc">
+		<text>Auto-raise selected device whenever you activate Quick Action Wheel in order to preview healing items on the screen.</text>
+	</string>
+	<string id="ui_mcm_lst_wd_qaw_raise_watch">
+		<text>Watch</text>
+	</string>
+	<string id="ui_mcm_lst_wd_qaw_raise_promin">
+		<text>Promin</text>
+	</string>
+	<string id="ui_mcm_lst_wd_qaw_raise_none">
+		<text>None</text>
+	</string>
 
 	<!-- Bracer -->
 
@@ -58,6 +73,22 @@
 	</string>
 	<string id="st_detach_wd_bracer">
 		<text>take off</text>
+	</string>
+
+	<string id="st_wd_patch_504th">
+		<text>504th Airborne Infantry patch</text>
+	</string>
+	<string id="st_wd_patch_8bitcat">
+		<text>8BitCat patch</text>
+	</string>
+	<string id="st_wd_patch_happysteam">
+		<text>Happysteam patch</text>
+	</string>
+	<string id="st_wd_patch_zero">
+		<text>Zero patch</text>
+	</string>
+	<string id="st_wd_patch_descr">
+		<text>Velcro-backed patch. Attaches to the velcro panel on a bracer.</text>
 	</string>
 
 	<!-- Promin -->
@@ -104,16 +135,22 @@
 		<text>NOT IMPLEMENTED</text>
 	</string>
 	<string id="st_promin_module_side">
-		<text>Promin Side Module</text>
+		<text>Promin Environmental Module</text>
 	</string>
 	<string id="st_promin_module_side_descr">
-		<text>NOT IMPLEMENTED</text>
+		<text>Environmental module fitted with readers and a communication interface, which the Promin unit uses to display information about its surroundings. Measures radiation for the biomonitor's Geiger readout.\nCan only be installed into upgraded Promin</text>
 	</string>
 	<string id="st_wd_parts">
 		<text>Device Parts</text>
 	</string>
 	<string id="st_wd_parts_descr">
 		<text>Contains various salvaged electronics, circuit boards, wiring, connectors and sensor components.</text>
+	</string>
+	<string id="st_promin_module_side_2">
+		<text>Promin Environmental Module Mk II</text>
+	</string>
+	<string id="st_promin_module_side_2_descr">
+		<text>Environmental module fitted with readers and a communication interface, which the Promin unit uses to display information about its surroundings. Measures radiation for the biomonitor's Geiger readout, plays audio cue when an artifact is nearby and lists nearby artifacts by name on the navigation page.\nCan only be installed into upgraded Promin</text>
 	</string>
 	<string id="st_promin_module_install">
 		<text>install module</text>
@@ -215,6 +252,36 @@
 	</string>
 	<string id="st_wd_customize_module_installed">
 		<text>Module already installed</text>
+	</string>
+
+	<!-- Promin COMMS -->
+
+	<string id="st_wd_comms_rank_up">
+		<text>Rank up</text>
+	</string>
+	<string id="st_wd_comms_rank_down">
+		<text>Rank down</text>
+	</string>
+	<string id="st_wd_comms_rep_up">
+		<text>Reputation up</text>
+	</string>
+	<string id="st_wd_comms_rep_down">
+		<text>Reputation down</text>
+	</string>
+	<string id="st_wd_comms_disassembly">
+		<text>Disassembled</text>
+	</string>
+	<string id="st_wd_comms_encyclopedia">
+		<text>Encyclopedia</text>
+	</string>
+	<string id="st_wd_comms_emission">
+		<text>Emission</text>
+	</string>
+	<string id="st_wd_comms_psy">
+		<text>Psy storm</text>
+	</string>
+	<string id="st_wd_guide_title">
+		<text>Guide to %s</text>
 	</string>
 
 </string_table>

@@ -144,7 +144,7 @@ local function observe_cond(cond, now)
         return
     end
     if previous == nil then
-        local frame_ms = device().time_delta
+        local frame_ms = wd_core.get_render_device().time_delta
         if frame_ms > PERIOD_MAX_MS - TICK_MS then
             frame_ms = 0
         end

@@ -6,10 +6,6 @@ local function get_bleed()
     return (db.actor and db.actor.bleeding) or 0
 end
 
-function is_lit()
-    return lit
-end
-
 function reset()
     phase = 0
     last_time = nil

@@ -9,7 +9,7 @@
 	#include "screenspace_hud_raindrops.h"
 #endif
 
-Texture2D s_wdnrm;
+#include "wd_perturb_normal.h"
 
 // ---- SSS HUD raindrops ----
 #define WD_RAIN_UPFACE   1
@@ -17,22 +17,6 @@ Texture2D s_wdnrm;
 #define WD_WET_BUMP      1.0
 #define WD_WET_REFRACT   0.0
 #define WD_WET_DARKEN    0.0
-
-float3 wd_perturb_normal(float3 N, float3 viewpos, float2 uv, float3 mapN)
-{
-	float3 dp1  = ddx(viewpos);
-	float3 dp2  = ddy(viewpos);
-	float2 duv1 = ddx(uv);
-	float2 duv2 = ddy(uv);
-
-	float3 dp2perp = cross(dp2, N);
-	float3 dp1perp = cross(N, dp1);
-	float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
-	float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-
-	float invmax = rsqrt(max(dot(T, T), dot(B, B)));
-	return normalize(T * (invmax * mapN.x) + B * (invmax * mapN.y) + N * mapN.z);
-}
 
 f_deffer main( p_flat I )
 {

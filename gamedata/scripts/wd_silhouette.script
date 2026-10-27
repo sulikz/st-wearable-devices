@@ -1,0 +1,89 @@
+LAYERS = { "temp", "perm" }
+
+local function get_texture_rect(widget)
+    local rect = widget:GetTextureRect()
+    return { x1 = rect.x1, y1 = rect.y1, x2 = rect.x2, y2 = rect.y2 }
+end
+
+function crop(slot, cut)
+    local cell, texture = slot.cell, slot.texture
+    local bottom = cell.y + cell.h
+    local top = clamp(cut, cell.y, bottom)
+    wd_screen.place_slot(slot, cell.x, top, cell.w, bottom - top)
+    local texture_top = texture.y1 + (top - cell.y) * (texture.y2 - texture.y1) / cell.h
+    wd_screen.set_texture_rect(slot, texture.x1, texture_top, texture.x2, texture.y2)
+end
+
+function new_fill(widget, cell)
+    local slot = { widget = widget, cell = cell, texture = get_texture_rect(widget) }
+    crop(slot, cell.y + cell.h)
+    return slot
+end
+
+function measure(span, slot, texture_file)
+    local cell, texture = slot.cell, slot.texture
+    local texture_h = texture.y2 - texture.y1
+    local top, bottom = wd_screen.get_painted_rows(texture_file, texture.x1, texture.y1, texture.x2, texture.y2)
+    if top == false then
+        return
+    end
+    if not top then
+        top, bottom = cell.y, cell.y + cell.h
+    else
+        local scale = cell.h / texture_h
+        top, bottom = cell.y + top * scale, cell.y + bottom * scale
+    end
+    span.top = math.min(span.top or top, top)
+    span.bottom = math.max(span.bottom or bottom, bottom)
+    if texture_h > 0 then
+        span.rows_per_unit = texture_h / cell.h
+    end
+end
+
+function get_cut(span, ratio)
+    local height = span.bottom - span.top
+    local filled = clamp(ratio, 0, 1)
+    local rows_per_unit = span.rows_per_unit
+    if rows_per_unit then
+        local steps = math.max(1, math.floor(height * rows_per_unit + 0.5))
+        filled = math.floor(filled * steps + 0.5) / steps
+    end
+    return span.bottom - filled * height
+end
+
+function crop_to(slots, span, ratio)
+    if not span.top then
+        return
+    end
+    local cut = get_cut(span, ratio)
+    for _, slot in ipairs(slots) do
+        crop(slot, cut)
+    end
+end
+
+function new_limb(entry, new_widget, texture_file)
+    local limb = { limb = entry.limb }
+    for _, layer in ipairs(LAYERS) do
+        local slots, widgets = {}, {}
+        for _, part in ipairs(entry.parts) do
+            local widget, cell = new_widget(part, layer)
+            slots[#slots + 1] = new_fill(widget, cell)
+            widgets[#widgets + 1] = widget
+        end
+        local group = wd_screen.new_color_group(widgets)
+        group.slots = slots
+        limb[layer] = group
+    end
+    for _, slot in ipairs(limb.perm.slots) do
+        measure(limb, slot, texture_file)
+    end
+    return limb
+end
+
+function set_limb(limb, perm, total)
+    if limb.perm_ratio ~= perm or limb.total_ratio ~= total then
+        limb.perm_ratio, limb.total_ratio = perm, total
+        crop_to(limb.temp.slots, limb, total)
+        crop_to(limb.perm.slots, limb, perm)
+    end
+end

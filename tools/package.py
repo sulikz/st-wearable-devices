@@ -38,6 +38,8 @@ def build(output: str | Path):
             shutil.copytree(option / "gamedata", stage / "src" / option.name / "gamedata")
     shutil.copytree(ROOT / "fomod", stage / "fomod")
     shutil.copy2(ROOT / "README.md", stage / "README.md")
+    shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", stage / "THIRD_PARTY_NOTICES.md")
+    shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", core.parent / "THIRD_PARTY_NOTICES.md")
     check_fomod_sources(stage)
 
     output = Path(output)

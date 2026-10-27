@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <file name="wd\ui\faces\arcs_mono\glyphs">
+    <texture id="wd_font_face_clock" x="0" y="0" width="512" height="320" />
+  </file>
+</w>

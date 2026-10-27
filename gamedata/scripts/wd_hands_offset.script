@@ -17,7 +17,8 @@ local function set_axes(target, source)
     end
 end
 
-local function ease_smooth(progress)
+function ease_smooth(progress)
+    progress = clamp(progress, 0, 1)
     return progress * progress * (3 - 2 * progress)
 end
 
@@ -47,7 +48,7 @@ function new_blend(from, to, now, duration)
 end
 
 function advance_blend(blend, now)
-    local ease = ease_smooth(math.min(1, math.max(0, (now - blend.start) / blend.duration)))
+    local ease = ease_smooth((now - blend.start) / blend.duration)
     lerp_axes(blend.current.pos, blend.from.pos, blend.to.pos, ease)
     lerp_axes(blend.current.rot, blend.from.rot, blend.to.rot, ease)
     return blend.current
@@ -88,6 +89,18 @@ function new(cfg)
         end
         set_axes(current.pos, pos)
         set_axes(current.rot, rot)
+    end
+
+    function self.prime()
+        for _, anms in ipairs({ pos_anms, rot_anms }) do
+            for axis = 1, 3 do
+                local anm = anms[axis]
+                if not active_layers[anm] then
+                    game.play_hud_anm(anm, part, LAYER_SPEED, 0, true, true)
+                    game.stop_hud_anm(anm, true)
+                end
+            end
+        end
     end
 
     function self.forget()

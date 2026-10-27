@@ -1,0 +1,123 @@
+MODULES = {
+    [1] = "face_classic",
+    [2] = "face_arcs_mono_clock",
+    [3] = "face_arcs_mono_nav",
+    [4] = "face_arcs_mono_limbs",
+}
+
+CLASSIC_THEME = "classic"
+
+THEMES = {
+    { id = CLASSIC_THEME, label = "Classic", faces = { 1 } },
+    { id = "arcs_mono", label = "Arcs Monochromatic", faces = { 2, 4, 3 } },
+}
+
+local themed = {}
+for _, theme in ipairs(THEMES) do
+    for _, face_id in ipairs(theme.faces) do
+        assert(not themed[face_id], "wd_faces: face " .. face_id .. " is listed by two themes")
+        themed[face_id] = true
+    end
+end
+for face_id in pairs(MODULES) do
+    assert(themed[face_id], "wd_faces: face " .. face_id .. " belongs to no theme")
+end
+
+function get_module(face_id)
+    return _G[MODULES[face_id]]
+end
+
+local function is_available(face_id)
+    local module = get_module(face_id)
+    local check = module and module.FACE.is_available
+    return not check or check()
+end
+
+local function is_listed(list, value)
+    for _, entry in ipairs(list) do
+        if entry == value then
+            return true
+        end
+    end
+    return false
+end
+
+function is_offered(config, face_id)
+    return is_listed(config.FACES, face_id) and is_available(face_id)
+end
+
+function get_theme_of(face_id)
+    for _, theme in ipairs(THEMES) do
+        if is_listed(theme.faces, face_id) then
+            return theme
+        end
+    end
+    return nil
+end
+
+function get_face_id(config)
+    local saved = config.transforms.face_id
+    if is_offered(config, saved) then
+        return saved
+    end
+    for _, face_id in ipairs(config.FACES) do
+        if is_available(face_id) then
+            return face_id
+        end
+    end
+    return nil
+end
+
+function get_theme(config)
+    return get_theme_of(get_face_id(config))
+end
+
+function get_offered_faces(config, theme)
+    local offered = {}
+    for _, face_id in ipairs(theme.faces) do
+        if is_offered(config, face_id) then
+            offered[#offered + 1] = face_id
+        end
+    end
+    return offered
+end
+
+function get_offered_themes(config)
+    local offered = {}
+    for _, theme in ipairs(THEMES) do
+        if get_offered_faces(config, theme)[1] then
+            offered[#offered + 1] = theme
+        end
+    end
+    return offered
+end
+
+local function get_index_of(list, value)
+    for index, entry in ipairs(list) do
+        if entry == value then
+            return index
+        end
+    end
+    return 1
+end
+
+function get_numbered_face_id(config, number)
+    local offered = get_offered_faces(config, get_theme(config))
+    return offered[2] and offered[number]
+end
+
+function new_theme_field(config, on_change)
+    local field = wd_gui.new_enum(function()
+        local labels = {}
+        for index, theme in ipairs(get_offered_themes(config)) do
+            labels[index] = theme.label
+        end
+        return labels
+    end, function()
+        return get_index_of(get_offered_themes(config), get_theme(config))
+    end, function(index)
+        return get_offered_faces(config, get_offered_themes(config)[index])[1]
+    end, { no_apply = true })
+    field.on_change = on_change
+    return field
+end
