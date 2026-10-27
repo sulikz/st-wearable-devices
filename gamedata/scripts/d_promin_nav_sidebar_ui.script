@@ -78,7 +78,7 @@ local place_widget = wd_screen.place_widget
 
 local function place_segment(slot, top, height)
     local line_w = LAYOUT.route.line_w
-    place_widget(slot.widget, (LAYOUT.icon_w - line_w) / 2, top, line_w, height)
+    wd_panel.place_soft_fill(slot, (LAYOUT.icon_w - line_w) / 2, top, line_w, height)
 end
 
 local function place_dot(dot, kind, row_h)
@@ -140,8 +140,8 @@ local function build_sidebar(kit)
         local cell = kit.new_cell({ icon = icon, align = "center", box = false, parent = block.holder })
         return add(cell, 0, row, LAYOUT.icon_w)
     end
-    local function new_fill(role)
-        return keep(kit.new_fill(role, block.holder))
+    local function new_line(role)
+        return keep(kit.new_soft_fill(role, wd_panel.SOFT_FILLS.line_v, block.holder))
     end
     local function new_dot(row, kind)
         add_row_box(0, row, LAYOUT.icon_w)
@@ -161,10 +161,10 @@ local function build_sidebar(kit)
     local route_spec = LAYOUT.route
     local here_y = 1.5 * row_h
     start_block("route")
-    local route = { line = new_fill("dim"), leg = new_fill("text"), dashes = {}, stops = {} }
+    local route = { line = new_line("dim"), leg = new_line("text"), dashes = {}, stops = {} }
     place_segment(route.leg, here_y, row_h)
     for index = 1, route_spec.dash.count do
-        route.dashes[index] = new_fill("dim")
+        route.dashes[index] = new_line("dim")
     end
     route.title = new_text(0, 1, LAYOUT.w)
     route.here = { dot = new_dot(2, "here"), name = new_text(LAYOUT.icon_w, 2, LAYOUT.w - LAYOUT.icon_w) }

@@ -290,6 +290,9 @@ local function new_px_space(img_w, img_h)
     function space.place_box(box, px, py, pw, ph)
         box.place(space.x(px), space.y(py), space.w(pw), space.h(ph))
     end
+    function space.place_soft_fill(slot, px, py, pw, ph)
+        wd_panel.place_soft_fill(slot, space.x(px), space.y(py), space.w(pw), space.h(ph))
+    end
     return space
 end
 

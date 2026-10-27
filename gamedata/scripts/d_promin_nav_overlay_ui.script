@@ -28,6 +28,8 @@ local DIST_TEXT = "%d M"
 
 local set_shown = wd_screen.set_shown
 local place_widget = wd_screen.place_widget
+local place_soft_fill = wd_panel.place_soft_fill
+local SOFT_FILLS = wd_panel.SOFT_FILLS
 
 function get_scale_distance(max_m)
     if not (max_m and max_m > 0) then
@@ -174,9 +176,9 @@ end
 local function build_zoom(kit)
     local zoom = {
         cell = kit.new_cell({ chars = LAYOUT.zoom.chars, roles = OVERLAY_ROLES }),
-        bar = kit.new_fill("text"),
-        left_tick = kit.new_fill("text"),
-        right_tick = kit.new_fill("text"),
+        bar = kit.new_soft_fill("text", SOFT_FILLS.line_h),
+        left_tick = kit.new_soft_fill("text", SOFT_FILLS.line_v),
+        right_tick = kit.new_soft_fill("text", SOFT_FILLS.line_v),
         shown = false,
         rect = { x1 = 0, y1 = 0, x2 = 0, y2 = 0 },
     }
@@ -206,9 +208,9 @@ local function set_zoom_distance(zoom, style, zoom_m, screen_h)
     cell.place(left, layout.y, width, style.row_h)
     local bar_x = left + style.pad + cell.text_width + style.gap
     local tick_y = layout.y + (style.row_h - layout.tick_h) / 2
-    place_widget(zoom.bar.widget, bar_x, tick_y + layout.tick_h - layout.bar_h, bar_w, layout.bar_h)
-    place_widget(zoom.left_tick.widget, bar_x, tick_y, layout.bar_h, layout.tick_h)
-    place_widget(zoom.right_tick.widget, bar_x + bar_w - layout.bar_h, tick_y, layout.bar_h, layout.tick_h)
+    place_soft_fill(zoom.bar, bar_x, tick_y + layout.tick_h - layout.bar_h, bar_w, layout.bar_h)
+    place_soft_fill(zoom.left_tick, bar_x, tick_y, layout.bar_h, layout.tick_h)
+    place_soft_fill(zoom.right_tick, bar_x + bar_w - layout.bar_h, tick_y, layout.bar_h, layout.tick_h)
     local half = style.border_w / 2
     local rect = zoom.rect
     rect.x1 = left - half

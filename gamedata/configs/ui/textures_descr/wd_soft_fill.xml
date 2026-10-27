@@ -1,0 +1,7 @@
+<w>
+<file name="wd\ui\soft_fill">
+	<texture id="wd_soft_bar" x="0" y="4" width="8" height="16"/>
+	<texture id="wd_soft_line_h" x="0" y="24" width="8" height="8"/>
+	<texture id="wd_soft_line_v" x="0" y="40" width="8" height="4"/>
+</file>
+</w>

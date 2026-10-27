@@ -105,14 +105,14 @@ local function new_claim(pool, get_key)
 end
 
 local function build_pools(rows, kit, parent, row_chars)
-    rows.focus = { fill = kit.new_fill("focus"), bar = kit.new_fill("text") }
+    rows.focus = { fill = kit.new_fill("focus"), bar = kit.new_soft_fill("text", wd_panel.SOFT_FILLS.line_v) }
     rows.flash = kit.new_fill("text")
     rows.rules = {}
     local label_h = px.h(LAYOUT.rule.label_h)
     for index = 1, RULES do
         rows.rules[index] = {
-            left = kit.new_fill("dim"),
-            right = kit.new_fill("dim"),
+            left = kit.new_soft_fill("dim", wd_panel.SOFT_FILLS.line_h),
+            right = kit.new_soft_fill("dim", wd_panel.SOFT_FILLS.line_h),
             chip = kit.new_fill("text"),
             label = kit.new_text({ chars = LAYOUT.rule.chars, height = label_h }),
         }
@@ -254,7 +254,7 @@ function new(kit, parent, row_chars)
         end
         local focus = LAYOUT.focus
         px.place(rows.focus.fill.widget, focus.x, top, focus.w, bottom - top)
-        px.place(rows.focus.bar.widget, focus.x, top, focus.bar_w, bottom - top)
+        px.place_soft_fill(rows.focus.bar, focus.x, top, focus.bar_w, bottom - top)
         cursor.focused = true
     end
 
@@ -404,8 +404,8 @@ function new(kit, parent, row_chars)
         set_shown(rule.chip, is_new)
         local line_role = is_new and "text" or "dim"
         local line_y = block_y + (divider_h - spec.line_h) / 2
-        px.place(rule.left.widget, spec.left, line_y, left_x - spec.gap - spec.left, spec.line_h)
-        px.place(rule.right.widget, right_x + spec.gap, line_y, spec.right - right_x - spec.gap, spec.line_h)
+        px.place_soft_fill(rule.left, spec.left, line_y, left_x - spec.gap - spec.left, spec.line_h)
+        px.place_soft_fill(rule.right, right_x + spec.gap, line_y, spec.right - right_x - spec.gap, spec.line_h)
         show_rule_line(rule.left, line_role)
         show_rule_line(rule.right, line_role)
         rule.label.place(px.x(label_x), px.y(block_y + (divider_h - spec.label_h) / 2))

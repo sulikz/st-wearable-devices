@@ -34,7 +34,8 @@ local function build_bands(page, kit)
     local band_h = ROWS_LAYOUT.band_h
     local view = ROWS_LAYOUT.view
     local text = ROWS_LAYOUT.text
-    page.track = { fill = kit.new_fill("track_fill"), thumb = kit.new_fill("meta") }
+    local line_v = wd_panel.SOFT_FILLS.line_v
+    page.track = { fill = kit.new_soft_fill("track_fill", line_v), thumb = kit.new_soft_fill("meta", line_v) }
     local top_box = kit.new_box()
     px.place_box(top_box, feed.x, feed.top, feed.w, band_h)
     page.top_band = { box = top_box, chip = new_chip(kit, ARROW_UP) }
@@ -151,8 +152,8 @@ local function new_page(ctx, chrome, kit)
         local thumb_h = math.max(spec.min_thumb, track_h * track_h / content_h)
         local ratio = clamp(view.scroll_top / (content_h - view_cfg.h), 0, 1)
         local track_x = ROWS_LAYOUT.track_x
-        px.place(track.fill.widget, track_x, view_cfg.top, spec.w, track_h)
-        px.place(track.thumb.widget, track_x, view_cfg.top + (track_h - thumb_h) * ratio, spec.w, thumb_h)
+        px.place_soft_fill(track.fill, track_x, view_cfg.top, spec.w, track_h)
+        px.place_soft_fill(track.thumb, track_x, view_cfg.top + (track_h - thumb_h) * ratio, spec.w, thumb_h)
     end
 
     local function render(view)

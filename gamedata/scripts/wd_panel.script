@@ -1,6 +1,12 @@
 local FILL_ID = wd_screen.FILL_ID
 local BOX_ROLES = { fill = "fill", border = "border" }
 
+SOFT_FILLS = {
+    bar = { id = "wd_soft_bar", texels = 16, visible = 13 },
+    line_h = { id = "wd_soft_line_h", texels = 8, visible = 2 },
+    line_v = { id = "wd_soft_line_v", texels = 8, visible = 2, vertical = true },
+}
+
 local scratch_pos = vector2()
 
 local set_shown = wd_screen.set_shown
@@ -15,6 +21,18 @@ function new_widget(parent, texture_id, binder)
     widget:Show(false)
     parent:AttachChild(widget)
     return widget
+end
+
+function place_soft_fill(slot, left, top, width, height)
+    local profile = slot.profile
+    local grow = profile.texels / profile.visible
+    if profile.vertical then
+        local quad_w = width * grow
+        place_widget(slot.widget, left - (quad_w - width) / 2, top, quad_w, height)
+    else
+        local quad_h = height * grow
+        place_widget(slot.widget, left, top - (quad_h - height) / 2, width, quad_h)
+    end
 end
 
 function new(cfg)
@@ -53,6 +71,12 @@ function new(cfg)
 
     function kit.new_fill(role, parent)
         return new_slot(new_widget(parent or cfg.parent, FILL_ID, binder), role)
+    end
+
+    function kit.new_soft_fill(role, profile, parent)
+        local slot = new_slot(new_widget(parent or cfg.parent, profile.id, binder), role)
+        slot.profile = profile
+        return slot
     end
 
     function kit.new_image(texture_id, role, parent, image_binder)
@@ -171,17 +195,18 @@ function new(cfg)
         local border_w = roles.border_w or style.border_w
         local box = { fill = roles.fill and kit.new_fill(roles.fill, parent), edges = {} }
         for index = 1, 4 do
-            box.edges[index] = kit.new_fill(roles.border, parent)
+            box.edges[index] =
+                kit.new_soft_fill(roles.border, index <= 2 and SOFT_FILLS.line_h or SOFT_FILLS.line_v, parent)
         end
         function box.place(left, top, width, height)
             local half = border_w / 2
             if box.fill then
                 place_widget(box.fill.widget, left, top, width, height)
             end
-            place_widget(box.edges[1].widget, left - half, top - half, width + border_w, border_w)
-            place_widget(box.edges[2].widget, left - half, top + height - half, width + border_w, border_w)
-            place_widget(box.edges[3].widget, left - half, top - half, border_w, height + border_w)
-            place_widget(box.edges[4].widget, left + width - half, top - half, border_w, height + border_w)
+            place_soft_fill(box.edges[1], left - half, top - half, width + border_w, border_w)
+            place_soft_fill(box.edges[2], left - half, top + height - half, width + border_w, border_w)
+            place_soft_fill(box.edges[3], left - half, top - half, border_w, height + border_w)
+            place_soft_fill(box.edges[4], left + width - half, top - half, border_w, height + border_w)
         end
 
         function box.set_visible(flag)
@@ -343,7 +368,7 @@ function new(cfg)
     end
 
     function kit.new_bar(opts)
-        local bar = { level = kit.new_fill(opts.level, opts.parent) }
+        local bar = { level = kit.new_soft_fill(opts.level, SOFT_FILLS.bar, opts.parent) }
         local bar_x, bar_y, bar_w, bar_h
 
         function bar.place(left, top, width, height)
@@ -357,7 +382,7 @@ function new(cfg)
             bar.ratio = ratio
             local inset = opts.inset
             local level_w = (bar_w - 2 * inset) * math.max(0, math.min(1, ratio))
-            place_widget(bar.level.widget, bar_x + inset, bar_y + inset, level_w, bar_h - 2 * inset)
+            place_soft_fill(bar.level, bar_x + inset, bar_y + inset, level_w, bar_h - 2 * inset)
         end
 
         function bar.set_visible(flag)

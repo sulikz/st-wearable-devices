@@ -6,6 +6,8 @@ local body_binder = wd_screen.new_binder(d_promin_config.BODY_SHADER)
 
 local set_shown = wd_screen.set_shown
 local place_widget = wd_screen.place_widget
+local place_soft_fill = wd_panel.place_soft_fill
+local SOFT_FILLS = wd_panel.SOFT_FILLS
 
 BACKGROUND = "wd_promin_page_bio"
 TITLE_TEXTURE = "wd_promin_title_bio"
@@ -183,11 +185,11 @@ local function build_effects(kit)
         local top = px.y(art_top)
         local row = new_sidebar_row(kit, effect.icon, effect.name, top, columns)
         row.effect = effect
-        row.track = kit.new_fill("dim")
-        row.level = kit.new_fill("text")
+        row.track = kit.new_soft_fill("dim", SOFT_FILLS.line_h)
+        row.level = kit.new_soft_fill("text", SOFT_FILLS.line_h)
         row.underline = { x = underline_x, y = px.y(art_top + baked.UNDERLINE.y), w = underline_w, h = underline_h }
         row.seconds = 0
-        place_widget(row.track.widget, underline_x, row.underline.y, underline_w, underline_h)
+        place_soft_fill(row.track, underline_x, row.underline.y, underline_w, underline_h)
         for _, booster in ipairs(effect.boosters) do
             by_booster[booster] = row
         end
@@ -225,8 +227,8 @@ local function build_status(kit)
     local stamina = rows.stamina
     local tick_h = px.h(baked.TICK.h)
     local track_top = stamina.track_top
-    stamina.cap = kit.new_fill("border")
-    stamina.tick = kit.new_fill("text")
+    stamina.cap = kit.new_soft_fill("border", SOFT_FILLS.bar)
+    stamina.tick = kit.new_soft_fill("text", SOFT_FILLS.line_v)
     stamina.cap_rect = {
         x = track_x + inset,
         w = track_w - 2 * inset,
@@ -269,7 +271,7 @@ local function build_geiger(kit)
     local shield = new_sidebar_row(kit, "prot_rad", GEIGER_OFF.shield.text, px.y(GEIGER.shield_y), columns)
     local bar = kit.new_bar({ level = "text", inset = inset })
     bar.place(track_x, px.y(GEIGER.scale_y + track.y), track_w, px.h(track.h))
-    local marker = kit.new_fill("text")
+    local marker = kit.new_soft_fill("text", SOFT_FILLS.line_v)
     return {
         frame = frame,
         reading = reading,
@@ -344,7 +346,7 @@ local function show_effect(row)
     local ratio = get_snapped(row.seconds / row.duration, baked.UNDERLINE.w)
     if row.ratio ~= ratio then
         row.ratio = ratio
-        place_widget(row.level.widget, underline.x, underline.y, underline.w * ratio, underline.h)
+        place_soft_fill(row.level, underline.x, underline.y, underline.w * ratio, underline.h)
     end
 end
 
@@ -370,8 +372,8 @@ local function place_stamina_cap(row, cap)
     row.cap_ratio = cap
     local rect = row.cap_rect
     local cap_x = rect.x + rect.w * cap
-    place_widget(row.cap.widget, cap_x, rect.y, rect.x + rect.w - cap_x, rect.h)
-    place_widget(row.tick.widget, cap_x, rect.tick_y, rect.tick_w, rect.tick_h)
+    place_soft_fill(row.cap, cap_x, rect.y, rect.x + rect.w - cap_x, rect.h)
+    place_soft_fill(row.tick, cap_x, rect.tick_y, rect.tick_w, rect.tick_h)
 end
 
 local function show_unknown_row(row, text)
@@ -474,7 +476,7 @@ local function place_geiger_marker(geiger, ratio)
     end
     geiger.marker_ratio = ratio
     local rect = geiger.marker_rect
-    place_widget(geiger.marker.widget, rect.x + rect.w * ratio - rect.marker_w / 2, rect.y, rect.marker_w, rect.h)
+    place_soft_fill(geiger.marker, rect.x + rect.w * ratio - rect.marker_w / 2, rect.y, rect.marker_w, rect.h)
 end
 
 local function set_live_shown(geiger, flag)
