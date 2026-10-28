@@ -26,6 +26,7 @@ local MIN_GEIGER = -999
 local MAX_GEIGER = 9999
 local GEIGER_FRAME = "wd_bio_geiger"
 local GEIGER_UNIT = "wd_bio_geiger_unit"
+local LABEL_PREFIX = "wd_bio_label_"
 local MAX_TIMER_SECONDS = 99 * 60 + 59
 local REAPPLY_SECONDS = 0.5
 
@@ -101,12 +102,18 @@ GEIGER_OFF = {
 
 local label_ids = {}
 
-function get_label_id(text)
-    local id = label_ids[text]
+function get_label_id(text, prefix)
+    prefix = prefix or LABEL_PREFIX
+    local ids = label_ids[prefix]
+    if not ids then
+        ids = {}
+        label_ids[prefix] = ids
+    end
+    local id = ids[text]
     if not id then
         local slug = text:lower():gsub("[^a-z0-9]+", "_"):gsub("^_+", ""):gsub("_+$", "")
-        id = "wd_bio_label_" .. slug
-        label_ids[text] = id
+        id = prefix .. slug
+        ids[text] = id
     end
     return id
 end
@@ -115,7 +122,7 @@ local function get_icon(name)
     return { id = "wd_bio_icon_" .. name, w = px.w(baked.ICON), h = px.h(baked.ICON) }
 end
 
-local function get_percent(ratio)
+function get_percent(ratio)
     return math.floor(clamp(ratio, 0, 1) * 100 + 0.5)
 end
 
@@ -126,7 +133,7 @@ local GEIGER_STEPS = GEIGER_TRACK.w - 2 * GEIGER_TRACK.inset
 local GEIGER_RANGE = GEIGER.range
 local GEIGER_DECADES = math.log10(GEIGER_RANGE.max / GEIGER_RANGE.min)
 
-local function get_snapped(ratio, steps)
+function get_snapped(ratio, steps)
     return math.floor(clamp(ratio, 0, 1) * steps + 0.5) / steps
 end
 
@@ -156,8 +163,8 @@ local function new_label(kit, text, left, top, width)
     return cell
 end
 
-local function show_label(cell, text, role)
-    cell.set_label(get_label_id(text))
+function show_label(cell, text, role, prefix)
+    cell.set_label(get_label_id(text, prefix))
     cell.set_role(role)
 end
 
@@ -278,6 +285,7 @@ local function build_geiger(kit)
         shield = shield,
         bar = bar,
         marker = marker,
+        steps = GEIGER_STEPS,
         marker_rect = {
             x = track_x + inset,
             w = track_w - 2 * inset,
@@ -289,38 +297,46 @@ local function build_geiger(kit)
     }
 end
 
-local function get_part_cell(part)
-    local cell = baked.PARTS[part]
+local function get_part_cell(cells, part)
+    local cell = cells[part]
     return { x = px.x(cell.x), y = px.y(cell.y), w = px.w(cell.w), h = px.h(cell.h) }
 end
 
-local function build_silhouette(kit, parent)
+function new_silhouette(kit, parent, cells, id_prefix, texture_file)
     local silhouette = { tracks = {}, fills = {}, limbs = {} }
     for _, entry in ipairs(wd_vitals.LIMB_PARTS) do
         for _, part in ipairs(entry.parts) do
-            local cell = get_part_cell(part)
-            local track = kit.new_image("wd_bio_part_" .. part, "dim")
+            local cell = get_part_cell(cells, part)
+            local track = kit.new_image(id_prefix .. part, "dim")
             place_widget(track.widget, cell.x, cell.y, cell.w, cell.h)
             silhouette.tracks[#silhouette.tracks + 1] = track
         end
     end
     local function new_part_widget(part)
-        local widget = wd_panel.new_widget(parent, "wd_bio_part_" .. part, body_binder)
+        local widget = wd_panel.new_widget(parent, id_prefix .. part, body_binder)
         silhouette.fills[#silhouette.fills + 1] = widget
-        return widget, get_part_cell(part)
+        return widget, get_part_cell(cells, part)
     end
     for index, entry in ipairs(wd_vitals.LIMB_PARTS) do
-        silhouette.limbs[index] = wd_silhouette.new_limb(entry, new_part_widget, d_promin_config.SPRITES_TEXTURE)
+        silhouette.limbs[index] = wd_silhouette.new_limb(entry, new_part_widget, texture_file)
     end
     return silhouette
 end
 
-local function show_text(cell, text, role)
+function show_text(cell, text, role)
     cell.set_text(text)
     cell.set_role(role)
 end
 
-local function show_effect(row)
+function get_time_left_ratio(entry)
+    if not entry.duration or entry.seconds > entry.last_seconds + REAPPLY_SECONDS then
+        entry.duration = entry.seconds
+    end
+    entry.last_seconds = entry.seconds
+    return entry.seconds / entry.duration
+end
+
+local function show_effect(kit, row)
     local active = row.seconds > 0
     local role = active and "text" or "dim"
     row.icon.set_role(role)
@@ -338,12 +354,8 @@ local function show_effect(row)
         row.whole = whole
         row.value.set_text(format_timer(whole))
     end
-    if not row.duration or row.seconds > row.last_seconds + REAPPLY_SECONDS then
-        row.duration = row.seconds
-    end
-    row.last_seconds = row.seconds
     local underline = row.underline
-    local ratio = get_snapped(row.seconds / row.duration, baked.UNDERLINE.w)
+    local ratio = get_snapped(get_time_left_ratio(row), baked.UNDERLINE.w)
     if row.ratio ~= ratio then
         row.ratio = ratio
         place_soft_fill(row.level, underline.x, underline.y, underline.w * ratio, underline.h)
@@ -364,8 +376,8 @@ local function show_percent_row(kit, row, ratio)
     show_level_row(kit, row, ratio, d_promin_config.get_state_role(ratio), get_percent(ratio))
 end
 
-local function place_stamina_cap(row, cap)
-    cap = get_snapped(cap, LEVEL_STEPS)
+function place_stamina_cap(row, cap, steps)
+    cap = get_snapped(cap, steps)
     if row.cap_ratio == cap then
         return
     end
@@ -393,21 +405,23 @@ local function show_dose_row(kit, row, msv, readable)
     show_level_row(kit, row, radiation, d_promin_config.get_state_role(radiation, true), msv)
 end
 
-local function show_vitals(kit, rows, conditions, dose_readable)
-    show_percent_row(kit, rows.health, wd_vitals.get_health())
-    show_percent_row(kit, rows.psy, wd_vitals.get_psy())
-    local msv = wd_vitals.get_radiation_msv()
-    show_dose_row(kit, rows.radiation, msv, dose_readable)
-    show_percent_row(kit, rows.stamina, wd_vitals.get_stamina())
-    place_stamina_cap(rows.stamina, wd_vitals.get_stamina_cap(conditions, msv))
-end
-
 local function show_bleeding(row)
     local tier = BLEEDING_TIERS[wd_vitals.get_bleeding_tier()]
     local role = tier and tier.role or "dim"
     row.icon.set_role(role)
     row.name.set_role(role)
     show_text(row.value, tier and tier.text or NONE, role)
+end
+
+local function show_vitals(page, conditions)
+    local kit, rows = page.kit, page.status
+    show_percent_row(kit, rows.health, wd_vitals.get_health())
+    show_percent_row(kit, rows.psy, wd_vitals.get_psy())
+    local msv = wd_vitals.get_radiation_msv()
+    show_dose_row(kit, rows.radiation, msv, page.dose_readable)
+    show_percent_row(kit, rows.stamina, wd_vitals.get_stamina())
+    place_stamina_cap(rows.stamina, wd_vitals.get_stamina_cap(conditions, msv), LEVEL_STEPS)
+    show_bleeding(rows.bleeding)
 end
 
 local function show_need(kit, row, ratio)
@@ -419,12 +433,13 @@ local function show_need(kit, row, ratio)
     show_percent_row(kit, row, ratio)
 end
 
-local function get_weight_text(kit, total, max, width)
+function get_weight_text(kit, total, max, width, text_h)
     local text = string.format(WEIGHT_TEXT, total, max)
-    if kit.measure(text) <= width then
-        return text
+    if kit.measure(text, text_h) <= width then
+        return text, true
     end
-    return string.format(WEIGHT_SHORT_TEXT, total, max)
+    text = string.format(WEIGHT_SHORT_TEXT, total, max)
+    return text, kit.measure(text, text_h) <= width
 end
 
 local function show_weight(kit, row, conditions)
@@ -444,11 +459,15 @@ local function show_mobility(mobility, conditions)
     mobility.border.set_visible(alert)
 end
 
-local function get_scale_position(reading)
+local function get_geiger_scale_ratio(reading)
     if reading <= GEIGER_RANGE.min then
         return 0
     end
-    return get_snapped(math.log10(reading / GEIGER_RANGE.min) / GEIGER_DECADES, GEIGER_STEPS)
+    return math.log10(reading / GEIGER_RANGE.min) / GEIGER_DECADES
+end
+
+local function get_scale_position(reading, steps)
+    return get_snapped(get_geiger_scale_ratio(reading), steps)
 end
 
 local function get_geiger_state(reading, shield)
@@ -460,7 +479,7 @@ local function get_geiger_state(reading, shield)
     return "held"
 end
 
-local function show_geiger_row(row, label, value_text)
+local function show_geiger_row(kit, row, label, value_text)
     row.icon.set_role(label.role)
     show_label(row.name, label.text, label.role)
     show_text(row.value, value_text, label.role)
@@ -479,33 +498,31 @@ local function place_geiger_marker(geiger, ratio)
     place_soft_fill(geiger.marker, rect.x + rect.w * ratio - rect.marker_w / 2, rect.y, rect.marker_w, rect.h)
 end
 
-local function set_live_shown(geiger, flag)
+function set_live_shown(geiger, flag)
     for _, slot in ipairs(geiger.live) do
         set_shown(slot, flag)
     end
 end
 
-local function show_geiger_off(geiger)
-    for key, label in pairs(GEIGER_OFF) do
-        show_geiger_row(geiger[key], label, label.value)
-    end
-    geiger.bar.set_ratio(0)
-end
-
-local function show_geiger(kit, geiger, conditions, linked)
+local function show_geiger(page, conditions, linked)
+    local kit, geiger = page.kit, page.geiger
+    local show_row = page.view.show_geiger_row
     set_live_shown(geiger, linked)
     if not linked then
-        show_geiger_off(geiger)
+        for key, label in pairs(GEIGER_OFF) do
+            show_row(kit, geiger[key], label, label.value)
+        end
+        geiger.bar.set_ratio(0)
         return
     end
     local reading = wd_geiger.get_exact_reading()
     local shield = wd_geiger.get_shield(conditions)
     local state = GEIGER_STATES[get_geiger_state(reading, shield)]
-    show_geiger_row(geiger.reading, state.reading, get_geiger_text(reading))
-    show_geiger_row(geiger.shield, state.shield, get_geiger_text(shield))
-    geiger.bar.set_ratio(get_scale_position(reading))
+    show_row(kit, geiger.reading, state.reading, get_geiger_text(reading))
+    show_row(kit, geiger.shield, state.shield, get_geiger_text(shield))
+    geiger.bar.set_ratio(get_scale_position(reading, geiger.steps))
     kit.set_role(geiger.bar.level, state.reading.role)
-    place_geiger_marker(geiger, get_scale_position(shield))
+    place_geiger_marker(geiger, get_scale_position(shield, geiger.steps))
 end
 
 local function show_silhouette(silhouette)
@@ -547,16 +564,6 @@ local function set_sidebars_shown(page, flag)
     end
 end
 
-local function apply_visibility(page)
-    local visible = page.page_visible and not page.blanked
-    page.chrome.set_visible(visible)
-    if page.kit then
-        set_sidebars_shown(page, visible)
-        page.allow_slow = wd_core.throttle(SLOW_REFRESH_MS)
-        page.allow_geiger = wd_core.throttle(wd_geiger.REFRESH_MS)
-    end
-end
-
 local function collect_widgets(page)
     local cells, always, bars = {}, {}, {}
     local function add_row_cells(row)
@@ -585,16 +592,6 @@ local function collect_widgets(page)
     page.cells, page.always, page.bars = cells, always, bars
 end
 
-local function update_effects(page, conditions)
-    for _, row in ipairs(page.effects) do
-        row.seconds = 0
-    end
-    conditions:BoosterForEach(page.add_booster)
-    for _, row in ipairs(page.effects) do
-        show_effect(row)
-    end
-end
-
 local function update_slow(page, conditions)
     local kit, status = page.kit, page.status
     local food, water, sleep = wd_vitals.get_needs(conditions)
@@ -603,6 +600,35 @@ local function update_slow(page, conditions)
     show_need(kit, status.sleep, sleep)
     show_weight(kit, status.weight, conditions)
     show_mobility(page.mobility, conditions)
+end
+
+local VIEW = {
+    show_effect = show_effect,
+    show_geiger_row = show_geiger_row,
+    show_vitals = show_vitals,
+    update_slow = update_slow,
+    set_widgets_shown = set_sidebars_shown,
+}
+
+local function apply_visibility(page)
+    local visible = page.page_visible and not page.blanked
+    page.chrome.set_visible(visible)
+    if page.kit then
+        page.view.set_widgets_shown(page, visible)
+        page.allow_slow = wd_core.throttle(SLOW_REFRESH_MS)
+        page.allow_geiger = wd_core.throttle(wd_geiger.REFRESH_MS)
+    end
+end
+
+local function update_effects(page, conditions)
+    local kit, effects, show_entry = page.kit, page.effects, page.view.show_effect
+    for _, entry in ipairs(effects) do
+        entry.seconds = 0
+    end
+    conditions:BoosterForEach(page.add_booster)
+    for _, entry in ipairs(effects) do
+        show_entry(kit, entry)
+    end
 end
 
 local function update_page(page)
@@ -619,53 +645,68 @@ local function update_page(page)
     if not conditions then
         return
     end
+    local view = page.view
     update_effects(page, conditions)
     if page.allow_geiger() then
         page.dose_readable = wd_geiger.is_dose_readable()
-        show_geiger(page.kit, page.geiger, conditions, wd_geiger.is_linked())
+        show_geiger(page, conditions, wd_geiger.is_linked())
     end
-    show_vitals(page.kit, page.status, conditions, page.dose_readable)
-    show_bleeding(page.status.bleeding)
+    view.show_vitals(page, conditions)
     show_silhouette(page.silhouette)
     if page.allow_slow() then
-        update_slow(page, conditions)
+        view.update_slow(page, conditions)
     end
 end
 
-function build(ctx)
-    local page = { page_visible = true, blanked = false }
-    page.chrome =
-        d_promin_chrome_ui.build({ init = ctx.init, bg_tex = BACKGROUND, title_tex = TITLE_TEXTURE, wnd = ctx.wnd })
-    local kit = page.chrome.kit
-    page.kit = kit
-    if kit then
-        page.silhouette = build_silhouette(kit, ctx.wnd)
-        page.effects, page.effect_by_booster = build_effects(kit)
-        page.status = build_status(kit)
-        page.mobility = build_mobility(kit)
-        page.geiger = build_geiger(kit)
-        collect_widgets(page)
-        function page.add_booster(booster_type, seconds)
-            local row = page.effect_by_booster[booster_type]
-            if row and seconds > row.seconds then
-                row.seconds = seconds
-            end
+function new_page(ctx, background, view)
+    local page = { page_visible = true, blanked = false, view = view }
+    page.chrome = d_promin_chrome_ui.build({
+        init = ctx.init,
+        theme = ctx.theme,
+        bg_tex = background,
+        title_tex = TITLE_TEXTURE,
+        wnd = ctx.wnd,
+    })
+
+    function page.add_booster(booster_type, seconds)
+        local entry = page.effect_by_booster[booster_type]
+        if entry and seconds > entry.seconds then
+            entry.seconds = seconds
         end
     end
 
     function page.set_visible(visible)
         page.page_visible = visible
         apply_visibility(page)
+        if visible then
+            update_page(page)
+        end
     end
 
     function page.update()
         update_page(page)
     end
 
+    return page
+end
+
+function build(ctx)
+    local page = new_page(ctx, BACKGROUND, VIEW)
+    local kit = page.chrome.kit
+    page.kit = kit
+    if kit then
+        page.silhouette = new_silhouette(kit, ctx.wnd, baked.PARTS, "wd_bio_part_", d_promin_config.SPRITES_TEXTURE)
+        page.effects, page.effect_by_booster = build_effects(kit)
+        page.status = build_status(kit)
+        page.mobility = build_mobility(kit)
+        page.geiger = build_geiger(kit)
+        collect_widgets(page)
+    end
+
     function page.repaint()
         page.chrome.repaint()
     end
 
-    apply_visibility(page)
+    page.set_visible(true)
     return page
 end

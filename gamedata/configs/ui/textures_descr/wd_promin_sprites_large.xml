@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<w>
+  <file name="wd\ui\promin\sprites_large">
+    <texture id="wd_large_part_head" x="542" y="6" width="76" height="84" />
+    <texture id="wd_large_part_torso" x="524" y="102" width="112" height="116" />
+    <texture id="wd_large_part_leftarm" x="426" y="102" width="86" height="180" />
+    <texture id="wd_large_part_rightarm" x="648" y="102" width="86" height="180" />
+    <texture id="wd_large_part_pelvis" x="529" y="230" width="102" height="90" />
+    <texture id="wd_large_part_leftleg" x="480" y="332" width="94" height="256" />
+    <texture id="wd_large_part_rightleg" x="586" y="332" width="94" height="256" />
+    <texture id="wd_large_label_geiger" x="6" y="538" width="278" height="35" />
+    <texture id="wd_large_label_unavailable" x="6" y="585" width="278" height="35" />
+    <texture id="wd_large_label_clear" x="6" y="632" width="278" height="35" />
+    <texture id="wd_large_label_protection" x="6" y="679" width="278" height="35" />
+    <texture id="wd_large_label_elevated" x="6" y="726" width="278" height="35" />
+    <texture id="wd_large_label_protected" x="6" y="773" width="278" height="35" />
+    <texture id="wd_large_label_danger" x="6" y="820" width="278" height="35" />
+    <texture id="wd_large_label_exposed" x="6" y="867" width="278" height="35" />
+    <texture id="wd_large_label_health" x="302" y="606" width="197" height="35" />
+    <texture id="wd_large_label_stamina" x="511" y="606" width="197" height="35" />
+    <texture id="wd_large_label_psy" x="302" y="653" width="197" height="35" />
+    <texture id="wd_large_label_radiation" x="511" y="653" width="197" height="35" />
+    <texture id="wd_large_geiger_unit" x="752" y="400" width="48" height="18" />
+    <texture id="wd_large_nav_block_route" x="6" y="6" width="402" height="222" />
+    <texture id="wd_large_nav_block_package" x="6" y="240" width="402" height="46" />
+    <texture id="wd_large_nav_block_artifacts" x="6" y="298" width="402" height="222" />
+    <texture id="wd_large_icon_heart" x="752" y="6" width="56" height="56" />
+    <texture id="wd_large_icon_psy" x="820" y="6" width="56" height="56" />
+    <texture id="wd_large_icon_rad" x="888" y="6" width="56" height="56" />
+    <texture id="wd_large_icon_stamina" x="956" y="6" width="56" height="56" />
+    <texture id="wd_large_icon_food" x="752" y="74" width="56" height="56" />
+    <texture id="wd_large_icon_water" x="820" y="74" width="56" height="56" />
+    <texture id="wd_large_icon_sleep" x="888" y="74" width="56" height="56" />
+    <texture id="wd_large_icon_bleed" x="956" y="74" width="56" height="56" />
+    <texture id="wd_large_icon_armor" x="752" y="142" width="56" height="56" />
+    <texture id="wd_large_icon_weight" x="820" y="142" width="56" height="56" />
+    <texture id="wd_large_icon_walk" x="888" y="142" width="56" height="56" />
+    <texture id="wd_large_icon_prot_rad" x="956" y="142" width="56" height="56" />
+    <texture id="wd_large_icon_prot_psy" x="752" y="210" width="56" height="56" />
+    <texture id="wd_large_icon_prot_chem" x="820" y="210" width="56" height="56" />
+    <texture id="wd_large_nav_icon_artifact" x="888" y="210" width="56" height="56" />
+    <texture id="wd_large_nav_icon_package" x="956" y="210" width="54" height="59" />
+    <texture id="wd_large_nav_icon_squad" x="752" y="281" width="55" height="41" />
+    <texture id="wd_large_nav_icon_route_here" x="819" y="281" width="32" height="32" />
+    <texture id="wd_large_nav_icon_route_next" x="863" y="281" width="36" height="36" />
+    <texture id="wd_large_nav_icon_route_via" x="911" y="281" width="24" height="24" />
+    <texture id="wd_large_nav_icon_route_goal" x="752" y="334" width="44" height="44" />
+    <texture id="wd_large_nav_icon_route_fold" x="808" y="334" width="12" height="48" />
+  </file>
+</w>

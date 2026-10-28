@@ -2,9 +2,9 @@ local px = d_promin_config.get_px()
 
 local set_shown = wd_screen.set_shown
 
-local BG_TEXTURE = "wd_promin_page_comms"
 local TITLE_TEXTURE = "wd_promin_title_comms"
 local FLASH_MS = 300
+local SQUAD_REFRESH_MS = 500
 local CHIP_ROLES = { fill = "fill", border = "dim" }
 local TEXTS = {
     empty = "NO TRANSMISSIONS",
@@ -12,37 +12,47 @@ local TEXTS = {
     newer = "%d NEWER",
 }
 
-local ROWS_LAYOUT = d_promin_comms_rows_ui.LAYOUT
-local LAYOUT = {
-    track = { w = 4, min_thumb = 24 },
-    band = { chip_top = 3, chip_h = 26, chip_inset = 8, chip_chars = 12, arrow = 12 },
+LAYOUTS = {
+    [d_promin_config.DEFAULT_THEME] = {
+        background = "wd_promin_page_comms",
+        track = { w = 4, min_thumb = 24 },
+        band = { chip_top = 3, chip_h = 26, chip_inset = 8, chip_chars = 12, arrow = 12 },
+    },
+    [d_promin_config.LARGE_THEME] = {
+        background = "wd_promin_page_comms_large",
+        track = { w = 4, min_thumb = 24 },
+        band = { chip_top = 5, chip_h = 30, chip_inset = 8, chip_chars = 12, arrow = 14, text_h = 23 },
+    },
 }
 
-local function new_arrow(id)
-    return { id = id, w = px.w(LAYOUT.band.arrow), h = px.h(LAYOUT.band.arrow) }
+local function new_arrow(id, size)
+    return { id = id, w = px.w(size), h = px.h(size) }
 end
 
-local ARROW_UP = new_arrow("wd_comms_icon_arrow_up")
-local ARROW_DOWN = new_arrow("wd_comms_icon_arrow_down")
-
-local function new_chip(kit, arrow)
-    return kit.new_cell({ icon = arrow, chars = LAYOUT.band.chip_chars, align = "center", roles = CHIP_ROLES })
+local function new_chip(kit, arrow_id, band)
+    return kit.new_cell({
+        icon = new_arrow(arrow_id, band.arrow),
+        chars = band.chip_chars,
+        align = "center",
+        roles = CHIP_ROLES,
+        text_h = band.text_h and px.h(band.text_h),
+    })
 end
 
-local function build_bands(page, kit)
-    local feed = ROWS_LAYOUT.feed
-    local band_h = ROWS_LAYOUT.band_h
-    local view = ROWS_LAYOUT.view
-    local text = ROWS_LAYOUT.text
+local function build_bands(page, kit, rows_layout, band)
+    local feed = rows_layout.feed
+    local band_h = rows_layout.band_h
+    local view = rows_layout.view
+    local text = rows_layout.text
     local line_v = wd_panel.SOFT_FILLS.line_v
     page.track = { fill = kit.new_soft_fill("track_fill", line_v), thumb = kit.new_soft_fill("meta", line_v) }
     local top_box = kit.new_box()
     px.place_box(top_box, feed.x, feed.top, feed.w, band_h)
-    page.top_band = { box = top_box, chip = new_chip(kit, ARROW_UP) }
+    page.top_band = { box = top_box, chip = new_chip(kit, "wd_comms_icon_arrow_up", band) }
     local bottom_box = kit.new_box()
     px.place_box(bottom_box, feed.x, feed.bottom - band_h, feed.w, band_h)
-    page.bottom_band = { box = bottom_box, chip = new_chip(kit, ARROW_DOWN) }
-    page.empty = kit.new_text({ chars = #TEXTS.empty, width = px.w(view.w), align = "center" })
+    page.bottom_band = { box = bottom_box, chip = new_chip(kit, "wd_comms_icon_arrow_down", band) }
+    page.empty = kit.new_text({ chars = #TEXTS.empty, width = px.w(view.w), align = "center", height = px.h(text.h) })
     page.empty.place(px.x(view.x), px.y(view.top + (view.h - text.h) / 2))
 end
 
@@ -58,10 +68,11 @@ local function new_bare_page(chrome)
     }
 end
 
-local function new_page(ctx, chrome, kit)
-    local view_cfg = ROWS_LAYOUT.view
-    local text_cfg = ROWS_LAYOUT.text
-    local row_chars = kit.get_max_chars(px.w(text_cfg.w))
+local function new_page(ctx, chrome, kit, layout)
+    local rows_layout = d_promin_comms_rows_ui.LAYOUTS[ctx.theme]
+    local view_cfg = rows_layout.view
+    local text_cfg = rows_layout.text
+    local row_chars = kit.get_max_chars(px.w(text_cfg.w), px.h(text_cfg.h))
     local page = { chrome = chrome, kit = kit, visible = false }
     page.feed = d_promin_comms_feed.new({
         font = kit.font,
@@ -70,15 +81,24 @@ local function new_page(ctx, chrome, kit)
         max_chars = row_chars,
         view_h = view_cfg.h,
         shrink = view_cfg.shrink,
-        row_h = ROWS_LAYOUT.row_h,
-        pad_top = ROWS_LAYOUT.pad_top,
-        pad_bottom = ROWS_LAYOUT.pad_bottom,
-        gap = ROWS_LAYOUT.gap,
-        divider_h = ROWS_LAYOUT.divider_h,
+        row_h = rows_layout.row_h,
+        head_h = rows_layout.head_h,
+        pad_top = rows_layout.pad_top,
+        pad_bottom = rows_layout.pad_bottom,
+        gap = rows_layout.gap,
+        divider_h = rows_layout.divider_h,
     })
-    page.rows = d_promin_comms_rows_ui.new(kit, ctx.wnd, row_chars)
-    build_bands(page, kit)
-    page.sidebar = d_promin_comms_sidebar_ui.new(kit)
+    page.rows = d_promin_comms_rows_ui.new(kit, ctx.wnd, row_chars, rows_layout)
+    build_bands(page, kit, rows_layout, layout.band)
+    page.sidebar = d_promin_comms_sidebar_ui.new(kit, d_promin_comms_sidebar_ui.LAYOUTS[ctx.theme])
+    local allow_squad = wd_core.throttle(SQUAD_REFRESH_MS)
+
+    local function refresh_squad(force)
+        local allowed = allow_squad()
+        if force or allowed then
+            page.sidebar.show_squad(wd_intel.get_companions())
+        end
+    end
 
     local feed = page.feed
     local rows = page.rows
@@ -98,8 +118,8 @@ local function new_page(ctx, chrome, kit)
 
     local function draw_top_band(view)
         local band = page.top_band
-        local feed_cfg = ROWS_LAYOUT.feed
-        local band_cfg = LAYOUT.band
+        local feed_cfg = rows_layout.feed
+        local band_cfg = layout.band
         band.box.set_visible(true)
         local chip = band.chip
         local older_count = view.older_count
@@ -124,14 +144,14 @@ local function new_page(ctx, chrome, kit)
             chip.set_visible(false)
             return
         end
-        local feed_cfg = ROWS_LAYOUT.feed
-        local band_cfg = LAYOUT.band
+        local feed_cfg = rows_layout.feed
+        local band_cfg = layout.band
         local new_below = view.new_below
         local lit = new_below > 0
         local text = lit and d_promin_comms_feed.format_new(new_below) or string.format(TEXTS.newer, newer_count)
         local width = set_chip_text(chip, text)
-        local top = feed_cfg.bottom - ROWS_LAYOUT.band_h + band_cfg.chip_top
-        chip.place(px.x(ROWS_LAYOUT.rule.center) - width / 2, px.y(top), width, px.h(band_cfg.chip_h))
+        local top = feed_cfg.bottom - rows_layout.band_h + band_cfg.chip_top
+        chip.place(px.x(rows_layout.rule.center) - width / 2, px.y(top), width, px.h(band_cfg.chip_h))
         kit.set_role(chip.box.fill, lit and "text" or "fill")
         chip.box.set_role(lit and "text" or "dim")
         chip.set_role(lit and "fill" or "meta")
@@ -147,11 +167,11 @@ local function new_page(ctx, chrome, kit)
         if not shown then
             return
         end
-        local spec = LAYOUT.track
+        local spec = layout.track
         local track_h = view.view_h
         local thumb_h = math.max(spec.min_thumb, track_h * track_h / content_h)
         local ratio = clamp(view.scroll_top / (content_h - view_cfg.h), 0, 1)
-        local track_x = ROWS_LAYOUT.track_x
+        local track_x = rows_layout.track_x
         px.place_soft_fill(track.fill, track_x, view_cfg.top, spec.w, track_h)
         px.place_soft_fill(track.thumb, track_x, view_cfg.top + (track_h - thumb_h) * ratio, spec.w, thumb_h)
     end
@@ -248,6 +268,7 @@ local function new_page(ctx, chrome, kit)
         end
         sync_messages(false)
         refresh(true, false)
+        refresh_squad(true)
         page.sidebar.set_visible(true)
     end
 
@@ -270,6 +291,7 @@ local function new_page(ctx, chrome, kit)
         end
         was_reading = reading
         refresh(false, reading)
+        refresh_squad(false)
     end
 
     page.repaint = chrome.repaint
@@ -291,11 +313,16 @@ local function new_page(ctx, chrome, kit)
 end
 
 function build(ctx)
-    local chrome =
-        d_promin_chrome_ui.build({ init = ctx.init, bg_tex = BG_TEXTURE, title_tex = TITLE_TEXTURE, wnd = ctx.wnd })
-    local kit = chrome.kit
-    if not kit then
+    local layout = LAYOUTS[ctx.theme]
+    local chrome = d_promin_chrome_ui.build({
+        init = ctx.init,
+        theme = ctx.theme,
+        bg_tex = layout.background,
+        title_tex = TITLE_TEXTURE,
+        wnd = ctx.wnd,
+    })
+    if not chrome.kit then
         return new_bare_page(chrome)
     end
-    return new_page(ctx, chrome, kit)
+    return new_page(ctx, chrome, chrome.page_kit, layout)
 end

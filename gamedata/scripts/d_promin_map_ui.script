@@ -1,4 +1,4 @@
-local MAX_MARKS = 64
+MAX_MARKS = 64
 local ICON_H = 0.0035
 local PDA_ICON_PX = 19
 local ARROW_H = 0.0018
@@ -12,14 +12,27 @@ local map_binder = wd_screen.new_binder(d_promin_config.MAP_SHADER)
 
 local px = d_promin_config.get_px()
 
-local BG_TEXTURE = "wd_promin_page_nav"
 local TITLE_TEXTURE = "wd_promin_title_nav"
 local WHEEL_ZOOM_FACTOR = 1.15
 
-LAYOUT = {
-    view = { x = px.x(78), y = px.y(76), w = px.w(621), h = px.h(498) },
-    quest_dot = px.h(22),
+LAYOUTS = {
+    [d_promin_config.DEFAULT_THEME] = {
+        background = "wd_promin_page_nav",
+        view = { x = px.x(78), y = px.y(76), w = px.w(621), h = px.h(498) },
+        icon_scale = 1,
+    },
+    [d_promin_config.LARGE_THEME] = {
+        background = "wd_promin_page_nav_large",
+        view = { x = px.x(26), y = px.y(76), w = px.w(623), h = px.h(498) },
+        icon_scale = 1.36,
+    },
 }
+for _, layout in pairs(LAYOUTS) do
+    layout.icon_h = ICON_H * layout.icon_scale
+    layout.arrow_h = ARROW_H * layout.icon_scale
+end
+LAYOUT = LAYOUTS[d_promin_config.DEFAULT_THEME]
+QUEST_DOT = px.h(22)
 
 local PANEL_RGB = d_promin_config.PANEL_RGB
 local WHITE_RGB = { r = 255, g = 255, b = 255 }
@@ -33,7 +46,7 @@ local ARROW_ART_H = 29
 local POINTER_CELL = 64
 local POINTER_SPAN = 2
 
-local MARK_SCALE = LAYOUT.quest_dot / ICON_H
+local MARK_SCALE = QUEST_DOT / ICON_H
 
 local function new_tile_icon(id, scale, rgb)
     return { id = id, px_w = 1, px_h = 1, scale = scale, r = rgb[1], g = rgb[2], b = rgb[3] }
@@ -102,34 +115,34 @@ local function get_icon_tint(icon)
     return icon.tint
 end
 
-local map_frame = nil
-local frame_scale, frame_x, frame_y = nil, nil, nil
+local map_frames = {}
 
-function get_map_frame()
+function get_map_frame(theme)
     local transforms = d_promin_config.transforms
-    if
-        map_frame
-        and frame_scale == transforms.map_scale
-        and frame_x == transforms.map_x
-        and frame_y == transforms.map_y
-    then
+    local scale, x, y = transforms.map_scale, transforms.map_x, transforms.map_y
+    local map_frame = map_frames[theme]
+    if map_frame and map_frame.scale == scale and map_frame.x == x and map_frame.y == y then
         return map_frame
     end
-    frame_scale, frame_x, frame_y = transforms.map_scale, transforms.map_x, transforms.map_y
-    local view = LAYOUT.view
-    local width = view.w * transforms.map_scale
-    local height = view.h * transforms.map_scale
+    local layout = LAYOUTS[theme]
+    local view = layout.view
+    local width = view.w * scale
+    local height = view.h * scale
     map_frame = {
+        scale = scale,
+        x = x,
+        y = y,
         screen = {
-            x = view.x + (view.w - width) / 2 + transforms.map_x,
-            y = view.y + (view.h - height) / 2 + transforms.map_y,
+            x = view.x + (view.w - width) / 2 + x,
+            y = view.y + (view.h - height) / 2 + y,
             w = width,
             h = height,
         },
-        icon_h = ICON_H,
-        arrow_h = ARROW_H,
+        icon_h = layout.icon_h,
+        arrow_h = layout.arrow_h,
         max_marks = MAX_MARKS,
     }
+    map_frames[theme] = map_frame
     return map_frame
 end
 
@@ -182,15 +195,16 @@ local function resolve_mark_icon(mark)
     return get_category_icon(mark.category)
 end
 
-local function get_icon_size(icon, scale)
-    local height = ICON_H * scale
+local function get_icon_size(icon, scale, icon_h)
+    local height = icon_h * scale
     return height * icon.px_w / icon.px_h, height
 end
 
 local EDGE_EPSILON = 1e-6
 
-local function place_icon_inside(slot, icon, scale, center_x, center_y, screen, dy, tint)
-    local icon_w, icon_h = get_icon_size(icon, scale)
+local function place_icon_inside(page, slot, icon, scale, center_x, center_y, dy, tint)
+    local screen = page.screen
+    local icon_w, icon_h = get_icon_size(icon, scale, page.icon_h)
     local left = center_x - icon_w / 2
     local top = center_y - icon_h / 2
     if
@@ -309,7 +323,7 @@ local function update_quest(page, quest, obstacle)
         set_shown(page.quest, false)
         return nil
     end
-    local icon_w, icon_h = get_icon_size(icon, scale)
+    local icon_w, icon_h = get_icon_size(icon, scale, page.icon_h)
     local screen = page.screen
     local center_x, center_y, on_target
     if frame then
@@ -320,7 +334,7 @@ local function update_quest(page, quest, obstacle)
         center_y = math.max(screen.y1 + icon_h / 2, math.min(screen.y2 - icon_h / 2, page.center.y + quest.y))
     end
     local shown =
-        place_icon_inside(page.quest, icon, scale, center_x, center_y, screen, quest.dy, get_icon_tint(TRACKED_RGB))
+        place_icon_inside(page, page.quest, icon, scale, center_x, center_y, quest.dy, get_icon_tint(TRACKED_RGB))
     if frame and page.quest_frame ~= frame then
         page.quest_frame = frame
         set_frame(page.quest.widget, frame, POINTER_CELL)
@@ -333,7 +347,9 @@ local function update_quest(page, quest, obstacle)
 end
 
 function build(ctx)
+    local layout = LAYOUTS[ctx.theme]
     local page = {
+        icon_h = layout.icon_h,
         visible = false,
         center = { x = 0, y = 0 },
         task_titles = {},
@@ -346,8 +362,13 @@ function build(ctx)
     local icon_tint = get_icon_tint(WHITE_RGB)
     local allow_refresh = wd_core.throttle(REFRESH_MS)
 
-    page.chrome =
-        d_promin_chrome_ui.build({ init = ctx.init, bg_tex = BG_TEXTURE, title_tex = TITLE_TEXTURE, wnd = ctx.wnd })
+    page.chrome = d_promin_chrome_ui.build({
+        init = ctx.init,
+        theme = ctx.theme,
+        bg_tex = layout.background,
+        title_tex = TITLE_TEXTURE,
+        wnd = ctx.wnd,
+    })
 
     page.map = ctx.init("map")
     page.map:SetStretchTexture(true)
@@ -359,7 +380,7 @@ function build(ctx)
         { widget = page.map, tex_id = nil, tint = icon_tint },
         { widget = page.map_detail, tex_id = nil, tint = icon_tint },
     }
-    local kit = page.chrome.kit
+    local kit = page.chrome.page_kit
     page.kit = kit
     local link_layer = kit and kit.new_holder()
     page.marks = {}
@@ -374,7 +395,7 @@ function build(ctx)
     page.quest.widget:SetTextureColor(icon_tint)
     page.arrow = ctx.init("arrow")
     local arrow_icon = ICONS.arrow
-    local arrow_side = ARROW_H * arrow_icon.scale
+    local arrow_side = layout.arrow_h * arrow_icon.scale
     page.arrow:SetWndSize(scratch_size:set(arrow_side, arrow_side))
     page.arrow:SetStretchTexture(true)
     binder.set(page.arrow, arrow_icon.id)
@@ -383,12 +404,13 @@ function build(ctx)
     page.arrow_tint = get_arrow_tint()
     page.arrow:SetTextureColor(page.arrow_tint)
     if kit then
-        page.overlay = d_promin_nav_overlay_ui.new(kit, page.screen, link_layer)
-        page.sidebar = d_promin_nav_sidebar_ui.new(kit)
+        page.overlay =
+            d_promin_nav_overlay_ui.new(kit, page.screen, link_layer, d_promin_nav_overlay_ui.LAYOUTS[ctx.theme])
+        page.sidebar = d_promin_nav_sidebar_ui.new(kit, d_promin_nav_sidebar_ui.LAYOUTS[ctx.theme])
     end
 
     local function reposition()
-        local screen = get_map_frame().screen
+        local screen = get_map_frame(ctx.theme).screen
         local x2 = screen.x + screen.w
         local y2 = screen.y + screen.h
         if
@@ -511,11 +533,11 @@ function build(ctx)
                     local center_y = page.center.y + mark.y
                     local is_routed_exit = exit_mark_id ~= nil and mark.id == exit_mark_id
                     local tint = is_routed_exit and get_icon_tint(TRACKED_RGB) or nil
-                    shown = place_icon_inside(slot, icon, scale, center_x, center_y, page.screen, mark.dy, tint)
+                    shown = place_icon_inside(page, slot, icon, scale, center_x, center_y, mark.dy, tint)
                     local title = shown and page.task_titles[mark.id]
                     local is_exit = shown and is_routed_exit
                     if title or is_exit then
-                        local icon_w, icon_h = get_icon_size(icon, scale)
+                        local icon_w, icon_h = get_icon_size(icon, scale, page.icon_h)
                         if is_exit then
                             exit_x, exit_y, exit_w, exit_h = center_x, center_y, icon_w, icon_h
                         end

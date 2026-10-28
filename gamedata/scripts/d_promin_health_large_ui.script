@@ -1,0 +1,472 @@
+local px = d_promin_config.get_px()
+local baked = d_promin_bio_large_baked
+local health = d_promin_health_ui
+
+local set_shown = wd_screen.set_shown
+local place_widget = wd_screen.place_widget
+local SOFT_FILLS = wd_panel.SOFT_FILLS
+
+BACKGROUND = "wd_promin_page_bio_large"
+
+local NONE = "\151"
+local NO_TIMER = "--:--"
+local NEED_TEXT = "%d%%"
+local GEIGER_UNIT = "wd_large_geiger_unit"
+local LABEL_PREFIX = "wd_large_label_"
+local ICON_PREFIX = "wd_large_icon_"
+local MODULE_REQUIRED = { "MODULE", "REQUIRED" }
+local TIMER_CHARS = 5
+local NUMBER_H = px.h(baked.VITAL.number.h)
+local VITAL_TRACK = baked.VITAL.track
+local VITAL_STEPS = VITAL_TRACK.w - 2 * VITAL_TRACK.inset
+
+VITALS = {
+    health = { label = "HEALTH", icon = "heart", unit = "%" },
+    stamina = { label = "STAMINA", icon = "stamina", unit = "%" },
+    psy = { label = "PSY", icon = "psy", unit = "%" },
+    radiation = { label = "RADIATION", icon = "rad", unit = "mSv" },
+}
+
+local function get_label_id(text)
+    return health.get_label_id(text, LABEL_PREFIX)
+end
+
+local function new_icon(kit, page, name, x, y, role, size)
+    local image = kit.new_image(ICON_PREFIX .. name, role or "text")
+    size = size or baked.ICON
+    px.place(image.widget, x, y, size, size)
+    page.slots[#page.slots + 1] = image
+    return image
+end
+
+local function new_label(kit, page, text, x, y, h, role)
+    local label = kit.new_image(get_label_id(text), role)
+    local label_h = px.h(h)
+    place_widget(label.widget, px.x(x), px.y(y), label_h * (wd_screen.get_texture_aspect(label.widget) or 0), label_h)
+    page.slots[#page.slots + 1] = label
+    return label
+end
+
+local function new_text(kit, page, opts, x, y)
+    local text = kit.new_text(opts)
+    text.place(px.x(x), px.y(y))
+    page.texts[#page.texts + 1] = text
+    return text
+end
+
+local function new_cell(kit, page, opts, x, y, w)
+    opts.box = false
+    local cell = kit.new_cell(opts)
+    px.place_box(cell, x, y, w, baked.ROW_H)
+    page.cells[#page.cells + 1] = cell
+    return cell
+end
+
+local function new_soft(kit, page, role, profile)
+    local slot = kit.new_soft_fill(role, profile)
+    page.slots[#page.slots + 1] = slot
+    return slot
+end
+
+local function new_bar(kit, page, rect, track)
+    local bar = kit.new_bar({ level = "text", inset = px.w(track.inset) })
+    px.place_box(bar, rect[1] + track.x, rect[2] + track.y, track.w, track.h)
+    page.bars[#page.bars + 1] = bar
+    return bar
+end
+
+local function get_tile_rect(grid, index, columns)
+    local column = (index - 1) % columns
+    local row = math.floor((index - 1) / columns)
+    return { grid.x + column * grid.pitch_x, grid.y + row * grid.pitch_y, grid.w, grid.h }
+end
+
+local function build_effects(kit, page)
+    local grid, spec = baked.BOOSTERS, baked.BOOSTER
+    local track = spec.track
+    local tiles, by_booster = {}, {}
+    for index, effect in ipairs(health.EFFECTS) do
+        local rect = get_tile_rect(grid, index, grid.columns)
+        local tile = { effect = effect, seconds = 0 }
+        tile.icon = new_icon(kit, page, effect.icon, rect[1] + (rect[3] - baked.ICON) / 2, rect[2] + spec.icon_y, "dim")
+        tile.timer = new_text(kit, page, {
+            chars = TIMER_CHARS,
+            width = px.w(rect[3]),
+            align = "center",
+        }, rect[1], rect[2] + spec.timer_y)
+        tile.track = new_soft(kit, page, "border", SOFT_FILLS.bar)
+        tile.level = new_soft(kit, page, "text", SOFT_FILLS.bar)
+        tile.rect = { rect[1] + track.x, rect[2] + track.y, track.w, track.h }
+        px.place_soft_fill(tile.track, tile.rect[1], tile.rect[2], tile.rect[3], tile.rect[4])
+        for _, booster in ipairs(effect.boosters) do
+            by_booster[booster] = tile
+        end
+        tiles[index] = tile
+    end
+    return tiles, by_booster
+end
+
+local function build_needs(kit, page)
+    local grid, spec = baked.NEEDS, baked.NEED
+    local icon, value = spec.icon, spec.value
+    local value_h = px.h(value.h)
+    local needs = {}
+    for index, key in ipairs(grid.order) do
+        local rect = get_tile_rect(grid, index, grid.columns)
+        local value_w = px.w(rect[3] - value.x - value.right)
+        needs[key] = {
+            icon = new_icon(kit, page, key, rect[1] + icon.x, rect[2] + icon.y, "text", icon.size),
+            value = new_text(
+                kit,
+                page,
+                { chars = kit.get_max_chars(value_w, value_h), height = value_h },
+                rect[1] + value.x,
+                rect[2] + value.y
+            ),
+            rect = rect,
+            value_w = value_w,
+            value_h = value_h,
+        }
+    end
+    local weight, small = needs.weight, spec.small
+    local small_h = px.h(small.h)
+    weight.small = kit.new_text({ chars = kit.get_max_chars(weight.value_w, small_h), height = small_h })
+    weight.small_h = small_h
+    weight.small.place(px.x(weight.rect[1] + value.x), px.y(weight.rect[2] + small.y))
+    return needs
+end
+
+local function build_vitals(kit, digits_kit, page)
+    local spec = baked.VITAL
+    local tiles = {}
+    for index, key in ipairs(baked.VITAL_ORDER) do
+        local vital = VITALS[key]
+        local rect = get_tile_rect(baked.VITALS, index, 2)
+        local label =
+            new_label(kit, page, vital.label, rect[1] + spec.label.x, rect[2] + spec.label.y, spec.label.h, "meta")
+        local tile = {
+            key = key,
+            vital = vital,
+            label = label,
+            rect = rect,
+            icon = new_icon(
+                kit,
+                page,
+                vital.icon,
+                rect[1] + rect[3] - spec.icon.right - spec.icon.size,
+                rect[2] + spec.icon.y,
+                "text",
+                spec.icon.size
+            ),
+            number = new_text(
+                digits_kit,
+                page,
+                { chars = 4, height = NUMBER_H },
+                rect[1] + spec.number.x,
+                rect[2] + spec.number.y
+            ),
+            unit = new_text(kit, page, { chars = 3 }, rect[1] + spec.number.x, rect[2] + spec.unit.y),
+            bar = new_bar(kit, page, rect, spec.track),
+        }
+        tiles[key] = tile
+    end
+    local radiation = tiles.radiation
+    local notice = spec.notice
+    radiation.notice = {}
+    for index, word in ipairs(MODULE_REQUIRED) do
+        local line = kit.new_text({ chars = #word, height = px.h(notice.h) })
+        line.place(
+            px.x(radiation.rect[1] + spec.number.x),
+            px.y(radiation.rect[2] + notice.y + (index - 1) * notice.pitch)
+        )
+        line.word = word
+        radiation.notice[index] = line
+    end
+    local stamina = tiles.stamina
+    local track, tick = spec.track, spec.tick
+    local rect = stamina.rect
+    stamina.cap = new_soft(kit, page, "border", SOFT_FILLS.bar)
+    stamina.tick = new_soft(kit, page, "text", SOFT_FILLS.line_v)
+    stamina.cap_rect = {
+        x = px.x(rect[1] + track.x + track.inset),
+        w = px.w(VITAL_STEPS),
+        y = px.y(rect[2] + track.y + track.inset),
+        h = px.h(track.h - 2 * track.inset),
+        tick_y = px.y(rect[2] + track.y + track.h / 2 - tick.h / 2),
+        tick_w = px.w(tick.w),
+        tick_h = px.h(tick.h),
+    }
+    return tiles
+end
+
+local function build_geiger(kit, page)
+    local spec = baked.GEIGER
+    local function new_row(icon, label, row_y)
+        local unit = kit.new_image(GEIGER_UNIT, "art")
+        px.place(unit.widget, spec.x + spec.unit.x, row_y + spec.unit.y, spec.unit.w, spec.unit.h)
+        return {
+            icon = new_icon(
+                kit,
+                page,
+                icon,
+                spec.x + (spec.icon_w - baked.ICON) / 2,
+                row_y + (baked.ROW_H - baked.ICON) / 2
+            ),
+            name = new_cell(kit, page, { label = get_label_id(label) }, spec.x + spec.icon_w, row_y, spec.name_w),
+            value = new_cell(
+                kit,
+                page,
+                { chars = kit.get_max_chars(px.w(spec.value_w)), align = "right" },
+                spec.x + spec.icon_w + spec.name_w,
+                row_y,
+                spec.value_w
+            ),
+            unit = unit,
+        }
+    end
+    local rows = spec.rows
+    local track, marker = spec.track, spec.marker
+    local steps = track.w - 2 * track.inset
+    local geiger = {
+        reading = new_row("rad", health.GEIGER_OFF.reading.text, rows.reading),
+        shield = new_row("prot_rad", health.GEIGER_OFF.shield.text, rows.shield),
+        bar = new_bar(kit, page, { spec.x, rows.scale }, track),
+        marker = kit.new_soft_fill("text", SOFT_FILLS.line_v),
+        steps = steps,
+        marker_rect = {
+            x = px.x(spec.x + track.x + track.inset),
+            w = px.w(steps),
+            y = px.y(rows.scale + marker.y),
+            marker_w = px.w(marker.w),
+            h = px.h(marker.h),
+        },
+    }
+    geiger.live = { geiger.marker, geiger.reading.unit, geiger.shield.unit }
+    return geiger
+end
+
+local function show_role(kit, slot, role)
+    kit.set_role(slot, role)
+    set_shown(slot, true)
+end
+
+local function show_booster(kit, tile)
+    local active = tile.seconds > 0
+    local role = active and "text" or "dim"
+    show_role(kit, tile.icon, role)
+    show_role(kit, tile.track, active and "dim" or "border")
+    set_shown(tile.level, active)
+    if not active then
+        tile.duration, tile.whole = nil, nil
+        tile.timer.show(NO_TIMER, role)
+        return
+    end
+    local whole = math.floor(tile.seconds)
+    if tile.whole ~= whole then
+        tile.whole = whole
+        tile.timer_text = health.format_timer(whole)
+    end
+    tile.timer.show(tile.timer_text, role)
+    local rect = tile.rect
+    local ratio = health.get_snapped(health.get_time_left_ratio(tile), rect[3])
+    if tile.ratio ~= ratio then
+        tile.ratio = ratio
+        px.place_soft_fill(tile.level, rect[1], rect[2], rect[3] * ratio, rect[4])
+    end
+end
+
+local function show_level(kit, bar, ratio, role, steps)
+    bar.set_ratio(health.get_snapped(ratio, steps))
+    kit.set_role(bar.level, role)
+end
+
+local function show_need(kit, need, role, text)
+    if not text then
+        show_role(kit, need.icon, "dim")
+        need.value.show(NONE, "dim")
+        return
+    end
+    show_role(kit, need.icon, "text")
+    need.value.show(text, role)
+end
+
+local function show_percent_need(kit, need, ratio)
+    if not ratio then
+        show_need(kit, need)
+        return
+    end
+    local value = health.get_percent(ratio)
+    if need.shown_value ~= value then
+        need.shown_value = value
+        need.shown_text = string.format(NEED_TEXT, value)
+    end
+    show_need(kit, need, d_promin_config.get_state_role(ratio), need.shown_text)
+end
+
+local function show_weight(kit, need, conditions)
+    local total, max = wd_vitals.get_carry_weight(conditions)
+    local whole_total, whole_max = math.floor(total + 0.5), math.floor(max + 0.5)
+    local text, fits = health.get_weight_text(kit, whole_total, whole_max, need.value_w, need.value_h)
+    local small = not fits
+    if small then
+        text = health.get_weight_text(kit, whole_total, whole_max, need.value_w, need.small_h)
+    end
+    local line, other = need.value, need.small
+    if small then
+        line, other = other, line
+    end
+    need.small_shown = small
+    other.set_visible(false)
+    show_role(kit, need.icon, "text")
+    line.show(text, total > max and "crit" or "text")
+end
+
+local function place_unit(digits_kit, tile, number)
+    local width = digits_kit.measure(number, NUMBER_H)
+    if tile.number_w == width then
+        return
+    end
+    tile.number_w = width
+    local spec = baked.VITAL
+    tile.unit.place(px.x(tile.rect[1] + spec.number.x) + width + px.w(spec.unit.gap), px.y(tile.rect[2] + spec.unit.y))
+end
+
+local function set_notice_shown(tile, flag)
+    for _, line in ipairs(tile.notice) do
+        if flag then
+            line.show(line.word, "dim")
+        else
+            line.set_visible(false)
+        end
+    end
+end
+
+local function show_vital(kit, digits_kit, tile, ratio, role, value)
+    if tile.shown_value ~= value then
+        tile.shown_value = value
+        tile.shown_text = tostring(value)
+        place_unit(digits_kit, tile, tile.shown_text)
+    end
+    tile.number.show(tile.shown_text, role)
+    tile.unit.show(tile.vital.unit, role)
+    show_level(kit, tile.bar, ratio, role, VITAL_STEPS)
+end
+
+local function show_percent_vital(kit, digits_kit, tile, ratio)
+    local role = d_promin_config.get_state_role(ratio)
+    show_vital(kit, digits_kit, tile, ratio, role, health.get_percent(ratio))
+end
+
+local function set_dose_readable(kit, tile, readable)
+    if tile.shown_readable == readable then
+        return
+    end
+    tile.shown_readable = readable
+    kit.set_role(tile.icon, readable and "text" or "dim")
+    kit.set_role(tile.label, readable and "meta" or "dim")
+    set_notice_shown(tile, not readable)
+    if not readable then
+        tile.number.set_visible(false)
+        tile.unit.set_visible(false)
+        tile.bar.set_ratio(0)
+    end
+end
+
+local function show_vitals(page, conditions)
+    local kit, digits_kit, tiles = page.kit, page.digits_kit, page.vitals
+    show_percent_vital(kit, digits_kit, tiles.health, wd_vitals.get_health())
+    show_percent_vital(kit, digits_kit, tiles.psy, wd_vitals.get_psy())
+    show_percent_vital(kit, digits_kit, tiles.stamina, wd_vitals.get_stamina())
+    local msv = wd_vitals.get_radiation_msv()
+    health.place_stamina_cap(tiles.stamina, wd_vitals.get_stamina_cap(conditions, msv), VITAL_STEPS)
+    local radiation, readable = tiles.radiation, page.dose_readable
+    set_dose_readable(kit, radiation, readable)
+    if readable then
+        local ratio = wd_vitals.get_radiation()
+        show_vital(kit, digits_kit, radiation, ratio, d_promin_config.get_state_role(ratio, true), msv)
+    end
+end
+
+local function show_geiger_row(kit, row, label, value_text)
+    show_role(kit, row.icon, label.role)
+    health.show_label(row.name, label.text, label.role, LABEL_PREFIX)
+    health.show_text(row.value, value_text, label.role)
+end
+
+local function set_widgets_shown(page, flag)
+    for _, slot in ipairs(page.slots) do
+        set_shown(slot, flag)
+    end
+    for _, text in ipairs(page.texts) do
+        text.set_visible(flag)
+    end
+    for _, cell in ipairs(page.cells) do
+        cell.set_visible(flag)
+    end
+    for _, bar in ipairs(page.bars) do
+        bar.set_visible(flag)
+    end
+    for _, track in ipairs(page.silhouette.tracks) do
+        set_shown(track, flag)
+    end
+    for _, widget in ipairs(page.silhouette.fills) do
+        widget:Show(flag)
+    end
+    local weight = page.needs.weight
+    weight.small.set_visible(flag and weight.small_shown == true)
+    if weight.small_shown then
+        weight.value.set_visible(false)
+    end
+    page.vitals.radiation.shown_readable = nil
+    if not flag then
+        set_notice_shown(page.vitals.radiation, false)
+        health.set_live_shown(page.geiger, false)
+    end
+end
+
+local function update_slow(page, conditions)
+    local kit, needs = page.kit, page.needs
+    local food, water, sleep = wd_vitals.get_needs(conditions)
+    show_percent_need(kit, needs.food, food)
+    show_percent_need(kit, needs.water, water)
+    show_percent_need(kit, needs.sleep, sleep)
+    show_weight(kit, needs.weight, conditions)
+end
+
+local VIEW = {
+    show_effect = show_booster,
+    show_geiger_row = show_geiger_row,
+    show_vitals = show_vitals,
+    update_slow = update_slow,
+    set_widgets_shown = set_widgets_shown,
+}
+
+function build(ctx)
+    local page = health.new_page(ctx, BACKGROUND, VIEW)
+    page.slots, page.texts, page.cells, page.bars = {}, {}, {}, {}
+    local kit = page.chrome.page_kit
+    local digits_kit = kit
+        and d_promin_chrome_ui.new_kit(ctx.wnd, d_promin_config.PANEL_STYLE_LARGE, d_promin_config.DIGITS_FONT)
+    if not digits_kit then
+        kit = nil
+    end
+    page.kit, page.digits_kit = kit, digits_kit
+    if kit then
+        page.silhouette =
+            health.new_silhouette(kit, ctx.wnd, baked.PARTS, "wd_large_part_", d_promin_config.SPRITES_LARGE_TEXTURE)
+        page.effects, page.effect_by_booster = build_effects(kit, page)
+        page.needs = build_needs(kit, page)
+        page.vitals = build_vitals(kit, digits_kit, page)
+        page.geiger = build_geiger(kit, page)
+    end
+
+    function page.repaint()
+        page.chrome.repaint()
+        if kit then
+            digits_kit.repaint()
+        end
+    end
+
+    page.set_visible(true)
+    return page
+end

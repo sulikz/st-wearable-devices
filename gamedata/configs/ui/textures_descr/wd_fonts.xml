@@ -2,4 +2,7 @@
 <file name="wd\ui\fonts\jetbrains_mono">
 	<texture id="wd_font_jetbrains_mono" x="0" y="0" width="512" height="512"/>
 </file>
+<file name="wd\ui\fonts\jetbrains_mono_digits">
+	<texture id="wd_font_jetbrains_mono_digits" x="0" y="0" width="512" height="256"/>
+</file>
 </w>

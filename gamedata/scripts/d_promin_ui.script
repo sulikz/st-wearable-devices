@@ -5,14 +5,25 @@ local NODE_PREFIX = "wd:"
 local DEFAULT_PAGE = d_promin_config.COMMS_PAGE
 local MAP_PAGE = d_promin_config.MAP_PAGE
 
-local PAGE_BUILDERS = {
-    [d_promin_config.HEALTH_PAGE] = d_promin_health_ui.build,
-    [MAP_PAGE] = d_promin_map_ui.build,
-    [d_promin_config.COMMS_PAGE] = d_promin_comms_ui.build,
+local DEFAULT_THEME = d_promin_config.DEFAULT_THEME
+
+local THEME_BUILDERS = {
+    [DEFAULT_THEME] = {
+        [d_promin_config.HEALTH_PAGE] = d_promin_health_ui.build,
+        [MAP_PAGE] = d_promin_map_ui.build,
+        [d_promin_config.COMMS_PAGE] = d_promin_comms_ui.build,
+    },
+    [d_promin_config.LARGE_THEME] = {
+        [d_promin_config.HEALTH_PAGE] = d_promin_health_large_ui.build,
+        [MAP_PAGE] = d_promin_map_ui.build,
+        [d_promin_config.COMMS_PAGE] = d_promin_comms_ui.build,
+    },
 }
+local PAGE_BUILDERS = THEME_BUILDERS[DEFAULT_THEME]
 
 local active_page_id = DEFAULT_PAGE
 local singleton = nil
+local artefact_lit = false
 
 local allow_idle_update = wd_core.throttle(IDLE_UPDATE_MS)
 
@@ -29,14 +40,31 @@ function UIPromin:__init()
     local xml = CScriptXmlInit()
     xml:ParseFile(XML_FILE)
     xml:InitWindow(WINDOW, 0, self)
-    self.ctx = {
-        wnd = self,
-        init = function(id)
-            return xml:InitStatic(NODE_PREFIX .. id, self)
-        end,
-    }
-    self.pages = {}
+    self.init = function(id)
+        return xml:InitStatic(NODE_PREFIX .. id, self)
+    end
+    self.themes = {}
     self.powered_state = true
+    self:select_theme(d_promin_config.get_theme())
+    self:apply_page()
+end
+
+function UIPromin:select_theme(theme)
+    self.theme = theme
+    self.pages = self.themes[theme] or {}
+    self.themes[theme] = self.pages
+    self.ctx = { wnd = self, init = self.init, theme = theme }
+end
+
+function UIPromin:apply_theme()
+    local theme = d_promin_config.get_theme()
+    if theme == self.theme then
+        return
+    end
+    for _, handle in pairs(self.pages) do
+        handle.set_visible(false)
+    end
+    self:select_theme(theme)
     self:apply_page()
 end
 
@@ -45,12 +73,15 @@ function UIPromin:ensure_page(page_id)
     if handle then
         return handle
     end
-    local build = PAGE_BUILDERS[page_id]
+    local build = THEME_BUILDERS[self.theme][page_id]
     if not build then
         return nil
     end
     handle = build(self.ctx)
     self.pages[page_id] = handle
+    if page_id == MAP_PAGE then
+        handle.set_artefact_lit(artefact_lit)
+    end
     if page_id ~= active_page_id then
         handle.set_visible(false)
     end
@@ -76,9 +107,11 @@ function UIPromin:update_active()
 end
 
 function UIPromin:repaint()
-    for _, handle in pairs(self.pages) do
-        if handle.repaint then
-            handle.repaint()
+    for _, pages in pairs(self.themes) do
+        for _, handle in pairs(pages) do
+            if handle.repaint then
+                handle.repaint()
+            end
         end
     end
 end
@@ -114,6 +147,12 @@ function repaint()
     end
 end
 
+function apply_theme()
+    if singleton then
+        singleton:apply_theme()
+    end
+end
+
 function set_page(page_id)
     if not PAGE_BUILDERS[page_id] then
         return
@@ -126,6 +165,10 @@ end
 
 function get_page()
     return active_page_id
+end
+
+function get_theme()
+    return singleton and singleton.theme or d_promin_config.get_theme()
 end
 
 function ensure_page(page_id)
@@ -152,9 +195,15 @@ function on_page_key()
 end
 
 function set_artefact_lit(lit)
-    local page = singleton and singleton.pages[MAP_PAGE]
-    if page then
-        page.set_artefact_lit(lit)
+    artefact_lit = lit
+    if not singleton then
+        return
+    end
+    for _, pages in pairs(singleton.themes) do
+        local page = pages[MAP_PAGE]
+        if page then
+            page.set_artefact_lit(lit)
+        end
     end
 end
 

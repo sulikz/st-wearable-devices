@@ -10,62 +10,100 @@ local RADIO_ICON = SMALL_GLYPH_IDS[wd_comms.RADIO_GLYPH]
 
 local ACCENT = wd_text.mark(1)
 local NEW_RULE = "new"
-local HEADER_SEPARATOR = "  "
+local FONT_BASELINE = 30 / 35
 local PORTRAIT_ROLES = { border = "border" }
 
-local FEED = { x = 75, top = 75, w = 625, bottom = 575 }
-local BAND_H = 32
 local CONTENT_GAP = 8
 local BOTTOM_PAD = 10
-local TRACK_X = 686
-local VIEW_TOP = FEED.top + BAND_H + CONTENT_GAP
+local TRACK_TO_FRAME = 14
+local TRACK_TO_TEXT = 10
+local TRACK_TO_FLASH = 4
+local FLASH_LEAD = 6
+local FOCUS_TRIM = 2
 
-LAYOUT = {
-    feed = FEED,
-    band_h = BAND_H,
-    track_x = TRACK_X,
-    view = {
-        x = FEED.x,
-        top = VIEW_TOP,
-        w = TRACK_X - FEED.x,
-        h = FEED.bottom - BOTTOM_PAD - VIEW_TOP,
-        shrink = BAND_H + CONTENT_GAP - BOTTOM_PAD,
-    },
-    text = { x = 157, right = 676, w = 519, h = 18, inset = 3 },
-    row_h = 24,
-    pad_top = 4,
-    pad_bottom = 6,
-    gap = 8,
-    divider_h = 28,
-    sender = { x = 85, w = 62, h = 44, glyph = 20, emblem = 24 },
-    unread = { size = 8, top = 8, shift = 18 },
-    time = { w = 60, gap = 12, chars = 5 },
-    focus = { x = 75, w = 609, bar_w = 3 },
-    flash = { x = 151, w = 531 },
-    rule = { left = 85, right = 676, center = 380.5, line_h = 1.5, gap = 10, label_h = 16, chars = 32 },
-    chip = { pad = 6, h = 20 },
-}
-
-local ROWS = math.floor(LAYOUT.view.h / LAYOUT.row_h)
-local HEAD_PITCH = LAYOUT.pad_top + LAYOUT.row_h + LAYOUT.pad_bottom + LAYOUT.gap
-local HEADS = math.ceil(LAYOUT.view.h / HEAD_PITCH) + 1
-local RULES = math.ceil(LAYOUT.view.h / (HEAD_PITCH + LAYOUT.divider_h + LAYOUT.gap)) + 2
-
-local function is_inside(top, height, bottom)
-    return top >= LAYOUT.view.top and top + height <= bottom
+local function new_layout(layout)
+    local band_h = layout.band_h
+    local feed = layout.feed
+    local track_x = layout.track_x
+    feed.w = track_x + TRACK_TO_FRAME - feed.x
+    local text = layout.text
+    text.right = track_x - TRACK_TO_TEXT
+    text.w = text.right - text.x
+    local rule = layout.rule
+    rule.right = text.right
+    rule.center = (rule.left + rule.right) / 2
+    local flash_x = text.x - FLASH_LEAD
+    layout.flash = { x = flash_x, w = track_x - TRACK_TO_FLASH - flash_x }
+    local view_top = feed.top + band_h + CONTENT_GAP
+    layout.view = {
+        x = feed.x,
+        top = view_top,
+        w = track_x - feed.x,
+        h = feed.bottom - BOTTOM_PAD - view_top,
+        shrink = band_h + CONTENT_GAP - BOTTOM_PAD,
+    }
+    layout.focus.x = feed.x
+    layout.focus.w = layout.view.w - FOCUS_TRIM
+    local head = layout.head
+    head.meta_y = head.inset + FONT_BASELINE * (head.h - head.meta_h)
+    local head_pitch = layout.pad_top + layout.head_h + layout.pad_bottom + layout.gap
+    layout.pools = {
+        rows = math.floor(layout.view.h / layout.row_h),
+        heads = math.ceil(layout.view.h / head_pitch) + 1,
+        rules = math.ceil(layout.view.h / (head_pitch + layout.divider_h + layout.gap)) + 2,
+    }
+    return layout
 end
 
-local function get_header_text(entry)
-    local sender = wd_text.get_upper(entry.name or "")
-    local faction = entry.faction
-    if not faction then
-        return sender
-    end
-    return sender .. HEADER_SEPARATOR .. ACCENT .. wd_text.get_upper(faction)
+LAYOUTS = {
+    [d_promin_config.DEFAULT_THEME] = new_layout({
+        feed = { x = 77, top = 75, bottom = 575 },
+        track_x = 686,
+        band_h = 32,
+        text = { x = 157, h = 18, inset = 3 },
+        row_h = 24,
+        head_h = 24,
+        head = { h = 18, meta_h = 18, inset = 3, gap = 16 },
+        pad_top = 4,
+        pad_bottom = 6,
+        gap = 8,
+        divider_h = 28,
+        sender = { x = 85, w = 62, h = 44, glyph = 20, emblem = 24 },
+        unread = { size = 8, top = 8, shift = 18 },
+        time = { w = 60, gap = 12, chars = 5 },
+        focus = { bar_w = 3 },
+        rule = { left = 85, line_h = 1.5, gap = 10, label_h = 16, chars = 32 },
+        chip = { pad = 6, h = 20 },
+    }),
+    [d_promin_config.LARGE_THEME] = new_layout({
+        feed = { x = 25, top = 75, bottom = 575 },
+        track_x = 736,
+        band_h = 40,
+        text = { x = 37, h = 23, inset = 1.5 },
+        row_h = 26,
+        head_h = 38,
+        head = { h = 33, meta_h = 21, inset = 2, gap = 8 },
+        pad_top = 4,
+        pad_bottom = 6,
+        gap = 8,
+        divider_h = 32,
+        unread = { size = 8, top = 16, shift = 18 },
+        time = { w = 60, gap = 12, chars = 5 },
+        focus = { bar_w = 4 },
+        rule = { left = 37, line_h = 1.5, gap = 10, label_h = 23, chars = 32 },
+        chip = { pad = 8, h = 26 },
+    }),
+}
+LAYOUT = LAYOUTS[d_promin_config.DEFAULT_THEME]
+
+local function is_inside(layout, top, height, bottom)
+    return top >= layout.view.top and top + height <= bottom
 end
 
 local function hide_head(head)
     set_shown(head.square, false)
+    head.name.set_visible(false)
+    head.faction.set_visible(false)
     head.time.set_visible(false)
 end
 
@@ -104,50 +142,57 @@ local function new_claim(pool, get_key)
     return { pool = pool, get_key = get_key, requests = {}, claimed = {} }
 end
 
-local function build_pools(rows, kit, parent, row_chars)
+local function build_pools(rows, kit, parent, row_chars, layout)
+    local pools = layout.pools
+    local text_h = px.h(layout.text.h)
     rows.focus = { fill = kit.new_fill("focus"), bar = kit.new_soft_fill("text", wd_panel.SOFT_FILLS.line_v) }
     rows.flash = kit.new_fill("text")
     rows.rules = {}
-    local label_h = px.h(LAYOUT.rule.label_h)
-    for index = 1, RULES do
+    local label_h = px.h(layout.rule.label_h)
+    for index = 1, pools.rules do
         rows.rules[index] = {
             left = kit.new_soft_fill("dim", wd_panel.SOFT_FILLS.line_h),
             right = kit.new_soft_fill("dim", wd_panel.SOFT_FILLS.line_h),
             chip = kit.new_fill("text"),
-            label = kit.new_text({ chars = LAYOUT.rule.chars, height = label_h }),
+            label = kit.new_text({ chars = layout.rule.chars, height = label_h }),
         }
     end
     rows.tiles = {}
-    for index = 1, HEADS do
+    rows.portraits = {}
+    local sender_slots = layout.sender and pools.heads or 0
+    for index = 1, sender_slots do
         rows.tiles[index] = { box = kit.new_box(), image = kit.new_image(RADIO_ICON, "text") }
     end
-    rows.portraits = {}
-    for index = 1, HEADS do
+    for index = 1, sender_slots do
         rows.portraits[index] = {
             image = kit.new_image(wd_screen.FILL_ID, "art", parent, map_binder),
             border = kit.new_box(PORTRAIT_ROLES),
         }
     end
     rows.heads = {}
-    local time = LAYOUT.time
-    for index = 1, HEADS do
+    local time, head = layout.time, layout.head
+    local name_h, meta_h = px.h(head.h), px.h(head.meta_h)
+    local text_w = px.w(layout.text.w)
+    for index = 1, pools.heads do
         rows.heads[index] = {
             square = kit.new_fill("text"),
-            time = kit.new_text({ chars = time.chars, width = px.w(time.w), align = "right" }),
+            name = kit.new_text({ chars = kit.get_max_chars(text_w, name_h), height = name_h }),
+            faction = kit.new_text({ chars = kit.get_max_chars(text_w, meta_h), height = meta_h }),
+            time = kit.new_text({ chars = time.chars, width = px.w(time.w), align = "right", height = meta_h }),
         }
     end
     rows.lines = {}
-    for index = 1, ROWS do
-        rows.lines[index] = kit.new_text({ chars = row_chars })
+    for index = 1, pools.rows do
+        rows.lines[index] = kit.new_text({ chars = row_chars, height = text_h })
     end
 end
 
-function new(kit, parent, row_chars)
+function new(kit, parent, row_chars, layout)
     local font = kit.font
-    local view_cfg = LAYOUT.view
-    local text_cfg = LAYOUT.text
+    local view_cfg = layout.view
+    local text_cfg = layout.text
     local rows = {}
-    build_pools(rows, kit, parent, row_chars)
+    build_pools(rows, kit, parent, row_chars, layout)
     local cursor = {}
     local claims = {
         lines = new_claim(rows.lines, get_line_key),
@@ -240,9 +285,9 @@ function new(kit, parent, row_chars)
         return item
     end
 
-    local function draw_flash(row_y)
-        local flash = LAYOUT.flash
-        px.place(rows.flash.widget, flash.x, row_y, flash.w, LAYOUT.row_h)
+    local function draw_flash(row_y, row_h)
+        local flash = layout.flash
+        px.place(rows.flash.widget, flash.x, row_y, flash.w, row_h)
         cursor.flashed = true
     end
 
@@ -252,7 +297,7 @@ function new(kit, parent, row_chars)
         if bottom <= top then
             return
         end
-        local focus = LAYOUT.focus
+        local focus = layout.focus
         px.place(rows.focus.fill.widget, focus.x, top, focus.w, bottom - top)
         px.place_soft_fill(rows.focus.bar, focus.x, top, focus.bar_w, bottom - top)
         cursor.focused = true
@@ -273,11 +318,11 @@ function new(kit, parent, row_chars)
         local request = add_request("tiles", id)
         request.top = top
         request.role = get_alert_role(entry)
-        request.size = is_emblem and LAYOUT.sender.emblem or LAYOUT.sender.glyph
+        request.size = is_emblem and layout.sender.emblem or layout.sender.glyph
     end
 
     local function draw_portrait(portrait, request)
-        local sender = LAYOUT.sender
+        local sender = layout.sender
         local top = request.top
         local image = portrait.image
         kit.set_image(image, request.key)
@@ -288,7 +333,7 @@ function new(kit, parent, row_chars)
     end
 
     local function draw_tile(tile, request)
-        local sender = LAYOUT.sender
+        local sender = layout.sender
         local top = request.top
         local size = request.size
         local role = request.role
@@ -301,37 +346,51 @@ function new(kit, parent, row_chars)
         set_shown(tile.image, true)
     end
 
-    local function draw_header(block, row_y, invert)
-        if not has_room("lines") then
+    local function show_faction(head, entry, left, room, top, role)
+        local faction = entry.faction
+        local head_cfg = layout.head
+        local text = faction and wd_text.ellipsize(font, wd_text.get_upper(faction), head_cfg.meta_h, room)
+        if not text or text == font.ellipsis then
+            head.faction.set_visible(false)
             return
         end
+        head.faction.place(px.x(left), top)
+        head.faction.show(text, role)
+    end
+
+    local function draw_header(block, row_y, invert)
         local head = take(rows.heads, "heads")
         if not head then
             return
         end
         if invert then
-            draw_flash(row_y)
+            draw_flash(row_y, layout.head_h)
         end
         local entry = block.entry
         local inverted_role = invert and "fill"
-        local time_cfg = LAYOUT.time
-        local text_y = px.y(row_y + text_cfg.inset)
+        local time_cfg = layout.time
+        local head_cfg = layout.head
+        local meta_y = px.y(row_y + head_cfg.meta_y)
         local time = d_promin_comms_feed.format_time(entry)
-        head.time.place(px.x(text_cfg.right - time_cfg.w), text_y)
+        head.time.place(px.x(text_cfg.right - time_cfg.w), meta_y)
         head.time.show(time, inverted_role or "meta")
         local text_x = text_cfg.x
         local unread = block.unread
         if unread then
-            local square = LAYOUT.unread
+            local square = layout.unread
             px.place(head.square.widget, text_x, row_y + square.top, square.size, square.size)
             kit.set_role(head.square, inverted_role or "text")
             text_x = text_x + square.shift
         end
         set_shown(head.square, unread)
-        local room = text_cfg.right - text_x - wd_text.measure(font, time, text_cfg.h) - time_cfg.gap
-        local header = wd_text.ellipsize(font, get_header_text(entry), text_cfg.h, room)
-        request_line(header, inverted_role or get_tone_role(entry), inverted_role or "meta", px.x(text_x), text_y)
-        if row_y + LAYOUT.sender.h <= cursor.bottom then
+        local room = text_cfg.right - text_x - wd_text.measure(font, time, head_cfg.meta_h) - time_cfg.gap
+        local name = wd_text.ellipsize(font, wd_text.get_upper(entry.name or ""), head_cfg.h, room)
+        head.name.place(px.x(text_x), px.y(row_y + head_cfg.inset))
+        head.name.show(name, inverted_role or get_tone_role(entry))
+        local name_w = wd_text.measure(font, name, head_cfg.h) + head_cfg.gap
+        show_faction(head, entry, text_x + name_w, room - name_w, meta_y, inverted_role or "meta")
+        local sender = layout.sender
+        if sender and row_y + sender.h <= cursor.bottom then
             request_sender(entry, row_y)
         end
     end
@@ -341,7 +400,7 @@ function new(kit, parent, row_chars)
             return
         end
         if invert then
-            draw_flash(row_y)
+            draw_flash(row_y, layout.row_h)
         end
         local lines = block.lines
         local value = lines[index]
@@ -358,18 +417,19 @@ function new(kit, parent, row_chars)
         if block.focus then
             draw_focus(block_y, block.height)
         end
-        local row_h = LAYOUT.row_h
+        local row_h = layout.row_h
         local invert = block.entry.id == cursor.flash_id
-        local row_y = block_y + LAYOUT.pad_top
+        local row_y = block_y + layout.pad_top
         if block.head then
-            if is_inside(row_y, row_h, cursor.bottom) then
+            local head_h = layout.head_h
+            if is_inside(layout, row_y, head_h, cursor.bottom) then
                 draw_header(block, row_y, invert)
             end
-            row_y = row_y + row_h
+            row_y = row_y + head_h
             invert = false
         end
         for index = 1, #block.lines do
-            if is_inside(row_y, row_h, cursor.bottom) then
+            if is_inside(layout, row_y, row_h, cursor.bottom) then
                 draw_body(block, index, row_y, invert)
             end
             invert = false
@@ -387,8 +447,8 @@ function new(kit, parent, row_chars)
         if not rule then
             return
         end
-        local spec = LAYOUT.rule
-        local divider_h = LAYOUT.divider_h
+        local spec = layout.rule
+        local divider_h = layout.divider_h
         local label = block.label
         local label_w = wd_text.measure(font, label, spec.label_h)
         local label_x = spec.center - label_w / 2
@@ -396,7 +456,7 @@ function new(kit, parent, row_chars)
         local left_x = label_x
         local right_x = label_x + label_w
         if is_new then
-            local chip = LAYOUT.chip
+            local chip = layout.chip
             left_x = left_x - chip.pad
             right_x = right_x + chip.pad
             px.place(rule.chip.widget, left_x, block_y + (divider_h - chip.h) / 2, right_x - left_x, chip.h)
@@ -414,7 +474,7 @@ function new(kit, parent, row_chars)
 
     local function draw_block(block, block_y)
         if block.kind == "rule" then
-            if is_inside(block_y, LAYOUT.divider_h, cursor.bottom) then
+            if is_inside(layout, block_y, layout.divider_h, cursor.bottom) then
                 draw_rule(block, block_y)
             end
             return

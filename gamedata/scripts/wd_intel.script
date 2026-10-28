@@ -84,7 +84,8 @@ function get_companions()
         local entry = db.storage[id]
         local npc = entry and entry.object
         if npc then
-            companions[#companions + 1] = { name = npc:character_name(), health = npc.health }
+            local icon = npc:character_icon()
+            companions[#companions + 1] = { health = npc.health, icon = icon ~= "" and icon or nil }
         end
     end
     return companions

@@ -12,4 +12,13 @@
   <file name="wd\ui\promin\page_comms">
     <texture id="wd_promin_page_comms" x="0" y="0" width="1100" height="600" />
   </file>
+  <file name="wd\ui\promin\page_bio_large">
+    <texture id="wd_promin_page_bio_large" x="0" y="0" width="1100" height="600" />
+  </file>
+  <file name="wd\ui\promin\page_nav_large">
+    <texture id="wd_promin_page_nav_large" x="0" y="0" width="1100" height="600" />
+  </file>
+  <file name="wd\ui\promin\page_comms_large">
+    <texture id="wd_promin_page_comms_large" x="0" y="0" width="1100" height="600" />
+  </file>
 </w>

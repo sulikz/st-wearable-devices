@@ -6,6 +6,7 @@ SCREEN_SHADER = "wd\\crt"
 MAP_SHADER = "wd\\crt_map"
 BODY_SHADER = "wd\\crt_body"
 SPRITES_TEXTURE = "wd\\ui\\promin\\sprites"
+SPRITES_LARGE_TEXTURE = "wd\\ui\\promin\\sprites_large"
 SCREEN = { x = 0.001, y = -0.008, w = 0.084, h = 0.0458 }
 ART_W = 1100
 ART_H = 600
@@ -25,6 +26,14 @@ EMBLEMS = {
     { name = "greh", label = "Sin" },
     { name = "renegade", label = "Renegades" },
     { name = "isg", label = "ISG" },
+}
+
+DEFAULT_THEME = "default"
+LARGE_THEME = "large"
+
+THEMES = {
+    { name = DEFAULT_THEME, label = "Default" },
+    { name = LARGE_THEME, label = "Default Large" },
 }
 
 COLOR_GROUPS = {
@@ -69,6 +78,7 @@ DEFAULTS = {
     emblem = "auto",
     faction_color = { 255, 255, 255 },
     brightness = 90,
+    theme = DEFAULT_THEME,
     map_zoom = 500,
     map_x = 0,
     map_y = 0,
@@ -76,6 +86,7 @@ DEFAULTS = {
 }
 
 FONT = "jetbrains_mono"
+DIGITS_FONT = "jetbrains_mono_digits"
 SENSOR_LEVELS = { geiger = 1, artefacts = 2 }
 OFF_TEXT = "OFF"
 UNAVAILABLE_TEXT = "UNAVAILABLE"
@@ -181,6 +192,7 @@ local FAMILY_FIELDS = {
     { "emblem", false },
     { "faction_color", true },
     { "brightness", false },
+    { "theme", false },
     { "map_zoom", false },
     { "map_x", false },
     { "map_y", false },
@@ -203,6 +215,7 @@ local USER_FIELDS = {
     "hand_rot",
     "faction_color",
     "brightness",
+    "theme",
     "map_zoom",
 }
 
@@ -250,6 +263,14 @@ get_pages = cfg.get_pages
 get_model = cfg.get_model
 get_emblem_index = cfg.get_emblem_index
 get_emblem_faction = cfg.get_emblem_faction
+
+function get_theme_index()
+    return wd_appearance.get_index(cfg.transforms, THEMES, "theme")
+end
+
+function get_theme()
+    return THEMES[get_theme_index()].name
+end
 
 function get_hand_section()
     return ANIM_SECTION
@@ -309,6 +330,19 @@ PANEL_STYLE = {
     gap = px_space.w(8),
     row_h = px_space.h(32),
 }
+
+function new_panel_style(overrides)
+    local style = {}
+    for key, value in pairs(PANEL_STYLE) do
+        style[key] = value
+    end
+    for key, value in pairs(overrides) do
+        style[key] = value
+    end
+    return style
+end
+
+PANEL_STYLE_LARGE = new_panel_style({ text_h = px_space.h(30), row_h = px_space.h(44) })
 
 function get_ui_level()
     return wd_screen.get_brightness_level(cfg.transforms.brightness)
