@@ -1,62 +1,104 @@
 local px = d_promin_config.get_px()
 
-LAYOUT = {
-    x = px.x(725),
-    top = px.y(75),
-    w = px.w(300),
-    icon_w = px.w(32),
-    count_w = px.w(48),
-    gaps = { px.h(17), px.h(18), px.h(17) },
-    shared_rows = 5,
-    art_pad = { x = px.w(1), y = px.h(1) },
-    route = {
-        rows = 6,
-        min_line_rows = 2,
-        distance_w = px.w(90),
-        line_w = px.w(2),
-        dash = { count = 3, h = px.h(4), step = px.h(8), inset = px.h(6) },
-    },
-    squad = {
-        slots = 4,
-        name_w = px.w(140),
-        track_x = px.w(7.68),
-        track_h = px.h(10.5),
-        track_border_w = px.h(0.6),
-        level_inset = px.h(1.5),
-    },
-    artifacts = { slots = 5 },
-}
-
-BLOCKS = {
-    { name = "route", rows = LAYOUT.route.rows },
-    { name = "package", rows = 1 },
-    { name = "squad", rows = 1 + LAYOUT.squad.slots },
-    { name = "artifacts", rows = 1 + LAYOUT.artifacts.slots },
-}
-local BLOCK_BY_NAME = {}
-for _, spec in ipairs(BLOCKS) do
-    BLOCK_BY_NAME[spec.name] = spec
+local function new_icon(id, width, height)
+    return { id = id, w = px.w(width), h = px.h(height or width) }
 end
-BLOCK_ID = "wd_nav_block_%s"
-STOP_ICONS = {
-    here = { id = "wd_nav_icon_route_here", w = px.w(10), h = px.h(10) },
-    next = { id = "wd_nav_icon_route_next", w = px.w(12), h = px.h(12) },
-    via = { id = "wd_nav_icon_route_via", w = px.w(8), h = px.h(8) },
-    fold = { id = "wd_nav_icon_route_fold", w = px.w(4), h = px.h(16) },
-    goal = { id = "wd_nav_icon_route_goal", w = px.w(14), h = px.h(14) },
+
+LAYOUTS = {
+    [d_promin_config.DEFAULT_THEME] = {
+        x = px.x(725),
+        top = px.y(75),
+        w = px.w(300),
+        icon_w = px.w(32),
+        gaps = { px.h(26), px.h(26) },
+        shared_rows = 10,
+        art_pad = { x = px.w(1), y = px.h(1) },
+        block_id = "wd_nav_block_%s",
+        route = {
+            rows = 8,
+            min_line_rows = 2,
+            distance_w = px.w(90),
+            line_w = px.w(2),
+            dash = { count = 3, h = px.h(4), step = px.h(8), inset = px.h(6) },
+        },
+        package = { value_w = px.w(90) },
+        artifacts = { slots = 8 },
+        text_h = {},
+        roles = { value = "text", header = "text" },
+        icons = {
+            artifact = new_icon("wd_nav_icon_artifact", 16),
+            package = new_icon("wd_nav_icon_package", 15.36, 16.81),
+        },
+        stops = {
+            here = new_icon("wd_nav_icon_route_here", 10),
+            next = new_icon("wd_nav_icon_route_next", 12),
+            via = new_icon("wd_nav_icon_route_via", 8),
+            fold = new_icon("wd_nav_icon_route_fold", 4, 16),
+            goal = new_icon("wd_nav_icon_route_goal", 14),
+        },
+    },
+    [d_promin_config.LARGE_THEME] = {
+        x = px.x(675),
+        top = px.y(75),
+        w = px.w(400),
+        icon_w = px.w(44),
+        gaps = { px.h(13), px.h(13) },
+        shared_rows = 6,
+        art_pad = { x = px.w(1), y = px.h(1) },
+        block_id = "wd_large_nav_block_%s",
+        task = { lines = 2, pitch = px.h(40), text_h = px.h(35), row_h = px.h(56), wrap_rows = 1 },
+        route = {
+            rows = 5,
+            min_line_rows = 2,
+            distance_w = px.w(98),
+            line_w = px.w(2.5),
+            dash = { count = 3, h = px.h(5), step = px.h(10), inset = px.h(8) },
+        },
+        package = { value_w = px.w(98) },
+        artifacts = { slots = 4 },
+        text_h = { place = px.h(28), value = px.h(21), header = px.h(23), name = px.h(28) },
+        roles = { value = "meta", header = "meta" },
+        icons = {
+            artifact = new_icon("wd_large_nav_icon_artifact", 28),
+            package = new_icon("wd_large_nav_icon_package", 26.9, 29.4),
+        },
+        stops = {
+            here = new_icon("wd_large_nav_icon_route_here", 16),
+            next = new_icon("wd_large_nav_icon_route_next", 18),
+            via = new_icon("wd_large_nav_icon_route_via", 12),
+            fold = new_icon("wd_large_nav_icon_route_fold", 6, 24),
+            goal = new_icon("wd_large_nav_icon_route_goal", 22),
+        },
+    },
 }
 
-local ICON_SQUAD = { id = "wd_nav_icon_squad", w = px.w(16), h = px.h(11.85) }
-local ICON_ARTIFACT = { id = "wd_nav_icon_artifact", w = px.w(16), h = px.h(16) }
-local ICON_PACKAGE = { id = "wd_nav_icon_package", w = px.w(15.36), h = px.h(16.81) }
-local MAX_LINE_ROWS = LAYOUT.route.rows - 2
+local function get_blocks(layout)
+    return {
+        { name = "route", rows = layout.route.rows },
+        { name = "package", rows = 1 },
+        { name = "artifacts", rows = 1 + layout.artifacts.slots },
+    }
+end
+
+for _, layout in pairs(LAYOUTS) do
+    layout.route.title_rows = layout.task and 0 or 1
+    layout.blocks = get_blocks(layout)
+    layout.block_rows = {}
+    for _, spec in ipairs(layout.blocks) do
+        layout.block_rows[spec.name] = spec.rows
+    end
+    layout.max_line_rows = layout.route.rows - layout.route.title_rows - 1
+end
+
+LAYOUT = LAYOUTS[d_promin_config.DEFAULT_THEME]
+
 local PACKAGE_PULSE_MS = 1200
+local TITLE_ROLE = "tracked"
 local DIST_TEXT = "%d M"
 local FOLD_TEXT = "+%d MAPS"
 local MORE_TEXT = " +%d"
 local NO_TASK = "NO TRACKED TASK"
 local OBJECTIVE = "OBJECTIVE"
-local SQUAD_LABEL = "SQUAD"
 local ARTIFACTS_LABEL = "NEARBY ARTIFACTS"
 local NOTHING_NEARBY = "NOTHING NEARBY"
 local FREQ_TEXT = "%s MHZ"
@@ -65,7 +107,6 @@ local NO_PACKAGE_FREQ = "---"
 local NONE = "-"
 local BOX_ROLES = {
     cell = { fill = "fill", border = "border" },
-    track = { fill = "track_fill", border = "track_border" },
 }
 local NO_ROWS = {}
 
@@ -76,22 +117,31 @@ local set_tint = wd_screen.set_tint
 local set_shown = wd_screen.set_shown
 local place_widget = wd_screen.place_widget
 
-local function place_segment(slot, top, height)
-    local line_w = LAYOUT.route.line_w
-    wd_panel.place_soft_fill(slot, (LAYOUT.icon_w - line_w) / 2, top, line_w, height)
+local function get_here_y(layout, row_h)
+    return (layout.route.title_rows + 0.5) * row_h
 end
 
-local function place_dot(dot, kind, row_h)
-    local icon = STOP_ICONS[kind]
+local function place_segment(layout, slot, top, height)
+    local line_w = layout.route.line_w
+    wd_panel.place_soft_fill(slot, (layout.icon_w - line_w) / 2, top, line_w, height)
+end
+
+local function place_dot(layout, dot, kind, row_h)
+    local icon = layout.stops[kind]
     dot.kind = kind
-    place_widget(dot.image.widget, (LAYOUT.icon_w - icon.w) / 2, (dot.row - 0.5) * row_h - icon.h / 2, icon.w, icon.h)
+    place_widget(dot.image.widget, (layout.icon_w - icon.w) / 2, (dot.row - 0.5) * row_h - icon.h / 2, icon.w, icon.h)
 end
 
-local function get_art_height(rows, row_h)
-    return rows * row_h + 2 * LAYOUT.art_pad.y
+local function get_task_height(layout, lines, row_h)
+    local task = layout.task
+    return (task.row_h or row_h) + (lines - 1) * task.pitch
 end
 
-local function build_sidebar(kit)
+local function get_art_height(layout, rows, row_h)
+    return rows * row_h + 2 * layout.art_pad.y
+end
+
+local function build_sidebar(kit, layout)
     local style = kit.style
     local row_h = style.row_h
     local cells = {}
@@ -105,13 +155,13 @@ local function build_sidebar(kit)
     end
     local function start_block(name)
         local holder = kit.new_holder()
-        local art = keep(kit.new_image(string.format(BLOCK_ID, name), "art", holder))
+        local art = keep(kit.new_image(string.format(layout.block_id, name), "art", holder))
         local rect = art.widget:GetTextureRect()
         block = {
             holder = holder,
             art = art,
             art_rect = { rect.x1, rect.y1, rect.x2, rect.y2 },
-            full_h = get_art_height(BLOCK_BY_NAME[name].rows, row_h),
+            full_h = get_art_height(layout, layout.block_rows[name], row_h),
             boxes = {},
         }
         blocks[name] = block
@@ -132,96 +182,113 @@ local function build_sidebar(kit)
         cells[#cells + 1] = cell
         return cell
     end
-    local function new_text(left, row, width, align)
-        local chars = kit.get_max_chars(width - 2 * style.pad)
-        return add(kit.new_cell({ chars = chars, align = align, box = false, parent = block.holder }), left, row, width)
+    local function new_text(left, row, width, align, text_h, role)
+        local chars = kit.get_max_chars(width - 2 * style.pad, text_h)
+        local cell = kit.new_cell({ chars = chars, align = align, box = false, parent = block.holder, text_h = text_h })
+        cell.lit_role = role
+        return add(cell, left, row, width)
     end
-    local function new_icon(icon, row)
+    local function new_icon_cell(icon, row)
         local cell = kit.new_cell({ icon = icon, align = "center", box = false, parent = block.holder })
-        return add(cell, 0, row, LAYOUT.icon_w)
+        return add(cell, 0, row, layout.icon_w)
     end
     local function new_line(role)
         return keep(kit.new_soft_fill(role, wd_panel.SOFT_FILLS.line_v, block.holder))
     end
     local function new_dot(row, kind)
-        add_row_box(0, row, LAYOUT.icon_w)
-        local dot = { image = keep(kit.new_image(STOP_ICONS[kind].id, "text", block.holder)), row = row }
-        place_dot(dot, kind, row_h)
+        add_row_box(0, row, layout.icon_w)
+        local dot = { image = keep(kit.new_image(layout.stops[kind].id, "text", block.holder)), row = row }
+        place_dot(layout, dot, kind, row_h)
         return dot
     end
+    local text_h, roles = layout.text_h, layout.roles
     local function new_row(icon, row, value_w)
-        local value_x = LAYOUT.w - value_w
+        local value_x = layout.w - value_w
         return {
-            icon = new_icon(icon, row),
-            name = new_text(LAYOUT.icon_w, row, value_x - LAYOUT.icon_w),
-            value = new_text(value_x, row, value_w, "center"),
+            icon = new_icon_cell(icon, row),
+            name = new_text(layout.icon_w, row, value_x - layout.icon_w, nil, text_h.place),
+            value = new_text(value_x, row, value_w, "center", text_h.value, roles.value),
         }
     end
-    local sidebar = { cells = cells, images = images, blocks = blocks }
-    local route_spec = LAYOUT.route
-    local here_y = 1.5 * row_h
+    local sidebar = { cells = cells, images = images, blocks = blocks, layout = layout }
+    local task_spec = layout.task
+    if task_spec then
+        local holder = kit.new_holder()
+        local text_w = layout.w - 2 * style.pad
+        local title_h = task_spec.text_h or style.text_h
+        local title_row_h = task_spec.row_h or row_h
+        local chars = kit.get_max_chars(text_w, title_h)
+        local task = {
+            holder = holder,
+            box = kit.new_box(nil, holder),
+            titles = {},
+            text_w = text_w,
+            text_h = title_h,
+            chars = chars,
+        }
+        for index = 1, task_spec.lines do
+            local cell = kit.new_cell({ chars = chars, box = false, parent = holder, text_h = title_h })
+            cell.lit_role = TITLE_ROLE
+            cell.rect = { 0, (index - 1) * task_spec.pitch, layout.w, title_row_h }
+            cell.place(cell.rect[1], cell.rect[2], layout.w, title_row_h)
+            cells[#cells + 1] = cell
+            task.titles[index] = cell
+        end
+        sidebar.task = task
+        sidebar.titles = task.titles
+    end
+    local route_spec = layout.route
+    local title_rows = route_spec.title_rows
     start_block("route")
     local route = { line = new_line("dim"), leg = new_line("text"), dashes = {}, stops = {} }
-    place_segment(route.leg, here_y, row_h)
+    place_segment(layout, route.leg, get_here_y(layout, row_h), row_h)
     for index = 1, route_spec.dash.count do
         route.dashes[index] = new_line("dim")
     end
-    route.title = new_text(0, 1, LAYOUT.w)
-    route.here = { dot = new_dot(2, "here"), name = new_text(LAYOUT.icon_w, 2, LAYOUT.w - LAYOUT.icon_w) }
-    local distance_x = LAYOUT.w - route_spec.distance_w
-    for index = 1, MAX_LINE_ROWS do
-        local row = index + 2
+    if title_rows == 1 then
+        route.title = new_text(0, 1, layout.w, nil, nil, TITLE_ROLE)
+        sidebar.titles = { route.title }
+    end
+    local here_row = title_rows + 1
+    route.here = {
+        dot = new_dot(here_row, "here"),
+        name = new_text(layout.icon_w, here_row, layout.w - layout.icon_w, nil, text_h.place),
+    }
+    local distance_x = layout.w - route_spec.distance_w
+    for index = 1, layout.max_line_rows do
+        local row = index + here_row
         route.stops[index] = {
             dot = new_dot(row, "via"),
-            name = new_text(LAYOUT.icon_w, row, distance_x - LAYOUT.icon_w),
-            value = new_text(distance_x, row, route_spec.distance_w, "center"),
+            name = new_text(layout.icon_w, row, distance_x - layout.icon_w, nil, text_h.place),
+            value = new_text(distance_x, row, route_spec.distance_w, "center", text_h.value, roles.value),
         }
     end
     sidebar.route = route
 
+    local package_spec = layout.package
     start_block("package")
-    sidebar.package = new_row(ICON_PACKAGE, 1, route_spec.distance_w)
-
-    local squad_spec = LAYOUT.squad
-    start_block("squad")
-    local squad = new_row(ICON_SQUAD, 1, LAYOUT.count_w)
-    squad.slots = {}
-    local bar_opts = { level = "text", inset = squad_spec.level_inset, parent = block.holder }
-    local bar_w = LAYOUT.w - squad_spec.name_w
-    for index = 1, squad_spec.slots do
-        local row = index + 1
-        local name = new_text(0, row, squad_spec.name_w)
-        local cell_rect = add_row_box(squad_spec.name_w, row, bar_w)
-        local track = {
-            squad_spec.name_w + squad_spec.track_x,
-            cell_rect[2] + (row_h - squad_spec.track_h) / 2,
-            bar_w - 2 * squad_spec.track_x,
-            squad_spec.track_h,
-        }
-        add_box("track", track, squad_spec.track_border_w)
-        local bar = kit.new_bar(bar_opts)
-        bar.place(track[1], track[2], track[3], track[4])
-        squad.slots[index] = { name = name, bar = bar }
-    end
-    sidebar.squad = squad
+    sidebar.package = new_row(layout.icons.package, 1, package_spec.value_w)
 
     start_block("artifacts")
-    local artifacts = new_row(ICON_ARTIFACT, 1, LAYOUT.count_w)
-    artifacts.slots = {}
-    for index = 1, LAYOUT.artifacts.slots do
-        artifacts.slots[index] = new_text(0, index + 1, LAYOUT.w)
+    local artifacts = {
+        icon = new_icon_cell(layout.icons.artifact, 1),
+        name = new_text(layout.icon_w, 1, layout.w - layout.icon_w, nil, text_h.header, roles.header),
+        slots = {},
+    }
+    for index = 1, layout.artifacts.slots do
+        artifacts.slots[index] = new_text(0, index + 1, layout.w, nil, text_h.name)
     end
     sidebar.artifacts = artifacts
     return sidebar
 end
 
 local function show_cell(cell, dim)
-    cell.set_role(dim and "dim" or "text")
+    cell.set_role(dim and "dim" or cell.lit_role or "text")
     cell.set_visible(true)
 end
 
 local function show_text(kit, cell, text, dim)
-    cell.set_text(kit.fit(text, cell.rect[3] - 2 * kit.style.pad))
+    cell.set_text(kit.fit(text, cell.rect[3] - 2 * kit.style.pad, cell.text_h))
     show_cell(cell, dim)
 end
 
@@ -272,20 +339,20 @@ local function get_line_rows(route, max_line_rows)
     return rows, false
 end
 
-function get_row_split(line_need, artifact_need)
-    local shared = LAYOUT.shared_rows
-    local artifact_rows = math.min(artifact_need, shared - math.min(line_need, LAYOUT.route.min_line_rows))
+function get_row_split(line_need, artifact_need, layout, shared)
+    shared = shared or layout.shared_rows
+    local artifact_rows = math.min(artifact_need, shared - math.min(line_need, layout.route.min_line_rows))
     return math.min(line_need, shared - artifact_rows), artifact_rows
 end
 
-local function get_artifact_need(names)
+local function get_artifact_need(layout, names)
     if not names or #names == 0 then
         return 1
     end
-    return math.min(#names, LAYOUT.artifacts.slots)
+    return math.min(#names, layout.artifacts.slots)
 end
 
-local function get_artifact_lines(kit, names, slots, width)
+local function get_artifact_lines(kit, names, slots, width, height)
     if not names then
         return { d_promin_config.UNAVAILABLE_TEXT }, true
     end
@@ -301,74 +368,90 @@ local function get_artifact_lines(kit, names, slots, width)
     local hidden = count - shown
     if hidden > 0 then
         local suffix = string.format(MORE_TEXT, hidden)
-        lines[shown] = kit.fit(lines[shown], width - kit.measure(suffix)) .. suffix
+        lines[shown] = kit.fit(lines[shown], width - kit.measure(suffix, height), height) .. suffix
     end
     return lines, false
 end
 
-local function move_block(block, top, rows, row_h)
+local function move_block(layout, block, top, rows, row_h)
     if block.top ~= top then
         block.top = top
-        block.holder:SetWndPos(scratch_pos:set(LAYOUT.x, top))
+        block.holder:SetWndPos(scratch_pos:set(layout.x, top))
     end
     if block.rows == rows then
         return
     end
     block.rows = rows
-    local pad = LAYOUT.art_pad
-    local height = get_art_height(rows, row_h)
+    local pad = layout.art_pad
+    local height = get_art_height(layout, rows, row_h)
     local rect = block.art_rect
     local cut = rect[2] + (rect[4] - rect[2]) * height / block.full_h
     local widget = block.art.widget
     widget:SetTextureRect(scratch_rect:set(rect[1], rect[2], rect[3], cut))
-    place_widget(widget, -pad.x, -pad.y, LAYOUT.w + 2 * pad.x, height)
+    place_widget(widget, -pad.x, -pad.y, layout.w + 2 * pad.x, height)
 end
 
-local function place_blocks(kit, sidebar, route_rows, artifact_rows)
-    if sidebar.route_rows == route_rows and sidebar.artifact_rows == artifact_rows then
+local function move_task(layout, task, top, lines, row_h)
+    task.holder:SetWndPos(scratch_pos:set(layout.x, top))
+    task.box.place(0, 0, layout.w, get_task_height(layout, lines, row_h))
+end
+
+local function place_blocks(kit, sidebar, title_lines, route_rows, artifact_rows)
+    if
+        sidebar.title_lines == title_lines
+        and sidebar.route_rows == route_rows
+        and sidebar.artifact_rows == artifact_rows
+    then
         return
     end
+    sidebar.title_lines = title_lines
     sidebar.route_rows = route_rows
     sidebar.artifact_rows = artifact_rows
+    local layout = sidebar.layout
     local row_h = kit.style.row_h
-    local rows_by_name = { route = route_rows, artifacts = 1 + artifact_rows }
-    local top = LAYOUT.top
-    for index, spec in ipairs(BLOCKS) do
+    local rows_by_name = { route = route_rows, artifacts = artifact_rows }
+    local top = layout.top
+    local task = sidebar.task
+    if task then
+        move_task(layout, task, top, title_lines, row_h)
+        top = top + get_task_height(layout, title_lines, row_h)
+    end
+    for index, spec in ipairs(layout.blocks) do
         local rows = rows_by_name[spec.name] or spec.rows
-        move_block(sidebar.blocks[spec.name], top, rows, row_h)
-        top = top + rows * row_h + (LAYOUT.gaps[index] or 0)
+        move_block(layout, sidebar.blocks[spec.name], top, rows, row_h)
+        top = top + rows * row_h + (layout.gaps[index] or 0)
     end
 end
 
-local function show_dot(kit, dot, kind)
+local function show_dot(kit, layout, dot, kind)
     set_shown(dot.image, true)
     if dot.kind == kind then
         return
     end
-    kit.set_image(dot.image, STOP_ICONS[kind].id)
-    place_dot(dot, kind, kit.style.row_h)
+    kit.set_image(dot.image, layout.stops[kind].id)
+    place_dot(layout, dot, kind, kit.style.row_h)
 end
 
-local function place_dashes(route, top)
+local function place_dashes(layout, route, top)
     if route.dash_top == top then
         return
     end
     route.dash_top = top
-    local dash = LAYOUT.route.dash
+    local dash = layout.route.dash
     for index, slot in ipairs(route.dashes) do
-        place_segment(slot, top + dash.inset + (index - 1) * dash.step, dash.h)
+        place_segment(layout, slot, top + dash.inset + (index - 1) * dash.step, dash.h)
     end
 end
 
-local function show_line(kit, route, line_count, dashed, folded_count)
+local function show_line(kit, layout, route, line_count, dashed, folded_count)
     local folded = folded_count ~= nil
     local row_h = kit.style.row_h
-    local here_y = 1.5 * row_h
+    local here_y = get_here_y(layout, row_h)
     local solid_count = folded and 1 or line_count
     local solid = not dashed and solid_count > 0
     local dashes_shown = dashed or folded
     if dashes_shown then
-        place_dashes(route, folded and here_y + row_h or here_y)
+        place_dashes(layout, route, folded and here_y + row_h or here_y)
     end
     for _, slot in ipairs(route.dashes) do
         set_shown(slot, dashes_shown)
@@ -377,7 +460,7 @@ local function show_line(kit, route, line_count, dashed, folded_count)
     set_shown(route.leg, solid)
     if route.line_count ~= solid_count then
         route.line_count = solid_count
-        place_segment(route.line, here_y, solid_count * row_h)
+        place_segment(layout, route.line, here_y, solid_count * row_h)
     end
 end
 
@@ -387,20 +470,39 @@ local function get_stop_name(kit, cell, row)
         return name
     end
     local suffix = string.format(MORE_TEXT, row.folded)
-    return kit.fit(name, cell.rect[3] - 2 * kit.style.pad - kit.measure(suffix)) .. suffix
+    local height = cell.text_h
+    return kit.fit(name, cell.rect[3] - 2 * kit.style.pad - kit.measure(suffix, height), height) .. suffix
 end
 
-local function show_route(kit, route, level_name, title, rows, dashed)
-    show_text(kit, route.title, title and wd_text.get_upper(title) or NO_TASK, title == nil)
+local function get_title_lines(kit, task, title)
+    local text = title and wd_text.get_upper(title) or NO_TASK
+    if not task then
+        return { text }
+    end
+    return wd_text.fit_lines(kit.font, text, "", task.text_h, task.text_w, task.chars, #task.titles)
+end
+
+local function show_title(kit, titles, lines, dim)
+    for index, cell in ipairs(titles) do
+        local line = lines[index]
+        if line then
+            show_text(kit, cell, line, dim)
+        else
+            cell.set_visible(false)
+        end
+    end
+end
+
+local function show_route(kit, layout, route, level_name, rows, dashed)
     show_text(kit, route.here.name, wd_text.get_upper(level_name), false)
-    show_dot(kit, route.here.dot, "here")
+    show_dot(kit, layout, route.here.dot, "here")
     for index, stop in ipairs(route.stops) do
         local row = rows[index]
         if row then
             local value = row.kind == "fold" and "" or format_distance(row.distance)
             show_text(kit, stop.name, get_stop_name(kit, stop.name, row), false)
             show_text(kit, stop.value, value, false)
-            show_dot(kit, stop.dot, row.kind)
+            show_dot(kit, layout, stop.dot, row.kind)
         else
             stop.name.set_visible(false)
             stop.value.set_visible(false)
@@ -408,36 +510,13 @@ local function show_route(kit, route, level_name, title, rows, dashed)
         end
     end
     local first = rows[1]
-    show_line(kit, route, #rows, dashed, first and first.folded)
-end
-
-local function get_first_name(name)
-    return string.match(name, "%S+") or name
-end
-
-local function show_squad(kit, squad, companions)
-    local dim = #companions == 0
-    show_cell(squad.icon, dim)
-    show_text(kit, squad.name, SQUAD_LABEL, dim)
-    show_text(kit, squad.value, tostring(#companions), dim)
-    for index, slot in ipairs(squad.slots) do
-        local companion = companions[index]
-        show_text(
-            kit,
-            slot.name,
-            companion and wd_text.get_upper(get_first_name(companion.name)) or NONE,
-            companion == nil
-        )
-        slot.bar.set_ratio(companion and companion.health or 0)
-        slot.bar.set_visible(true)
-    end
+    show_line(kit, layout, route, #rows, dashed, first and first.folded)
 end
 
 local function show_artifacts(kit, artifacts, names, lines, status)
     local dim = names == nil
     show_cell(artifacts.icon, dim)
     show_text(kit, artifacts.name, ARTIFACTS_LABEL, dim)
-    show_text(kit, artifacts.value, names and tostring(#names) or d_promin_config.OFF_TEXT, dim)
     for index, cell in ipairs(artifacts.slots) do
         local line = lines[index]
         if line then
@@ -478,26 +557,37 @@ local function get_package_tint(package, kit)
     return kit.tints.text
 end
 
-function new(kit)
-    local sidebar = build_sidebar(kit)
-    local list_w = LAYOUT.w - 2 * kit.style.pad
+function new(kit, layout)
+    local sidebar = build_sidebar(kit, layout)
+    local list_w = sidebar.artifacts.slots[1].rect[3] - 2 * kit.style.pad
+    local title_rows = layout.route.title_rows
+    local shown_title, title_lines = false, nil
 
     function sidebar.refresh(tracked_title)
         local route = wd_intel.get_tracked_task_route()
         local names = d_promin.has_artefact_module() and wd_intel.get_nearby_artefacts() or nil
-        local rows, dashed = get_line_rows(route, MAX_LINE_ROWS)
-        local line_rows, artifact_rows = get_row_split(#rows, get_artifact_need(names))
+        if tracked_title ~= shown_title then
+            shown_title = tracked_title
+            title_lines = get_title_lines(kit, sidebar.task, tracked_title)
+        end
+        local task = layout.task
+        local shared = layout.shared_rows - (task and (#title_lines - 1) * task.wrap_rows or 0)
+        local rows, dashed = get_line_rows(route, layout.max_line_rows)
+        local line_rows, artifact_rows = get_row_split(#rows, get_artifact_need(layout, names), layout, shared)
         if line_rows < #rows then
             rows = get_line_rows(route, line_rows)
         end
-        local lines, status = get_artifact_lines(kit, names, artifact_rows, list_w)
-        place_blocks(kit, sidebar, 2 + #rows, #lines)
+        local lines, status = get_artifact_lines(kit, names, artifact_rows, list_w, sidebar.artifacts.slots[1].text_h)
+        show_title(kit, sidebar.titles, title_lines, tracked_title == nil)
+        place_blocks(kit, sidebar, #title_lines, title_rows + 1 + #rows, 1 + #lines)
         for _, block in pairs(sidebar.blocks) do
             set_shown(block.art, true)
         end
-        show_route(kit, sidebar.route, wd_intel.get_level_name(), tracked_title, rows, dashed)
+        if sidebar.task then
+            sidebar.task.box.set_visible(true)
+        end
+        show_route(kit, layout, sidebar.route, wd_intel.get_level_name(), rows, dashed)
         show_package(kit, sidebar, wd_intel.get_rf_package())
-        show_squad(kit, sidebar.squad, wd_intel.get_companions())
         show_artifacts(kit, sidebar.artifacts, names, lines, status)
     end
 
@@ -517,8 +607,8 @@ function new(kit)
         for _, image in ipairs(sidebar.images) do
             set_shown(image, false)
         end
-        for _, slot in ipairs(sidebar.squad.slots) do
-            slot.bar.set_visible(false)
+        if sidebar.task then
+            sidebar.task.box.set_visible(false)
         end
     end
 

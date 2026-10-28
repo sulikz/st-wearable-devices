@@ -1,5 +1,6 @@
 FONTS = {
     jetbrains_mono = { texture = "wd\\ui\\fonts\\jetbrains_mono", id = "wd_font_jetbrains_mono" },
+    jetbrains_mono_digits = { texture = "wd\\ui\\fonts\\jetbrains_mono_digits", id = "wd_font_jetbrains_mono_digits" },
     face_text = { texture = "wd\\ui\\faces\\shared\\text", id = "wd_font_face_text" },
     face_clock = { texture = "wd\\ui\\faces\\arcs_mono\\glyphs", id = "wd_font_face_clock" },
 }

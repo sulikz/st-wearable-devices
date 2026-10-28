@@ -271,6 +271,20 @@ function wrap(font, text, height, max_width, max_chars)
     return lines
 end
 
+function fit_lines(font, text, suffix, height, max_width, max_chars, limit)
+    local whole = wrap(font, text .. suffix, height, max_width, max_chars)
+    if #whole <= limit then
+        return whole
+    end
+    local wrapped = suffix == "" and whole or wrap(font, text, height, max_width, max_chars)
+    local room = max_width - measure(font, suffix, height)
+    wrapped[limit] = ellipsize(font, table.concat(wrapped, " ", limit), height, room) .. suffix
+    for index = #wrapped, limit + 1, -1 do
+        wrapped[index] = nil
+    end
+    return wrapped
+end
+
 function new_block(cfg)
     local lines = {}
     for index = 1, cfg.lines do
@@ -295,18 +309,7 @@ function new_block(cfg)
     end
 
     function block.fit_lines(text, suffix)
-        local limit = #lines
-        local whole = block.wrap(text .. suffix)
-        if #whole <= limit then
-            return whole
-        end
-        local wrapped = suffix == "" and whole or block.wrap(text)
-        local room = cfg.width - measure(cfg.font, suffix, cfg.height)
-        wrapped[limit] = ellipsize(cfg.font, table.concat(wrapped, " ", limit), cfg.height, room) .. suffix
-        for index = #wrapped, limit + 1, -1 do
-            wrapped[index] = nil
-        end
-        return wrapped
+        return fit_lines(cfg.font, text, suffix, cfg.height, cfg.width, cfg.max_chars, #lines)
     end
 
     function block.set_lines(texts)

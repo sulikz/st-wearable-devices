@@ -1,0 +1,48 @@
+TEXT_H = 30
+ROW_H = 52
+ICON = 28
+BOOSTERS = { x = 25, y = 80, w = 124, h = 92, columns = 3, pitch_x = 128, pitch_y = 96 }
+BOOSTER = { icon_y = 10, timer_y = 44, track = { x = 14, y = 81, w = 96, h = 5 } }
+NEEDS = {
+    x = 25,
+    y = 376,
+    w = 188,
+    columns = 2,
+    order = { "food", "water", "sleep", "weight" },
+    h = 86,
+    pitch_x = 192,
+    pitch_y = 90,
+}
+NEED =
+    { icon = { x = 12, size = 44, y = 21 }, value = { x = 68, right = 12, h = 42, y = 20 }, small = { h = 30, y = 26 } }
+VITALS = { y = 80, w = 202, h = 150, pitch_x = 208, pitch_y = 156, x = 425 }
+VITAL_ORDER = { "health", "stamina", "psy", "radiation" }
+VITAL = {
+    label = { x = 14, y = 12, h = 21 },
+    icon = { right = 14, y = 10, size = 48 },
+    number = { x = 14, y = 58, h = 48 },
+    unit = { gap = 6, y = 80 },
+    track = { x = 14, y = 120, w = 174, h = 16, inset = 2 },
+    tick = { w = 3, h = 24 },
+    notice = { y = 55, h = 26, pitch = 28 },
+}
+GEIGER = {
+    x = 425,
+    w = 410,
+    icon_w = 52,
+    name_w = 258,
+    value_w = 100,
+    rows = { reading = 400, scale = 452, shield = 500 },
+    track = { x = 12, y = 8, w = 386, h = 14, inset = 2 },
+    marker = { y = 4, w = 3, h = 22 },
+    unit = { x = 252, y = 18, w = 48, h = 18 },
+}
+PARTS = {
+    head = { x = 929, y = 95, w = 76, h = 84 },
+    torso = { x = 908, y = 152, w = 112, h = 116 },
+    pelvis = { x = 907, y = 233, w = 102, h = 90 },
+    leftarm = { x = 859, y = 177, w = 86, h = 180 },
+    rightarm = { x = 982, y = 167, w = 86, h = 180 },
+    leftleg = { x = 882, y = 276, w = 94, h = 256 },
+    rightleg = { x = 945, y = 281, w = 94, h = 256 },
+}

@@ -15,10 +15,6 @@ function format_date(entry)
     return wd_text.get_upper(wd_clock.format_day_month_year(entry.year, entry.month, entry.day))
 end
 
-function format_stamp(entry)
-    return format_time(entry) .. ", " .. format_date(entry)
-end
-
 function format_more(more)
     return string.format(" +%d LINES", more)
 end
@@ -62,6 +58,7 @@ function new(cfg)
     local view_h = cfg.view_h
     local shrink = cfg.shrink
     local row_h = cfg.row_h
+    local head_h = cfg.head_h
     local pad_top = cfg.pad_top
     local pad_bottom = cfg.pad_bottom
     local gap = cfg.gap
@@ -134,7 +131,7 @@ function new(cfg)
             more = more,
             focus = focused,
             unread = entry.id > seen_id,
-            height = pad_top + (headed and row_h or 0) + #lines * row_h + pad_bottom,
+            height = pad_top + (headed and head_h or 0) + #lines * row_h + pad_bottom,
         }
     end
 

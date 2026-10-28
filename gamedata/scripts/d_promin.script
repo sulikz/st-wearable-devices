@@ -412,7 +412,7 @@ end
 
 local function get_marks_collector()
     if not marks_collector then
-        marks_collector = wd_map_marks.new({ max_marks = d_promin_map_ui.get_map_frame().max_marks })
+        marks_collector = wd_map_marks.new({ max_marks = d_promin_map_ui.MAX_MARKS })
     end
     return marks_collector
 end
@@ -458,7 +458,7 @@ local function collect_marks(zoom, map_frame, player_pos, actor_level, range, tr
 end
 
 local function get_zoom_frame()
-    local frame = d_promin_map_ui.get_map_frame()
+    local frame = d_promin_map_ui.get_map_frame(get_ui().get_theme())
     local zoom = clamp(d_promin_config.transforms.map_zoom, d_promin_config.MAP_ZOOM_MIN, d_promin_config.MAP_ZOOM_MAX)
     if zoom_frame and zoom_frame.frame == frame and zoom_frame.zoom == zoom then
         return zoom_frame
@@ -810,6 +810,10 @@ local function register_gui()
     local emblem =
         wd_gui.new_catalog_enum(d_promin_config.EMBLEMS, d_promin_config.get_emblem_index, { no_apply = true })
     emblem.on_change = repaint
+    local theme = wd_gui.new_catalog_enum(d_promin_config.THEMES, d_promin_config.get_theme_index, { no_apply = true })
+    theme.on_change = function()
+        get_ui().apply_theme()
+    end
     local function get_int_text(value)
         return string.format("%d", math.floor(value + 0.5))
     end
@@ -838,7 +842,10 @@ local function register_gui()
             return d_promin_config.get_defaults()
         end,
         save_global = d_promin_config.save_global,
-        on_apply = reapply_transforms,
+        on_apply = function()
+            reapply_transforms()
+            get_ui().apply_theme()
+        end,
         fields = {
             hand_pos = hand,
             hand_rot = wd_gui.new_slider(-90, 90),
@@ -849,6 +856,7 @@ local function register_gui()
             ui_rot = wd_gui.new_slider(-180, 180),
             ui_scale = wd_gui.new_slider(0.01, 3),
             emblem = emblem,
+            theme = theme,
             brightness = brightness,
             map_x = wd_gui.new_slider(-0.05, 0.05),
             map_y = wd_gui.new_slider(-0.05, 0.05),
@@ -903,6 +911,7 @@ local function register_gui()
         id = "promin_skin",
         label = "Promin",
         rows = {
+            { "theme", nil, 1, "Theme" },
             { "brightness", nil, 5, "Brightness" },
         },
         picker = {
@@ -1125,6 +1134,7 @@ function register()
             battery.reset()
             modules_installed = {}
             d_promin_config.load_transforms()
+            get_ui().apply_theme()
             get_ui().repaint()
             last_level_name = nil
             next_idle_update = 0

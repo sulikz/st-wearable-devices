@@ -7,11 +7,29 @@ local COMMS_PAGE = d_promin_config.COMMS_PAGE
 local TM_NODES = { "tm_h1", "tm_h2", "tm_m1", "tm_m2" }
 local SIGNAL = { x = 766, bottom = 59, bar_w = 4, pitch = 20 / 3, heights = { 4, 8, 12, 16 } }
 local CROSS_ID = "wd_comms_icon_cross"
-local KEY = { right = 1025, top = 35, size = 30, gap = 6 }
+local KEY = { top = 35, size = 30, gap = 6 }
 local UNREAD = { dx = 25, dy = -5, size = 8 }
 local FRAME_ID = "wd_promin_frame"
 local TITLE_H = 29
 local TITLE = { x = 125, y = KEY.top + (KEY.size - TITLE_H) / 2, h = TITLE_H }
+local BAR = { left = 74, right = 1025, middle = 50 }
+local BARS = {
+    [d_promin_config.DEFAULT_THEME] = {
+        left = BAR.left,
+        right = BAR.right,
+        middle = BAR.middle,
+        scale = 1,
+        frame = FRAME_ID,
+    },
+    [d_promin_config.LARGE_THEME] = {
+        left = 24,
+        right = 1075,
+        middle = 44,
+        scale = 1.3,
+        title_scale = 0.77,
+        page_style = d_promin_config.PANEL_STYLE_LARGE,
+    },
+}
 local KEY_ROLES = {
     [true] = { fill = "text", border = "text", digit = "fill" },
     [false] = { fill = "fill", border = "dim", digit = "meta" },
@@ -22,27 +40,77 @@ for digit = 0, 9 do
     DIGITS[digit] = "dig2_" .. digit
 end
 
-LAYOUT = {
-    bg = px.box(0, 0, d_promin_config.ART_W, d_promin_config.ART_H),
-    title = px.box(TITLE.x, TITLE.y, 0, TITLE.h),
-    emblem = px.box(74, 29, 40, 42),
-    signal_bars = {},
-    signal_cross = px.box(760, 37, 11, 11),
-    bat_icon = px.box(804, 42, 32, 17),
-    tm = {
-        x = { px.x(852), px.x(864), px.x(883), px.x(895) },
-        y = px.y(43),
-        w = px.w(10),
-        h = px.h(13),
-    },
-    keys = { right = px.x(KEY.right), top = px.y(KEY.top), w = px.w(KEY.size), h = px.h(KEY.size), gap = px.w(KEY.gap) },
-    unread = { dx = px.w(UNREAD.dx), y = px.y(KEY.top + UNREAD.dy), w = px.w(UNREAD.size), h = px.h(UNREAD.size) },
-}
-
-for index, height in ipairs(SIGNAL.heights) do
-    local left = SIGNAL.x + (index - 1) * SIGNAL.pitch
-    LAYOUT.signal_bars[index] = px.box(left, SIGNAL.bottom - height, SIGNAL.bar_w, height)
+local function get_scaled_style(scale)
+    local style = d_promin_config.PANEL_STYLE
+    return d_promin_config.new_panel_style({
+        text_h = style.text_h * scale,
+        pad = style.pad * scale,
+        gap = style.gap * scale,
+        row_h = style.row_h * scale,
+    })
 end
+
+local function new_layout(bar)
+    local scale = bar.scale
+    local title_scale = bar.title_scale or scale
+    local function get_left_x(x)
+        return bar.left + (x - BAR.left) * title_scale
+    end
+    local function get_right_x(x)
+        return bar.right - (BAR.right - x) * scale
+    end
+    local function get_y(y)
+        return bar.middle + (y - BAR.middle) * scale
+    end
+    local function get_title_y(y)
+        return bar.middle + (y - BAR.middle) * title_scale
+    end
+    local layout = {
+        frame = bar.frame,
+        style = get_scaled_style(scale),
+        page_style = bar.page_style,
+        bg = px.box(0, 0, d_promin_config.ART_W, d_promin_config.ART_H),
+        title = px.box(get_left_x(TITLE.x), get_title_y(TITLE.y), 0, TITLE.h * title_scale),
+        emblem = px.box(get_left_x(BAR.left), get_title_y(29), 40 * title_scale, 42 * title_scale),
+        signal_bars = {},
+        signal_cross = px.box(get_right_x(760), get_y(37), 11 * scale, 11 * scale),
+        bat_icon = px.box(get_right_x(804), get_y(42), 32 * scale, 17 * scale),
+        tm = {
+            x = {},
+            y = px.y(get_y(43)),
+            w = px.w(10 * scale),
+            h = px.h(13 * scale),
+        },
+        keys = {
+            right = px.x(bar.right),
+            top = px.y(get_y(KEY.top)),
+            w = px.w(KEY.size * scale),
+            h = px.h(KEY.size * scale),
+            gap = px.w(KEY.gap * scale),
+        },
+        unread = {
+            dx = px.w(UNREAD.dx * scale),
+            y = px.y(get_y(KEY.top + UNREAD.dy)),
+            w = px.w(UNREAD.size * scale),
+            h = px.h(UNREAD.size * scale),
+        },
+    }
+    for index, left in ipairs({ 852, 864, 883, 895 }) do
+        layout.tm.x[index] = px.x(get_right_x(left))
+    end
+    for index, height in ipairs(SIGNAL.heights) do
+        local bar_left = get_right_x(SIGNAL.x + (index - 1) * SIGNAL.pitch)
+        layout.signal_bars[index] =
+            px.box(bar_left, get_y(SIGNAL.bottom - height), SIGNAL.bar_w * scale, height * scale)
+    end
+    return layout
+end
+
+LAYOUTS = {}
+for theme, bar in pairs(BARS) do
+    LAYOUTS[theme] = new_layout(bar)
+end
+LAYOUT = LAYOUTS[d_promin_config.DEFAULT_THEME]
 
 MAX_KEYS = 3
 PAGE_REFRESH_MS = 250
@@ -150,7 +218,7 @@ local function is_key_layout_current(chrome, pages)
 end
 
 local function layout_keys(chrome, pages)
-    local keys = LAYOUT.keys
+    local keys = chrome.layout.keys
     local count = math.min(#pages, MAX_KEYS)
     chrome.shown_page = nil
     chrome.has_comms_key = false
@@ -161,7 +229,7 @@ local function layout_keys(chrome, pages)
             local left = keys.right - (count - index + 1) * keys.w - (count - index) * keys.gap
             key.place(left, keys.top, keys.w, keys.h)
             if page_id == COMMS_PAGE then
-                local unread = LAYOUT.unread
+                local unread = chrome.layout.unread
                 chrome.has_comms_key = true
                 wd_screen.place_widget(chrome.unread.widget, left + unread.dx, unread.y, unread.w, unread.h)
             end
@@ -234,7 +302,9 @@ end
 local function set_chrome_visible(chrome, visible)
     chrome.visible = visible
     chrome.bg:Show(visible)
-    chrome.page:Show(visible)
+    if chrome.page then
+        chrome.page:Show(visible)
+    end
     chrome.title:Show(visible)
     for _, slot in ipairs(chrome.tm) do
         slot.widget:Show(visible)
@@ -268,7 +338,7 @@ local function add_chrome_element(chrome, node, box, group)
 end
 
 local function add_title(chrome, texture_id)
-    local wnd, element = add_chrome_element(chrome, "title", LAYOUT.title)
+    local wnd, element = add_chrome_element(chrome, "title", chrome.layout.title)
     binder.set(wnd, texture_id)
     local aspect = wd_screen.get_texture_aspect(wnd)
     if aspect then
@@ -288,19 +358,19 @@ local function place_box(widget, box)
     wd_screen.place_widget(widget, box[1], box[2], box[3], box[4])
 end
 
-local function new_signal(kit)
+local function new_signal(kit, layout)
     local signal = { bars = {} }
-    for index, box in ipairs(LAYOUT.signal_bars) do
+    for index, box in ipairs(layout.signal_bars) do
         signal.bars[index] = kit.new_fill("text")
         place_box(signal.bars[index].widget, box)
     end
     signal.cross = kit.new_image(CROSS_ID, "warn")
-    place_box(signal.cross.widget, LAYOUT.signal_cross)
+    place_box(signal.cross.widget, layout.signal_cross)
     return signal
 end
 
-local function new_kit(parent)
-    local font = wd_fonts.get_font(d_promin_config.FONT)
+function new_kit(parent, style, font_name)
+    local font = wd_fonts.get_font(font_name or d_promin_config.FONT)
     if not font then
         return nil
     end
@@ -308,30 +378,35 @@ local function new_kit(parent)
         parent = parent,
         binder = binder,
         font = font,
-        style = d_promin_config.PANEL_STYLE,
+        style = style or d_promin_config.PANEL_STYLE,
         palette = d_promin_config.PANEL_RGB,
         get_tint = d_promin_config.get_tint,
     })
 end
 
 function build(cfg)
-    local tm = LAYOUT.tm
-    local chrome = { init = cfg.init, elements = {}, tm = {} }
+    local layout = LAYOUTS[cfg.theme]
+    local tm = layout.tm
+    local chrome = { init = cfg.init, layout = layout, elements = {}, tm = {} }
 
-    chrome.bg = add_chrome_element(chrome, "bg", LAYOUT.bg)
-    binder.set(chrome.bg, FRAME_ID)
-    chrome.page = add_chrome_element(chrome, "page", LAYOUT.bg)
-    binder.set(chrome.page, cfg.bg_tex)
+    chrome.bg = add_chrome_element(chrome, "bg", layout.bg)
+    if layout.frame then
+        binder.set(chrome.bg, layout.frame)
+        chrome.page = add_chrome_element(chrome, "page", layout.bg)
+        binder.set(chrome.page, cfg.bg_tex)
+    else
+        binder.set(chrome.bg, cfg.bg_tex)
+    end
     chrome.title = add_title(chrome, cfg.title_tex)
 
-    chrome.emblem = add_chrome_element(chrome, "emblem", LAYOUT.emblem, "faction_color")
+    chrome.emblem = add_chrome_element(chrome, "emblem", layout.emblem, "faction_color")
     chrome.emblem_slot = { widget = chrome.emblem }
 
     for index, node in ipairs(TM_NODES) do
         chrome.tm[index] = { widget = add_chrome_element(chrome, node, { tm.x[index], tm.y, tm.w, tm.h }) }
     end
 
-    local bat_wnd, bat_element = add_chrome_element(chrome, "bat_icon", LAYOUT.bat_icon)
+    local bat_wnd, bat_element = add_chrome_element(chrome, "bat_icon", layout.bat_icon)
     bat_element.role = "text"
     chrome.bat_icon = { widget = bat_wnd, element = bat_element }
 
@@ -339,13 +414,17 @@ function build(cfg)
     chrome.key_ids = {}
     chrome.allow_page_refresh = wd_core.throttle(PAGE_REFRESH_MS)
     chrome.allow_signal_refresh = wd_core.throttle(SIGNAL_REFRESH_MS)
-    chrome.kit = new_kit(cfg.wnd)
+    chrome.kit = new_kit(cfg.wnd, layout.style)
+    chrome.page_kit = chrome.kit
     if chrome.kit then
+        if layout.page_style then
+            chrome.page_kit = new_kit(cfg.wnd, layout.page_style)
+        end
         for index = 1, MAX_KEYS do
             chrome.keys[index] = new_key(chrome.kit, index)
         end
         chrome.unread = chrome.kit.new_fill("text")
-        chrome.signal = new_signal(chrome.kit)
+        chrome.signal = new_signal(chrome.kit, layout)
     end
 
     function chrome.set_visible(visible)
@@ -366,6 +445,9 @@ function build(cfg)
         apply_emblem(chrome)
         if chrome.kit then
             chrome.kit.repaint()
+            if chrome.page_kit ~= chrome.kit then
+                chrome.page_kit.repaint()
+            end
         end
     end
 

@@ -6,30 +6,71 @@ local place_widget = wd_screen.place_widget
 
 local scratch_pos = vector2()
 
-local LAYOUT = {
-    x = 725,
-    top = 75,
-    w = 300,
-    inset = 10,
-    text_h = 18,
-    line_box_h = 20,
-    plate = { y = 10, h = 198, glyph = 96, emblem = 64 },
-    name = { y = 216, box_h = 27, h = 24 },
-    blocks = { top = 252, pitch = 60 },
-    cell = { h = 56, pad = 10, label = { dy = 6, box_h = 17, h = 15 }, value_dy = 26 },
-    faction = { emblem_dy = 29, emblem = 18, emblem_dx = 26 },
-    tiers = { w = 138, pitch = 142 },
-    rule = { gap = 10, h = 2 },
-    stamp = { gap = 10, pitch = 20, lines = 2 },
+LAYOUTS = {
+    [d_promin_config.DEFAULT_THEME] = {
+        x = 725,
+        top = 75,
+        w = 300,
+        inset = 10,
+        header = { y = 6, h = 15, rule_y = 26, rule_h = 1.5 },
+        plate = { bottom = 394, glyph = 96, emblem = 64 },
+        name = { y = 398, box_h = 27, h = 24 },
+        lines_top = 428,
+        cell = { h = 20, text_h = 18 },
+        faction = { emblem_dy = 2, emblem = 16, emblem_dx = 22 },
+        channel_gap = 2,
+        squad = {
+            ruled = true,
+            tile = { y = 30, h = 56, gap = 4, columns = 2, inset = 5 },
+            slots = 4,
+            portrait = { w = 51, h = 36 },
+            health = { x = 61 },
+            track = { h = 6, border_w = 0.6, inset = 1.5 },
+            glyph = { id = "wd_nav_icon_squad", w = 22, h = 16.3 },
+        },
+    },
+    [d_promin_config.LARGE_THEME] = {
+        x = 775,
+        top = 75,
+        w = 300,
+        inset = 10,
+        header = { y = 8, h = 23, rule_y = 32, rule_h = 1.5 },
+        plate = { bottom = 368, glyph = 96, emblem = 64 },
+        name = { y = 372, box_h = 36, h = 33 },
+        lines_top = 410,
+        cell = { h = 26, text_h = 23 },
+        faction = { emblem_dy = 3, emblem = 20, emblem_dx = 26 },
+        channel_gap = 2,
+        squad = {
+            ruled = false,
+            tile = { y = 36, h = 65, gap = 4, columns = 2, inset = 5 },
+            slots = 4,
+            portrait = { w = 62, h = 44 },
+            health = { x = 70 },
+            track = { h = 7, border_w = 0.75, inset = 1.5 },
+            glyph = { id = "wd_large_nav_icon_squad", w = 28, h = 20.7 },
+        },
+    },
 }
-LAYOUT.inner_w = LAYOUT.w - 2 * LAYOUT.inset
+for _, layout in pairs(LAYOUTS) do
+    layout.inner_w = layout.w - 2 * layout.inset
+    local squad = layout.squad
+    local tile = squad.tile
+    tile.w = (layout.inner_w - (tile.columns - 1) * tile.gap) / tile.columns
+    squad.h = tile.y + math.ceil(squad.slots / tile.columns) * (tile.h + tile.gap)
+    layout.card_top = squad.h + layout.inset
+    local plate = layout.plate
+    plate.y = layout.card_top + layout.header.rule_y + layout.header.rule_h
+    plate.h = plate.bottom - plate.y
+end
+LAYOUT = LAYOUTS[d_promin_config.DEFAULT_THEME]
 
 local BORDER_ROLES = { border = "border" }
 local RADIO_GLYPH = wd_comms.RADIO_GLYPH
 local TONE_ROLES = { tracked = "tracked", warn = "warn", crit = "crit" }
 local ALERT_ROLES = { warn = "warn", crit = "crit" }
 local SEPARATOR = " \183 "
-local TIER_PREFIXES = { rank = "st_rank_", reputation = "st_reputation_" }
+local RANK_PREFIX = "st_rank_"
 
 GLYPH_IDS = {}
 SMALL_GLYPH_IDS = {}
@@ -63,101 +104,243 @@ local function place_text(text, left, box_top, box_h, height)
     text.place(px.w(left), px.h(box_top + (box_h - height) / 2))
 end
 
-local function get_tier_text(key, tier)
-    return wd_text.get_upper(game.translate_string(TIER_PREFIXES[key] .. tier))
+local function get_rank_text(rank)
+    return wd_text.get_upper(game.translate_string(RANK_PREFIX .. rank))
 end
 
-local function new_cell(kit, holder, key, width)
-    local spec = LAYOUT.cell
-    local label = spec.label
-    local label_text = wd_text.get_upper(key)
-    local cell = {
-        box = kit.new_box(BORDER_ROLES, holder),
-        label = kit.new_text({ parent = holder, chars = #label_text, height = px.h(label.h) }),
-        value = kit.new_text({ parent = holder, chars = kit.get_max_chars(px.w(width - 2 * spec.pad)) }),
+local function new_line(kit, holder, layout)
+    local spec = layout.cell
+    local text_h = px.h(spec.text_h)
+    local width = layout.inner_w
+    local value = kit.new_text({ parent = holder, chars = kit.get_max_chars(px.w(width), text_h), height = text_h })
+    local line = { value = value }
+
+    function line.show(top, text, value_dx, role)
+        place_text(value, layout.inset + value_dx, top, spec.h, spec.text_h)
+        value.show(kit.fit(text, px.w(width - value_dx), text_h), role)
+    end
+
+    function line.hide()
+        value.set_visible(false)
+    end
+
+    return line
+end
+
+local SQUAD_LABEL = "SQUAD"
+local SENDER_LABEL = "SENDER"
+local HEALTH_TEXT = "%d%%"
+
+local function place_box(box, left, top, width, height)
+    box.place(px.w(left), px.h(top), px.w(width), px.h(height))
+end
+
+local function new_header(kit, holder, layout, top, label, ruled)
+    local spec = layout.header
+    local header = { title = kit.new_text({ parent = holder, chars = #label, height = px.h(spec.h) }) }
+    header.title.place(px.w(layout.inset), px.h(top + spec.y))
+    if ruled then
+        header.rule = kit.new_soft_fill("border", wd_panel.SOFT_FILLS.line_h, holder)
+        wd_panel.place_soft_fill(
+            header.rule,
+            px.w(layout.inset),
+            px.h(top + spec.rule_y),
+            px.w(layout.inner_w),
+            px.h(spec.rule_h)
+        )
+    end
+
+    function header.set_shown(flag)
+        if flag then
+            header.title.show(label, "meta")
+        else
+            header.title.set_visible(false)
+        end
+        if header.rule then
+            set_shown(header.rule, flag)
+        end
+    end
+
+    return header
+end
+
+local function new_squad_slot(kit, holder, spec, left, top)
+    local tile = spec.tile
+    local inset = tile.inset
+    local portrait = spec.portrait
+    local health_x = spec.health.x
+    local track = spec.track
+    local glyph = spec.glyph
+    local slot = {
+        box = kit.new_box(nil, holder),
+        portrait = kit.new_image(wd_screen.FILL_ID, "art", holder, map_binder),
+        frame = kit.new_box(BORDER_ROLES, holder),
+        glyph = kit.new_image(glyph.id, "dim", holder),
+        health = kit.new_text({
+            parent = holder,
+            chars = #string.format(HEALTH_TEXT, 100),
+            width = px.w(tile.w - health_x - inset),
+            align = "right",
+        }),
+        track = kit.new_box({ fill = "track_fill", border = "track_border", border_w = px.h(track.border_w) }, holder),
+        bar = kit.new_bar({ level = "text", inset = px.h(track.inset), parent = holder }),
     }
-
-    function cell.show(left, top, value, value_dx)
-        cell.box.place(px.w(left), px.h(top), px.w(width), px.h(spec.h))
-        cell.box.set_visible(true)
-        place_text(cell.label, left + spec.pad, top + label.dy, label.box_h, label.h)
-        cell.label.show(label_text, "meta")
-        place_text(cell.value, left + value_dx, top + spec.value_dy, LAYOUT.line_box_h, LAYOUT.text_h)
-        cell.value.show(kit.fit(value, px.w(width - value_dx - spec.pad)), "text")
-    end
-
-    function cell.hide()
-        cell.box.set_visible(false)
-        cell.label.set_visible(false)
-        cell.value.set_visible(false)
-    end
-
-    return cell
+    place_box(slot.box, left, top, tile.w, tile.h)
+    local portrait_box = { px.w(left + inset), px.h(top + inset), px.w(portrait.w), px.h(portrait.h) }
+    place_widget(slot.portrait.widget, portrait_box[1], portrait_box[2], portrait_box[3], portrait_box[4])
+    slot.frame.place(portrait_box[1], portrait_box[2], portrait_box[3], portrait_box[4])
+    place_widget(
+        slot.glyph.widget,
+        px.w(left + (tile.w - glyph.w) / 2),
+        px.h(top + (tile.h - glyph.h) / 2),
+        px.w(glyph.w),
+        px.h(glyph.h)
+    )
+    slot.health.place(px.w(left + health_x), portrait_box[2] + (portrait_box[4] - kit.style.text_h) / 2)
+    local track_y = top + tile.h - inset - track.h
+    local track_w = tile.w - 2 * inset
+    place_box(slot.track, left + inset, track_y, track_w, track.h)
+    slot.bar.place(px.w(left + inset), px.h(track_y), px.w(track_w), px.h(track.h))
+    return slot
 end
 
-function new(kit)
+local function new_squad(kit, holder, layout)
+    local spec = layout.squad
+    local tile = spec.tile
+    local squad = {
+        frame = kit.new_box(nil, holder),
+        header = new_header(kit, holder, layout, 0, SQUAD_LABEL, spec.ruled),
+        count = kit.new_text({
+            parent = holder,
+            chars = 2,
+            width = px.w(layout.inner_w),
+            align = "right",
+            height = px.h(layout.header.h),
+        }),
+        slots = {},
+    }
+    place_box(squad.frame, 0, 0, layout.w, spec.h)
+    squad.count.place(px.w(layout.inset), px.h(layout.header.y))
+    for index = 1, spec.slots do
+        local column = (index - 1) % tile.columns
+        local row = math.floor((index - 1) / tile.columns)
+        local left = layout.inset + column * (tile.w + tile.gap)
+        local top = tile.y + row * (tile.h + tile.gap)
+        squad.slots[index] = new_squad_slot(kit, holder, spec, left, top)
+    end
+    return squad
+end
+
+local function hide_squad_slot(slot)
+    slot.box.set_visible(false)
+    set_shown(slot.portrait, false)
+    slot.frame.set_visible(false)
+    set_shown(slot.glyph, false)
+    slot.health.set_visible(false)
+    slot.track.set_visible(false)
+    slot.bar.set_visible(false)
+end
+
+local function show_squad_slot(kit, slot, companion)
+    slot.box.set_visible(true)
+    local icon = companion and companion.icon
+    if icon then
+        kit.set_image(slot.portrait, icon)
+    end
+    set_shown(slot.portrait, icon ~= nil)
+    slot.frame.set_visible(icon ~= nil)
+    set_shown(slot.glyph, icon == nil)
+    kit.set_role(slot.glyph, companion and "text" or "dim")
+    slot.track.set_visible(companion ~= nil)
+    slot.bar.set_visible(companion ~= nil)
+    if not companion then
+        slot.health.set_visible(false)
+        return
+    end
+    local health = companion.health
+    local role = d_promin_config.get_state_role(health)
+    slot.health.show(string.format(HEALTH_TEXT, d_promin_health_ui.get_percent(health)), role)
+    slot.bar.set_ratio(health)
+    kit.set_role(slot.bar.level, role)
+end
+
+local function hide_squad(squad)
+    squad.frame.set_visible(false)
+    squad.header.set_shown(false)
+    squad.count.set_visible(false)
+    for _, slot in ipairs(squad.slots) do
+        hide_squad_slot(slot)
+    end
+end
+
+local function show_squad(kit, squad, companions)
+    squad.frame.set_visible(true)
+    squad.header.set_shown(true)
+    squad.count.show(tostring(#companions), "meta")
+    for index, slot in ipairs(squad.slots) do
+        show_squad_slot(kit, slot, companions[index])
+    end
+end
+
+function new(kit, layout)
     local font = kit.font
     local holder = kit.new_holder()
-    holder:SetWndPos(scratch_pos:set(px.x(LAYOUT.x), px.y(LAYOUT.top)))
-    local sidebar_w = px.w(LAYOUT.w)
-    local inset_x = px.w(LAYOUT.inset)
-    local inner_w = px.w(LAYOUT.inner_w)
-    local plate_h = px.h(LAYOUT.plate.h)
-    local name_h = px.h(LAYOUT.name.h)
-    local line_chars = kit.get_max_chars(inner_w)
+    holder:SetWndPos(scratch_pos:set(px.x(layout.x), px.y(layout.top)))
+    local sidebar_w = px.w(layout.w)
+    local inset_x = px.w(layout.inset)
+    local inner_w = px.w(layout.inner_w)
+    local plate_h = px.h(layout.plate.h)
+    local name_h = px.h(layout.name.h)
+    local pitch = layout.cell.h
     local sidebar = { visible = false }
 
     sidebar.card = kit.new_box(BORDER_ROLES, holder)
     sidebar.plate = kit.new_box(nil, holder)
-    sidebar.plate.place(inset_x, px.h(LAYOUT.plate.y), inner_w, plate_h)
+    sidebar.plate.place(inset_x, px.h(layout.plate.y), inner_w, plate_h)
     sidebar.portrait = kit.new_image(wd_screen.FILL_ID, "art", holder, map_binder)
-    place_widget(sidebar.portrait.widget, inset_x, px.h(LAYOUT.plate.y), inner_w, plate_h)
+    place_widget(sidebar.portrait.widget, inset_x, px.h(layout.plate.y), inner_w, plate_h)
     sidebar.glyph = kit.new_image(GLYPH_IDS[RADIO_GLYPH], "text", holder)
     sidebar.name =
         kit.new_text({ parent = holder, chars = wd_text.get_max_chars(font, name_h, inner_w), height = name_h })
-    place_text(sidebar.name, LAYOUT.inset, LAYOUT.name.y, LAYOUT.name.box_h, LAYOUT.name.h)
-    sidebar.faction = new_cell(kit, holder, "faction", LAYOUT.inner_w)
+    place_text(sidebar.name, layout.inset, layout.name.y, layout.name.box_h, layout.name.h)
+    sidebar.faction = new_line(kit, holder, layout)
     sidebar.emblem = kit.new_image(wd_screen.FILL_ID, "text", holder)
-    sidebar.rank = new_cell(kit, holder, "rank", LAYOUT.tiers.w)
-    sidebar.reputation = new_cell(kit, holder, "reputation", LAYOUT.tiers.w)
-    sidebar.rule = kit.new_soft_fill("border", wd_panel.SOFT_FILLS.line_h, holder)
-    sidebar.channel = kit.new_text({ parent = holder, chars = line_chars })
-    sidebar.stamp = kit.new_text({ parent = holder, chars = line_chars })
+    sidebar.rank = new_line(kit, holder, layout)
+    sidebar.channel = new_line(kit, holder, layout)
+    sidebar.squad = new_squad(kit, holder, layout)
+    sidebar.card_header = new_header(kit, holder, layout, layout.card_top, SENDER_LABEL, true)
 
     local shown_entry = nil
 
-    local function place_footer(rule_y)
-        local stamp = LAYOUT.stamp
-        local stamp_y = rule_y + stamp.gap
-        wd_panel.place_soft_fill(sidebar.rule, inset_x, px.h(rule_y), inner_w, px.h(LAYOUT.rule.h))
-        place_text(sidebar.channel, LAYOUT.inset, stamp_y, LAYOUT.line_box_h, LAYOUT.text_h)
-        place_text(sidebar.stamp, LAYOUT.inset, stamp_y + stamp.pitch, LAYOUT.line_box_h, LAYOUT.text_h)
-        sidebar.card.place(0, 0, sidebar_w, px.h(stamp_y + stamp.lines * stamp.pitch + LAYOUT.inset))
+    local function show_footer(footer_y, channel)
+        local channel_y = footer_y + layout.channel_gap
+        sidebar.channel.show(channel_y, channel, 0, "meta")
+        local card_top = layout.card_top
+        local card_bottom = channel_y + pitch + layout.inset
+        sidebar.card.place(0, px.h(card_top), sidebar_w, px.h(card_bottom - card_top))
     end
 
     local function hide_details()
         set_shown(sidebar.portrait, false)
         set_shown(sidebar.glyph, false)
+        sidebar.card_header.set_shown(false)
         sidebar.card.set_visible(false)
         sidebar.name.set_visible(false)
         set_shown(sidebar.emblem, false)
         sidebar.faction.hide()
         sidebar.rank.hide()
-        sidebar.reputation.hide()
-        set_shown(sidebar.rule, false)
-        sidebar.channel.set_visible(false)
-        sidebar.stamp.set_visible(false)
+        sidebar.channel.hide()
     end
 
     local function show_glyph(entry)
         local id, is_emblem = get_sender_icon(entry, GLYPH_IDS)
-        local size = is_emblem and LAYOUT.plate.emblem or LAYOUT.plate.glyph
+        local size = is_emblem and layout.plate.emblem or layout.plate.glyph
         kit.set_image(sidebar.glyph, id)
         kit.set_role(sidebar.glyph, get_alert_role(entry) or "text")
         place_widget(
             sidebar.glyph.widget,
-            px.w(LAYOUT.inset + (LAYOUT.inner_w - size) / 2),
-            px.h(LAYOUT.plate.y + (LAYOUT.plate.h - size) / 2),
+            px.w(layout.inset + (layout.inner_w - size) / 2),
+            px.h(layout.plate.y + (layout.plate.h - size) / 2),
             px.w(size),
             px.h(size)
         )
@@ -167,34 +350,34 @@ function new(kit)
     local function show_faction(entry, top)
         local faction = entry.faction
         local community = faction and entry.community
+        local spec = layout.faction
         if community then
-            local spec = LAYOUT.faction
             kit.set_image(sidebar.emblem, get_emblem_id(community))
-            local left = px.w(LAYOUT.inset + LAYOUT.cell.pad)
-            place_widget(sidebar.emblem.widget, left, px.h(top + spec.emblem_dy), px.w(spec.emblem), px.h(spec.emblem))
+            place_widget(
+                sidebar.emblem.widget,
+                inset_x,
+                px.h(top + spec.emblem_dy),
+                px.w(spec.emblem),
+                px.h(spec.emblem)
+            )
         end
         set_shown(sidebar.emblem, community ~= nil)
         if not faction then
             sidebar.faction.hide()
             return top
         end
-        local value_dx = LAYOUT.cell.pad + (community and LAYOUT.faction.emblem_dx or 0)
-        sidebar.faction.show(LAYOUT.inset, top, wd_text.get_upper(faction), value_dx)
-        return top + LAYOUT.blocks.pitch
+        sidebar.faction.show(top, wd_text.get_upper(faction), community and spec.emblem_dx or 0, "text")
+        return top + pitch
     end
 
-    local function show_tiers(entry, top)
+    local function show_rank(entry, top)
         local rank = entry.rank
-        local reputation = entry.reputation
-        if rank == nil or reputation == nil then
+        if rank == nil then
             sidebar.rank.hide()
-            sidebar.reputation.hide()
             return top
         end
-        local pad = LAYOUT.cell.pad
-        sidebar.rank.show(LAYOUT.inset, top, get_tier_text("rank", rank), pad)
-        sidebar.reputation.show(LAYOUT.inset + LAYOUT.tiers.pitch, top, get_tier_text("reputation", reputation), pad)
-        return top + LAYOUT.blocks.pitch
+        sidebar.rank.show(top, get_rank_text(rank), 0, "text")
+        return top + pitch
     end
 
     local function apply_plate()
@@ -214,13 +397,20 @@ function new(kit)
         end
         set_shown(sidebar.portrait, person)
         sidebar.card.set_visible(true)
+        sidebar.card_header.set_shown(true)
         sidebar.name.show(wd_text.ellipsize(font, get_upper(entry.name), name_h, inner_w), get_tone_role(entry))
-        local blocks_bottom = show_tiers(entry, show_faction(entry, LAYOUT.blocks.top))
-        place_footer(blocks_bottom + LAYOUT.rule.gap)
-        set_shown(sidebar.rule, true)
         local channel = get_upper(entry.channel) .. SEPARATOR .. get_upper(entry.level)
-        sidebar.channel.show(kit.fit(channel, inner_w), "meta")
-        sidebar.stamp.show(kit.fit(d_promin_comms_feed.format_stamp(entry), inner_w), "meta")
+        show_footer(show_rank(entry, show_faction(entry, layout.lines_top)), channel)
+    end
+
+    local function apply_squad()
+        local squad = sidebar.squad
+        local companions = sidebar.visible and sidebar.companions
+        if companions then
+            show_squad(kit, squad, companions)
+        else
+            hide_squad(squad)
+        end
     end
 
     function sidebar.show(entry)
@@ -233,8 +423,16 @@ function new(kit)
         end
     end
 
+    function sidebar.show_squad(companions)
+        sidebar.companions = companions
+        if sidebar.visible then
+            apply_squad()
+        end
+    end
+
     function sidebar.set_visible(flag)
         sidebar.visible = flag
+        apply_squad()
         if flag then
             apply_plate()
             return

@@ -178,16 +178,16 @@ function new(cfg)
         end
     end
 
-    function kit.measure(text)
-        return wd_text.measure(font, text, style.text_h)
+    function kit.measure(text, text_h)
+        return wd_text.measure(font, text, text_h or style.text_h)
     end
 
-    function kit.fit(text, max_width)
-        return wd_text.ellipsize(font, text, style.text_h, max_width)
+    function kit.fit(text, max_width, text_h)
+        return wd_text.ellipsize(font, text, text_h or style.text_h, max_width)
     end
 
-    function kit.get_max_chars(width)
-        return wd_text.get_max_chars(font, style.text_h, width)
+    function kit.get_max_chars(width, text_h)
+        return wd_text.get_max_chars(font, text_h or style.text_h, width)
     end
 
     function kit.new_box(roles, parent)
@@ -228,7 +228,8 @@ function new(cfg)
     end
 
     function kit.new_cell(opts)
-        local cell = { text_width = 0, shown = false, role = "text" }
+        local text_h = opts.text_h or style.text_h
+        local cell = { text_width = 0, shown = false, role = "text", text_h = text_h }
         local parent = opts.parent
         if opts.box ~= false then
             cell.box = kit.new_box(opts.roles, parent)
@@ -240,7 +241,7 @@ function new(cfg)
         end
         local function read_label_width()
             local aspect = wd_screen.get_texture_aspect(cell.label.widget)
-            cell.label_w = aspect and style.text_h * aspect
+            cell.label_w = aspect and text_h * aspect
         end
 
         if opts.label then
@@ -256,7 +257,7 @@ function new(cfg)
                 max_chars = opts.chars,
                 x = 0,
                 y = 0,
-                height = style.text_h,
+                height = text_h,
                 tint = tints.text,
             })
             cell.line.set_visible(false)
@@ -275,11 +276,11 @@ function new(cfg)
                 content_x = content_x + icon.w + style.gap
             end
             if cell.holder then
-                cell.holder:SetWndPos(scratch_pos:set(content_x, box_y + (box_h - style.text_h) / 2))
+                cell.holder:SetWndPos(scratch_pos:set(content_x, box_y + (box_h - text_h) / 2))
             end
             if cell.label then
                 local label_w = cell.label_w or box_x + box_w - style.pad - content_x
-                place_widget(cell.label.widget, content_x, box_y + (box_h - style.text_h) / 2, label_w, style.text_h)
+                place_widget(cell.label.widget, content_x, box_y + (box_h - text_h) / 2, label_w, text_h)
             end
         end
 
@@ -301,7 +302,7 @@ function new(cfg)
             end
             cell.text = text
             cell.line.set_text(text)
-            cell.text_width = kit.measure(text)
+            cell.text_width = kit.measure(text, text_h)
             if box_x and opts.align then
                 place_content()
             end
