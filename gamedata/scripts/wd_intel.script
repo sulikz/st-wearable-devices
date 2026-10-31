@@ -26,7 +26,7 @@ local function add_guide_titles(titles)
     end
     local request = tasks_guide.guid
     local squad = request and request.squad_id and alife_object(request.squad_id)
-    if squad then
+    if squad and squad:clsid() == clsid.online_offline_group_s then
         add_guide_title(titles, squad:commander_id(), request)
     end
     local job = tasks_guide.curr_guid
