@@ -3,6 +3,7 @@ local HAND_SECTION = "wd_promin_hand"
 local ATT_NAME = "wd_promin"
 local ATT_MODULE_NAME = "wd_promin_module"
 local MODULES_KEY = "wd_promin_modules"
+local NO_PARENT_ID = 65535
 local UI_BONE = "screen_bone"
 local EXO_BONE = "l_forearm"
 local EXO_UI_BONE = "wpn_body"
@@ -214,10 +215,25 @@ local function is_tier_carried(tier)
     return db.actor:object(tier.section) ~= nil
 end
 
-local function eject_inactive_modules()
+local function get_eject_target(promin_id)
+    local sim = alife()
+    local se_promin = promin_id and sim:object(promin_id)
+    if not (se_promin and d_promin_config.get_tier_of(se_promin:section_name())) then
+        return db.actor
+    end
+    local se_parent = se_promin.parent_id ~= NO_PARENT_ID and sim:object(se_promin.parent_id)
+    if se_parent and IsInvbox(nil, se_parent:clsid()) then
+        return se_parent
+    end
+    return db.actor
+end
+
+local function eject_inactive_modules(promin_id)
+    local target = nil
     for index = #modules_installed, 1, -1 do
         if not is_bay_active(d_promin_config.get_module(modules_installed[index]).bay) then
-            remove_module_at(index)
+            target = target or get_eject_target(promin_id)
+            remove_module_at(index, target)
         end
     end
 end
@@ -243,11 +259,11 @@ owner = wd_worn.new({
         sync_module_attachment()
         return obj:section()
     end,
-    on_detach = function(replacing)
+    on_detach = function(replacing, detached_id)
         wd_attach.detach(ATT_NAME)
         detach_module_bays()
         if not replacing then
-            eject_inactive_modules()
+            eject_inactive_modules(detached_id)
         end
         d_promin_config.reset_active_tier()
     end,
@@ -680,7 +696,7 @@ function get_remove_module_menu_text(_obj)
     return "st_promin_module_remove"
 end
 
-function remove_module_at(index)
+function remove_module_at(index, target)
     local name = modules_installed[index]
     if not name then
         return
@@ -688,7 +704,7 @@ function remove_module_at(index)
     local module = d_promin_config.get_module(name)
     table.remove(modules_installed, index)
     if db.actor and module then
-        alife_create_item(module.section, db.actor)
+        alife_create_item(module.section, target or db.actor)
     end
     sync_module_attachment()
     ensure_valid_page()

@@ -202,7 +202,7 @@ function remount_loadout()
         if mounted == nil then
             local spec = find_device_by_section(entry.section)
             local obj = entry.id and db.actor:object_id(entry.id)
-            if spec and obj then
+            if spec and obj and obj:section() == entry.section then
                 spec.attach(obj)
                 record_loadout(spec)
             end

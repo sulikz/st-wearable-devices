@@ -18,6 +18,8 @@ local KEEP_VISIBLE_LABEL = "Keep watch always visible"
 local TWIST_BONE = "l_forearm_twist"
 local PROXY_NAME = "wd_wrist_roll_proxy"
 local IDLE_ANM = "anm_idle"
+local LAUNCHER_IDLE_ANM = "anm_idle_w_gl"
+local GRENADE_IDLE_ANM = "anm_idle_g"
 local FALLBACK_MOTION = "hand_idle_doun"
 local SOLVE_ITERATIONS = 4
 local REFRESH_INTERVAL_MS = 200
@@ -175,19 +177,22 @@ function get_base_offset(hud_section, suffix)
     return offset
 end
 
-local function resolve_idle_motion(hud_section, visual)
-    local base = wd_inspect.get_motion_name(hud_section, IDLE_ANM)
-    if not base then
-        return FALLBACK_MOTION
+local function find_idle_motion(hud_section, visual, anm)
+    local base = wd_inspect.get_motion_name(hud_section, anm)
+    if base and game.motion_exists then
+        return wd_inspect.find_hands_motion(visual, base)
     end
-    if not game.motion_exists then
-        return base
-    end
-    return wd_inspect.find_hands_motion(visual, base) or FALLBACK_MOTION
+    return base
+end
+
+local function resolve_idle_motion(hud_section, visual, idle_anm)
+    return find_idle_motion(hud_section, visual, idle_anm)
+        or idle_anm ~= IDLE_ANM and find_idle_motion(hud_section, visual, IDLE_ANM)
+        or FALLBACK_MOTION
 end
 
 local function predict_twist(source_key)
-    local motion = resolve_idle_motion(source_key.hud_section, source_key.visual)
+    local motion = resolve_idle_motion(source_key.hud_section, source_key.visual, source_key.idle_anm)
     local proxy = db.actor:add_attachment(PROXY_NAME, source_key.visual)
     if not proxy then
         return nil
@@ -208,18 +213,27 @@ local function get_cached_twist(source_key)
     return cached or nil
 end
 
+local function get_idle_anm(source)
+    if not (source:is_weapon() and source:weapon_is_grenadelauncher()) then
+        return IDLE_ANM
+    end
+    return source:weapon_in_grenade_mode() and GRENADE_IDLE_ANM or LAUNCHER_IDLE_ANM
+end
+
 local function resolve_source_key(source)
     local visual = get_hands_visual()
     local hud_section = visual and ini_sys:r_string_ex(source:section(), "hud")
     if not hud_section then
         return nil
     end
+    local idle_anm = get_idle_anm(source)
     local suffix = utils_xml.is_widescreen() and WIDE_SUFFIX or ""
     return {
-        key = hud_section .. "|" .. visual .. "|" .. suffix,
+        key = hud_section .. "|" .. visual .. "|" .. suffix .. "|" .. idle_anm,
         hud_section = hud_section,
         visual = visual,
         suffix = suffix,
+        idle_anm = idle_anm,
     }
 end
 

@@ -170,7 +170,16 @@ do
     end
 end
 
+local NUMBER_BY_DIK = {}
+for number = 1, 6 do
+    local dik = DIK_keys["DIK_" .. number]
+    if dik then
+        NUMBER_BY_DIK[dik] = number
+    end
+end
+
 local DETECTOR_SLOT = 9
+local PDA_SLOT = 8
 
 local WPN_STATE_IDLE = 0
 local WPN_STATE_HIDDEN = 3
@@ -276,6 +285,7 @@ local recover_slot = nil
 local recover_deadline = 0
 local melee_deadline = 0
 local yield_until = 0
+local pda_replay_key = nil
 local stow_deadline = 0
 local owes_detector_show = false
 local detector_restore_at = 0
@@ -509,7 +519,7 @@ local function is_hud_motion_ok(keep_current)
     return true
 end
 
-local function play_hand(anm, mix, part, keep_current, speed_override)
+local function play_hand(anm, mix, part, keep_current, speed_override, tag_anm)
     if not is_hud_motion_ok(keep_current) then
         return nil
     end
@@ -517,7 +527,7 @@ local function play_hand(anm, mix, part, keep_current, speed_override)
     if not is_anm_available(sec, anm) then
         return nil
     end
-    local info = CLIP_INFO_BY_ANM[anm] or {}
+    local info = CLIP_INFO_BY_ANM[tag_anm or anm] or {}
     local speed = speed_override
     if not speed then
         speed = info.speed or ANM_SPEED
@@ -903,6 +913,7 @@ local function reset_raise_state()
     queued_anm = nil
     pending_show_until = 0
     retry_at = 0
+    pda_replay_key = nil
     drain_swap_queue()
 end
 
@@ -1364,20 +1375,23 @@ local function get_lower_intent(now, pressed, held)
     return wants_lower or is_low_crouch() or is_gui_pose_free()
 end
 
-local function begin_holster(now, for_swap)
+local function begin_holster(now, for_swap, for_good)
     if state ~= ST_HELD then
         return false
     end
-    local holster_anm
+    local holster_anm, tag_anm
+    local swap_anm = get_swap_anm(ANM_HOLSTER, raise_variant)
     if for_swap then
-        local swap_anm = get_swap_anm(ANM_HOLSTER, raise_variant)
         holster_anm = resolve_defined_anm(active.get_hand_section(), swap_anm)
+    elseif (for_good or wd_hands_empty.is_drawn()) and not get_detector_family() then
+        holster_anm = resolve_defined_anm(active.get_hand_section(), swap_anm)
+        tag_anm = holster_anm and ANM_HOLSTER .. raise_variant
     end
     holster_anm = holster_anm or get_holster_anm()
     if not holster_anm then
         return false
     end
-    local len = play_hand(holster_anm, true, 1, true)
+    local len = play_hand(holster_anm, true, 1, true, nil, tag_anm)
     if not len or len <= 0 then
         return false
     end
@@ -1413,6 +1427,16 @@ local function begin_swap_hold(now)
     return true
 end
 
+local function replay_pda_key(key)
+    if active.teardown_response == "soft" then
+        yield_until = time_global() + MS.YIELD_HOLD
+    else
+        require_release = true
+    end
+    level.press_action(key)
+    level.release_action(key)
+end
+
 local function handle_lowering(now, ui_open)
     if now >= release_deadline then
         release_offset_layers()
@@ -1422,9 +1446,13 @@ local function handle_lowering(now, ui_open)
     end
     defer_detector_restore(math.min(motion_end, now + MS.FALLBACK_ANM))
     local pending = swap_queue
+    local replay_key = pda_replay_key
     swap_queue = {}
     hard_teardown(false)
-    local resume = #pending > 0 and is_editor_gui_holding() and refresh_active() ~= nil
+    if replay_key then
+        replay_pda_key(replay_key)
+    end
+    local resume = not replay_key and #pending > 0 and is_editor_gui_holding() and refresh_active() ~= nil
     swap_queue = pending
     if resume then
         swap_redraw = true
@@ -1760,12 +1788,33 @@ local function take_attack_key(now, flags)
     end
 end
 
-function on_before_key_press(_, bind, dis, flags)
+local function take_pda_key(now, key)
+    if state ~= ST_HELD and state ~= ST_LOWERING then
+        return false
+    end
+    if get_console_cmd(1, "g_3d_pda") ~= true or wd_blocking.is_hands_locked() then
+        return false
+    end
+    if not db.actor:item_in_slot(PDA_SLOT) then
+        return false
+    end
+    if state == ST_HELD and not begin_holster(now, false, true) then
+        return false
+    end
+    pda_replay_key = key
+    return true
+end
+
+function on_before_key_press(key, bind, dis, flags)
     if dis or not (db.actor and db.actor:alive()) then
         return
     end
     local now = time_global()
-    if bind == key_bindings.kDETECTOR then
+    if bind == key_bindings.kACTIVE_JOBS then
+        if flags.ret_value and take_pda_key(now, key) then
+            flags.ret_value = false
+        end
+    elseif bind == key_bindings.kDETECTOR then
         if take_detector_toggle(now) then
             flags.ret_value = false
         end
@@ -1817,9 +1866,12 @@ function register_number_key(handler)
     number_key_handlers[#number_key_handlers + 1] = handler
 end
 
-local function on_before_number_key_press(_, bind, dis, flags)
-    local number = SLOT_BY_BIND[bind]
-    if not number or dis or not db.actor:alive() then
+local function on_before_number_key_press(key, _, dis, flags)
+    local number = NUMBER_BY_DIK[key]
+    if not number or dis or not flags.ret_value then
+        return
+    end
+    if key == wd_mcm.get_hold_key_dik() or key == wd_mcm.get_gui_key_dik() or not db.actor:alive() then
         return
     end
     local holding = press_pending or (state == ST_IDLE and watch_hold)
