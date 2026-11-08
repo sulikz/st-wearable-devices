@@ -13,7 +13,7 @@ DROPS = {
             return d_promin.is_module_installed("map")
         end,
     },
-    { section = "wd_promin_upgrade_kit", common = 0.075, rare = 0.175 },
+    { section = "wd_promin_upgrade_kit", common = 0.075, rare = 0.25 },
     {
         sections = { "wd_504th_patch", "wd_8bitcat_patch", "wd_happysteam_patch", "wd_zero_patch" },
         common = 0.08,

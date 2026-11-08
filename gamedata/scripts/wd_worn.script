@@ -58,9 +58,10 @@ function new(cfg)
         if not self.is_attached() then
             return
         end
+        local detached_id = attached_id
         attached = nil
         attached_id = nil
-        cfg.on_detach(replacing)
+        cfg.on_detach(replacing, detached_id)
     end
 
     function self.toggle(obj)
@@ -109,9 +110,7 @@ function new(cfg)
         if self.get_object() ~= nil then
             return false
         end
-        attached = nil
-        attached_id = nil
-        cfg.on_detach()
+        self.detach(false)
         return true
     end
 

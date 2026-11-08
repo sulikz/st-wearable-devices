@@ -154,6 +154,7 @@ local function get_translations()
         for index = 1, FACTION_VARIANTS do
             community_by_faction[get_translated("st_dyn_news_comm_" .. community .. "_" .. index)] = community
         end
+        community_by_faction[get_translated(community)] = community
     end
     local storm_captions = {}
     for _, id in ipairs(STORM_CAPTIONS) do
@@ -440,6 +441,7 @@ end
 
 local function is_caption_faction(npc, faction)
     return faction == dynamic_news_helper.GetCommunityDescription(npc, SPEAKER_DESCRIPTION)
+        or faction == game.translate_string(npc:character_community())
         or faction == game.translate_string(COMPANION_TEXT)
 end
 
