@@ -1,6 +1,7 @@
 # Wearable Devices
 
-Wearable Devices mod for STALKER GAMMA.
+Wearable Devices mod for STALKER Anomaly.
+Compatible with modpacks: GAMMA, ROMEO, ZONA.
 
 [HANDBOOK](https://www.figma.com/deck/4DU6ARNuRGBRN4s1Zjt77S)
 

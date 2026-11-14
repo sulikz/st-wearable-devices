@@ -1,32 +1,54 @@
 local BINOC_CLASS = "WP_BINOC"
 
 local hidden = false
+local zoomed = false
 
-local function is_texture_zoom_weapon(weapon)
-    if not weapon then
+local function is_binoc(item)
+    return ini_sys:r_string_ex(item:section(), "class") == BINOC_CLASS
+end
+
+local function is_texture_zoom_active(item)
+    if not item then
         return false
     end
-    return ini_sys:r_string_ex(weapon:section(), "class") == BINOC_CLASS
+    local weapon = item:cast_Weapon()
+    if weapon and weapon.IsTextureZoomActive then
+        return weapon:IsTextureZoomActive()
+    end
+    return is_binoc(item)
 end
 
-function on_binoc_zoom_in()
-    if hidden then
+local function set_hidden(hide)
+    if hide == hidden then
         return
     end
-    if is_texture_zoom_weapon(db.actor and db.actor:active_item()) then
-        hidden = true
+    hidden = hide
+    if hide then
         wd_attach.hide_screens()
-    end
-end
-
-function on_binoc_zoom_out()
-    if hidden then
-        hidden = false
+    else
         wd_attach.show_screens()
     end
 end
 
+function update()
+    if not zoomed then
+        return
+    end
+    set_hidden(is_texture_zoom_active(db.actor:active_item()))
+end
+
+function on_zoom_in()
+    zoomed = true
+    update()
+end
+
+function on_zoom_out()
+    zoomed = false
+    set_hidden(false)
+end
+
 function on_first_update()
+    zoomed = false
     hidden = false
     wd_attach.show_screens()
 end
@@ -36,8 +58,9 @@ function register()
         id = "wd_zoom",
         callbacks = {
             actor_on_first_update = { on_first_update },
-            actor_on_weapon_zoom_in = { on_binoc_zoom_in },
-            actor_on_weapon_zoom_out = { on_binoc_zoom_out },
+            actor_on_update = { update },
+            actor_on_weapon_zoom_in = { on_zoom_in },
+            actor_on_weapon_zoom_out = { on_zoom_out },
         },
     })
 end

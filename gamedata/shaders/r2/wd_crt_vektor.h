@@ -1,0 +1,6 @@
+#define PANEL_ORIGIN	float2(0.002, 0.0015)
+#define PANEL_SIZE		float2(0.04, 0.04)
+#define SCAN_STRENGTH	0.25
+#define MASK_STRENGTH	0.25
+#define EDGE_FADE		0.25
+#define BRIGHT_CAP		1.31

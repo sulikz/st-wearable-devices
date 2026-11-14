@@ -1,3 +1,8 @@
+local RESTOCK_DELAY = 0.1
+local GENERIC_TRADE = "items\\trade\\trade_generic.ltx"
+local NON_SUPPLIER_TRADE =
+    { "companion", "trade_generic_mechanic", "trade_generic_barman", "trade_generic_medic", "trade_ecolog_spirit" }
+
 local sections = {}
 
 function register(section, count, min_supply)
@@ -7,11 +12,41 @@ function register(section, count, min_supply)
     sections[section] = sections[section] or { count = count or 1, min_supply = min_supply }
 end
 
-function get_supply_level(npc)
-    if not (npc and trader_autoinject and trader_autoinject.supply_level) then
+local function get_supply_level(npc, cfg)
+    local config = trade_manager.get_trade_cfg(cfg)
+    local supplies = config and config:r_string_ex("trader", "buy_supplies")
+    if not supplies then
         return 0
     end
-    return trader_autoinject.supply_level(npc, true) or 0
+    local condlist = xr_logic.parse_condlist(npc, "trader", "buy_supplies", supplies)
+    local picked = xr_logic.pick_section_from_condlist(db.actor, npc, condlist)
+    return picked and tonumber(picked:match("_(%d+)$")) or 0
+end
+
+local function get_stock(npc, cfg)
+    local stock = {}
+    local supply
+    for section, entry in pairs(sections) do
+        if entry.min_supply then
+            supply = supply or get_supply_level(npc, cfg)
+        end
+        if not entry.min_supply or supply >= entry.min_supply then
+            stock[section] = entry.count
+        end
+    end
+    return stock
+end
+
+local function is_supplier_profile(cfg)
+    if not cfg or cfg == GENERIC_TRADE then
+        return false
+    end
+    for _, pattern in ipairs(NON_SUPPLIER_TRADE) do
+        if cfg:find(pattern, 1, true) then
+            return false
+        end
+    end
+    return true
 end
 
 local function inject(npc)
@@ -21,27 +56,67 @@ local function inject(npc)
     if trader_autoinject.get_trader_type(npc) ~= trader_autoinject.SUPPLIER then
         return
     end
+    local cfg = trade_manager.get_trade_profile(npc:id(), "cfg_ltx")
+    if not is_supplier_profile(cfg) then
+        return
+    end
+    local stock = get_stock(npc, cfg)
+    if next(stock) then
+        trader_autoinject.spawn_items(npc, stock, true)
+    end
+end
 
-    local supply
-    for section, entry in pairs(sections) do
-        local allowed = true
-        if entry.min_supply then
-            supply = supply or get_supply_level(npc)
-            allowed = supply >= entry.min_supply
+local function spawn_missing(npc, stock)
+    npc:iterate_inventory(function(_, item)
+        local section = item:section()
+        local missing = stock[section]
+        if missing and missing > 0 then
+            stock[section] = missing - 1
         end
-        if allowed then
-            trader_autoinject.spawn_items(npc, { [section] = entry.count }, true)
+    end, npc)
+    for section, missing in pairs(stock) do
+        for _ = 1, missing do
+            alife_create_item(section, npc)
         end
     end
 end
 
-if trader_autoinject and not _G.wd_trader_wrapped then
-    local prev_update = trader_autoinject.update
-    function trader_autoinject.update(npc)
-        if prev_update then
-            prev_update(npc)
+local function inject_vanilla(npc_id)
+    local npc = level.object_by_id(npc_id)
+    if not (npc and npc:alive()) then
+        return true
+    end
+    local cfg = trade_manager.get_trade_profile(npc_id, "cfg_ltx")
+    if is_supplier_profile(cfg) then
+        spawn_missing(npc, get_stock(npc, cfg))
+    end
+    return true
+end
+
+local function hook_vanilla_restock()
+    local prev_update = trade_manager.update
+    function trade_manager.update(npc, force_refresh)
+        local id = npc and npc:id()
+        local before = id and trade_manager.get_trade_profile(id, "resupply_time")
+        prev_update(npc, force_refresh)
+        local after = id and trade_manager.get_trade_profile(id, "resupply_time")
+        if after and after ~= before then
+            CreateTimeEvent("wd_trader", "restock_" .. id, RESTOCK_DELAY, inject_vanilla, id)
         end
-        inject(npc)
+    end
+end
+
+if not _G.wd_trader_wrapped then
+    if trader_autoinject then
+        local prev_update = trader_autoinject.update
+        function trader_autoinject.update(npc)
+            if prev_update then
+                prev_update(npc)
+            end
+            inject(npc)
+        end
+    else
+        hook_vanilla_restock()
     end
     _G.wd_trader_wrapped = true
 end

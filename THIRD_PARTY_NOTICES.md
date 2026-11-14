@@ -24,3 +24,5 @@
 ## SIL Open Font License 1.1.
 
 **JetBrains Mono** - Copyright 2020 The JetBrains Mono (https://github.com/JetBrains/JetBrainsMono)
+
+**Noto Sans CJK** - Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source' (https://github.com/notofonts/noto-cjk)

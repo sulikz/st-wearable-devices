@@ -14,7 +14,10 @@ local SPAWNS = {
         x = 6.91,
         y = 4.29,
         z = -19.46,
-        visual = "actors\\stalker_neutral\\stalker_exolight_protoskel_2",
+        visuals = {
+            "actors\\stalker_neutral\\stalker_exolight_protoskel_2",
+            "actors\\stalker_neutral\\stalker_exo_proto",
+        },
         guards = { section = "lurker_1_normal", count = 2 },
     },
 }
@@ -68,14 +71,17 @@ local function create_loot(entry, se_corpse)
     end
 end
 
+local function get_existing_visual(visuals)
+    local fs = getFS()
+    for _, visual in ipairs(visuals) do
+        if fs:exist("$game_meshes$", visual .. ".ogf") then
+            return visual
+        end
+    end
+end
+
 local function apply_visual(se_corpse, visual)
-    if not se_corpse then
-        return
-    end
     local data = utils_stpk.get_stalker_data(se_corpse)
-    if not data then
-        return
-    end
     data.visual_name = visual
     utils_stpk.set_stalker_data(data, se_corpse)
 end
@@ -94,8 +100,9 @@ local function create_corpse(entry, position, level_vertex_id, game_vertex_id)
     create_loot(entry, se_corpse)
     se_corpse:set_character_name(entry.name)
     se_corpse:kill()
-    if entry.visual then
-        apply_visual(se_corpse, entry.visual)
+    local visual = entry.visuals and get_existing_visual(entry.visuals)
+    if visual then
+        apply_visual(se_corpse, visual)
     end
     local corpse_name = se_corpse:name()
     se_save_var(corpse_id, corpse_name, "dont_release", true)

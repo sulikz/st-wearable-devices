@@ -107,6 +107,18 @@ Pick this if you see floating UI while wearing an exo. Exo UI will get an overha
                                 <type name="Optional" />
                             </typeDescriptor>
                         </plugin>
+                        <plugin name="DX8 / DX9 Renderer Support">
+                            <description>
+Pick this if you play on the DX8 or DX9. DX11 IS RECOMMENDED so only do so if you're playing on absolute potato.
+</description>
+                            <files>
+                                <folder source="src\legacy_renderers\gamedata" destination="gamedata"
+                                    priority="1" />
+                            </files>
+                            <typeDescriptor>
+                                <type name="Optional" />
+                            </typeDescriptor>
+                        </plugin>
                     </plugins>
                 </group>
             </optionalFileGroups>

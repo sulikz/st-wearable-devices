@@ -1,6 +1,19 @@
 local MARK_LIMIT = 9
 local RESET_BYTE = 1
 local FIT_EPSILON = 1e-9
+local HIGH_BYTES = "[\128-\255]"
+local TRAIL_MIN = 0x80
+local LEAD2_MIN = 0xC0
+local LEAD3_MIN = 0xE0
+local LEAD3_END = 0xF0
+local TRAIL_RADIX = 64
+local WIDE_BREAK_MIN = 0x2E80
+local SPACE_BYTE = 32
+local NO_BREAK_BEFORE_CHARS =
+    "!%),.:;?]}»’”‥…、。々〉》」』】〕〗〙〛〞〟ぁぃぅぇぉっゃゅょゎゝゞァィゥェォッャュョヮヵヶ・ーヽヾ！％），．：；？］｝｠｡｣､･ｰ"
+local NO_BREAK_AFTER_CHARS = "([{«‘“〈《「『【〔〖〘〚〝（［｛｟｢"
+local NO_BREAK_BEFORE = {}
+local NO_BREAK_AFTER = {}
 
 local scratch_pos = vector2()
 local scratch_size = vector2()
@@ -18,9 +31,65 @@ for code = 0xE0, 0xFF do
     CYRILLIC_UPPER[string.char(code)] = string.char(code - 0x20)
 end
 
+local function is_trail(byte)
+    return byte ~= nil and byte >= TRAIL_MIN and byte < LEAD2_MIN
+end
+
+local function decode(text, index)
+    local byte = string.byte(text, index)
+    if byte >= LEAD2_MIN and byte < LEAD3_END then
+        local second = string.byte(text, index + 1)
+        if is_trail(second) then
+            if byte < LEAD3_MIN then
+                return (byte - LEAD2_MIN) * TRAIL_RADIX + second - TRAIL_MIN, index + 2, true
+            end
+            local third = string.byte(text, index + 2)
+            if is_trail(third) then
+                local code = ((byte - LEAD3_MIN) * TRAIL_RADIX + second - TRAIL_MIN) * TRAIL_RADIX + third - TRAIL_MIN
+                return code, index + 3, true
+            end
+        end
+    end
+    return byte, index + 1, false
+end
+
+local function add_codes(set, chars)
+    local index = 1
+    while index <= #chars do
+        local code
+        code, index = decode(chars, index)
+        set[code] = true
+    end
+end
+
+add_codes(NO_BREAK_BEFORE, NO_BREAK_BEFORE_CHARS)
+add_codes(NO_BREAK_AFTER, NO_BREAK_AFTER_CHARS)
+
+local function get_wide(font, text)
+    if wd_fonts.is_multibyte() and string.find(text, HIGH_BYTES) then
+        return wd_fonts.get_wide_glyphs(font)
+    end
+end
+
+local function get_next_glyph(font, wide, text, index)
+    if not wide then
+        return font.glyphs[string.byte(text, index)], index + 1
+    end
+    local code, next_index, is_unicode = decode(text, index)
+    return (is_unicode and wide or font.glyphs)[code], next_index
+end
+
+local function get_char_end(wide, text, index)
+    if not wide then
+        return index
+    end
+    local _, next_index = decode(text, index)
+    return next_index - 1
+end
+
 function get_upper(text)
     local upper = string.upper(text)
-    if not string.find(upper, CYRILLIC_LOWER) then
+    if wd_fonts.is_multibyte() or not string.find(upper, CYRILLIC_LOWER) then
         return upper
     end
     return (string.gsub(upper, CYRILLIC_LOWER, CYRILLIC_UPPER))
@@ -30,50 +99,68 @@ local function get_scale(font, height)
     return height / font.glyph_height
 end
 
-local function sum_glyphs(glyphs, text)
+local function is_fitting(budget, width, count)
+    return width * budget.scale <= budget.max_width + FIT_EPSILON and count <= budget.max_chars
+end
+
+local function sum_glyphs(font, wide, text, start, budget)
     local width = 0
     local count = 0
-    for index = 1, #text do
-        local glyph = glyphs[string.byte(text, index)]
+    local size = #text
+    if not wide then
+        local glyphs = font.glyphs
+        for index = start, size do
+            local glyph = glyphs[string.byte(text, index)]
+            if glyph then
+                if budget and not is_fitting(budget, width + glyph[5], count + 1) then
+                    return width, count, index - 1
+                end
+                width = width + glyph[5]
+                count = count + 1
+            end
+        end
+        return width, count, size
+    end
+    local index = start
+    while index <= size do
+        local glyph, next_index = get_next_glyph(font, wide, text, index)
         if glyph then
-            width = width + glyph[3] - glyph[1]
+            if budget and not is_fitting(budget, width + glyph[5], count + 1) then
+                return width, count, index - 1
+            end
+            width = width + glyph[5]
             count = count + 1
         end
+        index = next_index
     end
-    return width, count
+    return width, count, size
 end
 
 function measure(font, text, height)
-    return sum_glyphs(font.glyphs, text) * get_scale(font, height)
+    return sum_glyphs(font, get_wide(font, text), text, 1) * get_scale(font, height)
 end
 
 function get_max_chars(font, height, width)
     local narrowest = math.huge
     for _, glyph in pairs(font.glyphs) do
-        narrowest = math.min(narrowest, glyph[3] - glyph[1])
+        narrowest = math.min(narrowest, glyph[5])
     end
     return math.floor(width / (narrowest * get_scale(font, height)) + FIT_EPSILON)
 end
 
 function ellipsize(font, text, height, max_width)
-    if measure(font, text, height) <= max_width + FIT_EPSILON then
+    local wide = get_wide(font, text)
+    local scale = get_scale(font, height)
+    if sum_glyphs(font, wide, text, 1) * scale <= max_width + FIT_EPSILON then
         return text
     end
-    local glyphs = font.glyphs
     local ellipsis = font.ellipsis
-    local budget = max_width - measure(font, ellipsis, height)
-    local scale = get_scale(font, height)
-    local width = 0
-    local stop = 0
-    for index = 1, #text do
-        local glyph = glyphs[string.byte(text, index)]
-        local advance = glyph and (glyph[3] - glyph[1]) * scale or 0
-        if width + advance > budget then
-            break
-        end
-        width = width + advance
-        stop = index
-    end
+    local room = {
+        scale = scale,
+        max_width = max_width - sum_glyphs(font, nil, ellipsis, 1) * scale,
+        max_chars = math.huge,
+    }
+    local _, _, stop = sum_glyphs(font, wide, text, 1, room)
     return (string.gsub(string.sub(text, 1, stop), "%s+$", "")) .. ellipsis
 end
 
@@ -85,6 +172,7 @@ function new_line(cfg)
     local tints = cfg.tints or {}
     local default_tint = cfg.tint or GetARGB(255, 255, 255, 255)
     local statics = {}
+    local bound_ids = {}
     local applied = {}
     local glyph_marks = {}
     local placed_glyphs = {}
@@ -103,6 +191,7 @@ function new_line(cfg)
         static:Show(false)
         cfg.parent:AttachChild(static)
         statics[index] = static
+        bound_ids[index] = font.id
         visible_flags[index] = false
     end
 
@@ -121,9 +210,18 @@ function new_line(cfg)
         end
     end
 
+    local function bind(index, id)
+        if bound_ids[index] ~= id then
+            bound_ids[index] = id
+            cfg.binder.set(statics[index], id)
+            placed_glyphs[index] = nil
+        end
+    end
+
     local function place(index, glyph, cursor, mark_index)
         local static = statics[index]
-        local width = (glyph[3] - glyph[1]) * scale
+        local width = glyph[5] * scale
+        bind(index, glyph[6] or font.id)
         if placed_glyphs[index] ~= glyph then
             placed_glyphs[index] = glyph
             static:SetTextureRect(scratch_rect:set(glyph[1], glyph[2], glyph[3], glyph[4]))
@@ -148,27 +246,32 @@ function new_line(cfg)
             return
         end
         line.text = text
+        local wide = get_wide(font, text)
         local cursor = cfg.x
         if cfg.align == "center" then
-            cursor = cursor + (cfg.width - measure(font, text, cfg.height)) / 2
+            cursor = cursor + (cfg.width - sum_glyphs(font, wide, text, 1) * scale) / 2
         elseif cfg.align == "right" then
-            cursor = cursor + cfg.width - measure(font, text, cfg.height)
+            cursor = cursor + cfg.width - sum_glyphs(font, wide, text, 1) * scale
         end
         local count = 0
         local mark_index = 0
-        for index = 1, #text do
-            if count == pool then
-                break
-            end
-            local byte = string.byte(text, index)
+        local position = 1
+        local size = #text
+        while position <= size and count < pool do
+            local byte = string.byte(text, position)
+            local glyph
             if byte < MARK_LIMIT then
                 mark_index = byte - RESET_BYTE
+                position = position + 1
+            elseif wide then
+                glyph, position = get_next_glyph(font, wide, text, position)
             else
-                local glyph = glyphs[byte]
-                if glyph then
-                    count = count + 1
-                    cursor = cursor + place(count, glyph, cursor, mark_index)
-                end
+                glyph = glyphs[byte]
+                position = position + 1
+            end
+            if glyph then
+                count = count + 1
+                cursor = cursor + place(count, glyph, cursor, mark_index)
             end
         end
         for index = count + 1, drawn do
@@ -198,11 +301,6 @@ function new_line(cfg)
     return line
 end
 
-local function is_fitting(budget, text)
-    local width, count = sum_glyphs(budget.glyphs, text)
-    return width * budget.scale <= budget.max_width + FIT_EPSILON and count <= budget.max_chars
-end
-
 local function get_open_mark(line, open)
     for index = 1, #line do
         local byte = string.byte(line, index)
@@ -226,59 +324,156 @@ end
 local function split_word(budget, word, lines)
     local start = 1
     while true do
-        local stop = start
-        while stop < #word and is_fitting(budget, string.sub(word, start, stop + 1)) do
-            stop = stop + 1
-        end
+        local _, _, fitting = sum_glyphs(budget.font, budget.wide, word, start, budget)
+        local stop = math.max(fitting, get_char_end(budget.wide, word, start))
         if stop == #word then
             return string.sub(word, start)
         end
-        lines[#lines + 1] = string.sub(word, start, stop)
+        local count = #lines + 1
+        lines[count] = string.sub(word, start, stop)
+        local glued = budget.glued
+        if glued then
+            glued[count] = true
+        end
         start = stop + 1
     end
 end
 
-local function wrap_paragraph(budget, paragraph, lines)
-    local current
-    for word in string.gmatch(paragraph, "%S+") do
-        local joined = current and current .. " " .. word
-        if joined and is_fitting(budget, joined) then
-            current = joined
-        else
-            if current then
-                lines[#lines + 1] = current
-            end
-            current = is_fitting(budget, word) and word or split_word(budget, word, lines)
-        end
-    end
-    if current then
-        lines[#lines + 1] = current
+local function emit_line(budget, lines, glued)
+    local count = #lines + 1
+    lines[count] = table.concat(budget.parts, "", 1, budget.part_count)
+    budget.part_count = 0
+    local marks = budget.glued
+    if marks then
+        marks[count] = glued
     end
 end
 
-function wrap(font, text, height, max_width, max_chars)
+local function add_part(budget, part)
+    local part_count = budget.part_count + 1
+    budget.parts[part_count] = part
+    budget.part_count = part_count
+end
+
+local function add_token(budget, lines, token, glued)
+    local width, count = sum_glyphs(budget.font, budget.wide, token, 1)
+    if budget.part_count > 0 then
+        local joined_width = budget.current_width + width
+        local joined_count = budget.current_count + count
+        if not glued then
+            joined_width = joined_width + budget.space_width
+            joined_count = joined_count + 1
+        end
+        if is_fitting(budget, joined_width, joined_count) then
+            if not glued then
+                add_part(budget, " ")
+            end
+            add_part(budget, token)
+            budget.current_width = joined_width
+            budget.current_count = joined_count
+            return
+        end
+        emit_line(budget, lines, glued)
+    end
+    if not is_fitting(budget, width, count) then
+        token = split_word(budget, token, lines)
+        width, count = sum_glyphs(budget.font, budget.wide, token, 1)
+    end
+    add_part(budget, token)
+    budget.current_width = width
+    budget.current_count = count
+end
+
+local function add_wide_word(budget, lines, word)
+    local start = 1
+    local index = 1
+    local size = #word
+    local filled = false
+    local previous
+    local previous_wide = false
+    while index <= size do
+        local code, next_index, is_unicode = decode(word, index)
+        if is_unicode or code >= MARK_LIMIT then
+            local wide = is_unicode and code >= WIDE_BREAK_MIN
+            local breaks = (wide or previous_wide) and not NO_BREAK_BEFORE[code] and not NO_BREAK_AFTER[previous]
+            if filled and breaks then
+                add_token(budget, lines, string.sub(word, start, index - 1), start > 1)
+                start = index
+            end
+            filled = true
+            previous = code
+            previous_wide = wide
+        end
+        index = next_index
+    end
+    add_token(budget, lines, string.sub(word, start), start > 1)
+end
+
+local function wrap_paragraph(budget, paragraph, lines)
+    budget.part_count = 0
+    for word in string.gmatch(paragraph, "%S+") do
+        if budget.wide then
+            add_wide_word(budget, lines, word)
+        else
+            add_token(budget, lines, word, false)
+        end
+    end
+    if budget.part_count > 0 then
+        emit_line(budget, lines, false)
+    end
+end
+
+local function wrap_lines(font, text, height, max_width, max_chars, track_glue)
     local budget = {
-        glyphs = font.glyphs,
+        font = font,
+        wide = get_wide(font, text),
         scale = get_scale(font, height),
         max_width = max_width,
         max_chars = max_chars,
+        space_width = font.glyphs[SPACE_BYTE][5],
+        parts = {},
+        part_count = 0,
+        glued = track_glue and {} or nil,
     }
     local lines = {}
     for paragraph in string.gmatch(text .. "\n", "(.-)\n") do
         wrap_paragraph(budget, paragraph, lines)
     end
     carry_marks(lines)
-    return lines
+    return lines, budget.glued
+end
+
+function wrap(font, text, height, max_width, max_chars)
+    return (wrap_lines(font, text, height, max_width, max_chars))
+end
+
+local join_parts = {}
+
+local function join_lines(lines, glued, first)
+    join_parts[1] = lines[first]
+    local count = 1
+    for index = first + 1, #lines do
+        join_parts[count + 1] = glued[index - 1] and "" or " "
+        join_parts[count + 2] = lines[index]
+        count = count + 2
+    end
+    return table.concat(join_parts, "", 1, count)
 end
 
 function fit_lines(font, text, suffix, height, max_width, max_chars, limit)
-    local whole = wrap(font, text .. suffix, height, max_width, max_chars)
-    if #whole <= limit then
-        return whole
+    local wrapped, glued = wrap_lines(font, text .. suffix, height, max_width, max_chars, suffix == "")
+    if #wrapped <= limit then
+        return wrapped
     end
-    local wrapped = suffix == "" and whole or wrap(font, text, height, max_width, max_chars)
+    if suffix ~= "" then
+        wrapped, glued = wrap_lines(font, text, height, max_width, max_chars, true)
+        if #wrapped < limit then
+            wrapped[#wrapped + 1] = suffix
+            return wrapped
+        end
+    end
     local room = max_width - measure(font, suffix, height)
-    wrapped[limit] = ellipsize(font, table.concat(wrapped, " ", limit), height, room) .. suffix
+    wrapped[limit] = ellipsize(font, join_lines(wrapped, glued, limit), height, room) .. suffix
     for index = #wrapped, limit + 1, -1 do
         wrapped[index] = nil
     end

@@ -1,0 +1,29 @@
+#include "common.h"
+#include "wd_arc_field.h"
+
+static const float WD_NIXIE_FLICKER = 0.14;
+static const float WD_NIXIE_LIMB = 1.6;
+
+struct v2p_nixie
+{
+	float2 tc0 : TEXCOORD0;
+	float3 N   : TEXCOORD1;
+	float3 P   : TEXCOORD2;
+};
+
+float4 main( v2p_nixie I ) : COLOR0
+{
+	float4 t_base = tex2D(s_base, I.tc0 );
+
+	float facing = saturate( dot( normalize(I.N), normalize(-I.P) ) );
+	float grazing = 1.0f - facing;
+	float limb = 1.0f + WD_NIXIE_LIMB * grazing * grazing;
+	float3 color = lerp( WD_NIXIE_CORE, WD_NIXIE_EDGE, grazing * grazing ) * limb;
+
+	float flicker = 1.0;
+#ifdef WD_ARC_FIELD
+	flicker *= wd_tube_surge();
+#endif
+
+	return float4( color * flicker * t_base.r, 1.0f );
+}

@@ -5,6 +5,9 @@ FONTS = {
     face_clock = { texture = "wd\\ui\\faces\\arcs_mono\\glyphs", id = "wd_font_face_clock" },
 }
 
+CJK_FONT = { texture = "wd\\ui\\fonts\\noto_sans_cjk", id = "wd_font_noto_sans_cjk" }
+GAME_FONT_SECTION = "ui_font_letterica18_russian"
+
 local ELLIPSIS = "..."
 
 local ELLIPSIS_BYTE = 133
@@ -25,9 +28,90 @@ local REPLACEMENTS = {
 }
 
 local SECTION = "symbol_coords"
+local MB_SECTION = "mb_symbol_coords"
+local MB_WIDTH_EXTRA = 1
+local MB_KEY_FORMAT = "%05d"
+local CYRILLIC_FIRST_BYTE = 0xC0
+local CYRILLIC_FIRST_CODE = 0x0410
+local CP1251_CODES = {
+    [0x80] = 0x0402,
+    [0x81] = 0x0403,
+    [0x82] = 0x201A,
+    [0x83] = 0x0453,
+    [0x84] = 0x201E,
+    [0x85] = 0x2026,
+    [0x86] = 0x2020,
+    [0x87] = 0x2021,
+    [0x88] = 0x20AC,
+    [0x89] = 0x2030,
+    [0x8A] = 0x0409,
+    [0x8B] = 0x2039,
+    [0x8C] = 0x040A,
+    [0x8D] = 0x040C,
+    [0x8E] = 0x040B,
+    [0x8F] = 0x040F,
+    [0x90] = 0x0452,
+    [0x91] = 0x2018,
+    [0x92] = 0x2019,
+    [0x93] = 0x201C,
+    [0x94] = 0x201D,
+    [0x95] = 0x2022,
+    [0x96] = 0x2013,
+    [0x97] = 0x2014,
+    [0x99] = 0x2122,
+    [0x9A] = 0x0459,
+    [0x9B] = 0x203A,
+    [0x9C] = 0x045A,
+    [0x9D] = 0x045C,
+    [0x9E] = 0x045B,
+    [0x9F] = 0x045F,
+    [0xA0] = 0x00A0,
+    [0xA1] = 0x040E,
+    [0xA2] = 0x045E,
+    [0xA3] = 0x0408,
+    [0xA4] = 0x00A4,
+    [0xA5] = 0x0490,
+    [0xA6] = 0x00A6,
+    [0xA7] = 0x00A7,
+    [0xA8] = 0x0401,
+    [0xA9] = 0x00A9,
+    [0xAA] = 0x0404,
+    [0xAB] = 0x00AB,
+    [0xAC] = 0x00AC,
+    [0xAD] = 0x00AD,
+    [0xAE] = 0x00AE,
+    [0xAF] = 0x0407,
+    [0xB0] = 0x00B0,
+    [0xB1] = 0x00B1,
+    [0xB2] = 0x0406,
+    [0xB3] = 0x0456,
+    [0xB4] = 0x0491,
+    [0xB5] = 0x00B5,
+    [0xB6] = 0x00B6,
+    [0xB7] = 0x00B7,
+    [0xB8] = 0x0451,
+    [0xB9] = 0x2116,
+    [0xBA] = 0x0454,
+    [0xBB] = 0x00BB,
+    [0xBC] = 0x0458,
+    [0xBD] = 0x0405,
+    [0xBE] = 0x0455,
+    [0xBF] = 0x0457,
+}
+for byte = CYRILLIC_FIRST_BYTE, 0xFF do
+    CP1251_CODES[byte] = CYRILLIC_FIRST_CODE + byte - CYRILLIC_FIRST_BYTE
+end
 local RECT_PATTERN = "^([%d.]+)%s*,%s*([%d.]+)%s*,%s*([%d.]+)"
 
 local cache = {}
+local cjk
+local multibyte
+
+local function open_ini(texture)
+    local ini_name = texture .. ".ini"
+    local path = getFS():update_path("$game_textures$", ini_name)
+    return ini_file(ini_name, 1, 1, 0, path)
+end
 
 local function read_glyphs(ini)
     if not ini:line_exist(SECTION, "height") then
@@ -42,7 +126,7 @@ local function read_glyphs(ini)
         if code and x1 then
             x1, y1, x2 = tonumber(x1), tonumber(y1), tonumber(x2)
             if x2 > x1 then
-                glyphs[code] = { x1, y1, x2, y1 + glyph_height }
+                glyphs[code] = { x1, y1, x2, y1 + glyph_height, x2 - x1 }
             end
         end
     end
@@ -51,7 +135,7 @@ end
 
 local function scale_glyphs(glyphs, scale)
     for _, rect in pairs(glyphs) do
-        for index = 1, 4 do
+        for index = 1, 5 do
             rect[index] = rect[index] * scale
         end
     end
@@ -87,10 +171,7 @@ function get_font(name)
     if not font then
         return nil
     end
-    local ini_name = font.texture .. ".ini"
-    local path = getFS():update_path("$game_textures$", ini_name)
-    local ini = ini_file(ini_name, 1, 1, 0, path)
-    local glyph_height, glyphs = read_glyphs(ini)
+    local glyph_height, glyphs = read_glyphs(open_ini(font.texture))
     if not glyph_height then
         return nil
     end
@@ -107,4 +188,61 @@ function get_font(name)
     }
     cache[name] = loaded
     return loaded
+end
+
+function is_multibyte()
+    if multibyte == nil then
+        local texture = ini_sys:r_string_ex(GAME_FONT_SECTION, "texture")
+        multibyte = texture ~= nil and open_ini(texture):section_exist(MB_SECTION)
+    end
+    return multibyte
+end
+
+local function load_cjk()
+    if cjk == nil then
+        local ini = open_ini(CJK_FONT.texture)
+        cjk = false
+        if ini:line_exist(MB_SECTION, "height") then
+            local scale = wd_screen.get_lod_scale(CJK_FONT.texture)
+            cjk = { ini = ini, scale = scale, glyph_height = ini:r_float(MB_SECTION, "height") * scale }
+        end
+    end
+    return cjk
+end
+
+local function read_cjk_glyph(source, code, ratio)
+    local ini = source.ini
+    local key = string.format(MB_KEY_FORMAT, code)
+    local value = ini:line_exist(MB_SECTION, key) and ini:r_string(MB_SECTION, key)
+    local x1, y1, x2 = string.match(value or "", RECT_PATTERN)
+    if not x1 then
+        return nil
+    end
+    local scale = source.scale
+    x1, y1, x2 = tonumber(x1) * scale, tonumber(y1) * scale, (tonumber(x2) + MB_WIDTH_EXTRA) * scale
+    return { x1, y1, x2, y1 + source.glyph_height, (x2 - x1) * ratio, CJK_FONT.id }
+end
+
+function get_wide_glyphs(font)
+    local wide = font.wide
+    if wide then
+        return wide
+    end
+    local glyphs = font.glyphs
+    wide = {}
+    for byte, code in pairs(CP1251_CODES) do
+        wide[code] = glyphs[byte]
+    end
+    local fallback = get_fallback(glyphs)
+    local source = load_cjk()
+    local ratio = source and font.glyph_height / source.glyph_height
+    setmetatable(wide, {
+        __index = function(resolved, code)
+            local glyph = source and read_cjk_glyph(source, code, ratio) or fallback
+            resolved[code] = glyph
+            return glyph
+        end,
+    })
+    font.wide = wide
+    return wide
 end

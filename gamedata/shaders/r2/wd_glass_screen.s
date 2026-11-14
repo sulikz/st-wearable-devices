@@ -1,0 +1,12 @@
+function normal(shader, t_base, t_second, t_detail)
+	shader:begin("wd_glass", "wd_glass_screen")
+		: fog(true)
+		: zb(true, false)
+		: blend(true, blend.one, blend.invsrcalpha)
+		: aref(false, 0)
+		: sorting(2, true)
+	shader:sampler("s_base"):texture(t_base):clamp():f_linear()
+	shader:sampler("s_tonemap"):texture("$user$tonemap"):clamp():f_none()
+	shader:sampler("s_env0"):texture("$user$sky0"):clamp():f_linear()
+	shader:sampler("s_env1"):texture("$user$sky1"):clamp():f_linear()
+end

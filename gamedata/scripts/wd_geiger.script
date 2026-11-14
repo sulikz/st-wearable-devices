@@ -3,16 +3,14 @@ REFRESH_MS = 555
 HIT_TICK = 0.1
 DIFFICULTY_FACTORS = { 0.65, 0.8, 1.0, 1.2 }
 DEFAULT_DIFFICULTY = 1
-
-ARMOUR = {
-    { slot = wd_outfit.OUTFIT_SLOT, cast = "cast_CustomOutfit" },
-    { slot = wd_vitals.HELMET_SLOT, cast = "cast_Helmet" },
-}
+ARSZI_SUIT_HIT_FACTOR = 0.8
 
 local RADIATION_HIT = hit.radiation
 
 local belt_immunity = 0
 local link_check = nil
+local arszi_env_rads = 0
+local allow_arszi_reading = wd_core.throttle(REFRESH_MS)
 
 function set_link_check(check)
     link_check = check
@@ -26,25 +24,29 @@ function is_dose_readable()
     return not wd_mcm.is_strict_geiger() or is_linked()
 end
 
+local function get_env_rads()
+    local arszi = wd_vitals.get_arszi_radiation()
+    local get_arszi_env_rads = arszi and arszi.get_environmental_radiation_power
+    if not get_arszi_env_rads then
+        return level.get_env_rads()
+    end
+    if allow_arszi_reading() then
+        arszi_env_rads = get_arszi_env_rads()
+    end
+    return arszi_env_rads
+end
+
 function get_exact_reading()
-    return level.get_env_rads() * READING_SCALE
+    return get_env_rads() * READING_SCALE
 end
 
 function get_reading()
     return math.floor(get_exact_reading())
 end
 
-local function get_armour_protection()
-    local actor = db.actor
-    local protection = 0
-    for _, armour in ipairs(ARMOUR) do
-        local item = actor:item_in_slot(armour.slot)
-        local cast = item and item[armour.cast](item)
-        if cast then
-            protection = protection + cast:GetDefHitTypeProtection(RADIATION_HIT)
-        end
-    end
-    return protection
+local function get_armour_protection(item, cast)
+    local armour = item and item[cast](item)
+    return armour and armour:GetDefHitTypeProtection(RADIATION_HIT) or 0
 end
 
 local function add_artefact_immunity(_, item)
@@ -61,10 +63,30 @@ local function get_difficulty_factor()
     return DIFFICULTY_FACTORS[difficulty] or DIFFICULTY_FACTORS[DEFAULT_DIFFICULTY]
 end
 
+local function get_arszi_hit_factor(outfit)
+    local arszi = wd_vitals.get_arszi_radiation()
+    local is_underground_map = arszi and arszi.is_underground_map
+    if not (outfit and is_underground_map) then
+        return 1
+    end
+    local settings = arszi.settings
+    if settings and not settings.ARSZI_INTEGRATED_SUIT_BONUS_ENABLED or is_underground_map() then
+        return 1
+    end
+    if ini_sys:r_bool_ex(outfit:section(), "helmet_avaliable", false) then
+        return 1
+    end
+    return ARSZI_SUIT_HIT_FACTOR
+end
+
 function get_shield(conditions)
+    local actor = db.actor
     belt_immunity = 0
-    db.actor:iterate_belt(add_artefact_immunity)
+    actor:iterate_belt(add_artefact_immunity)
+    local outfit = actor:item_in_slot(wd_outfit.OUTFIT_SLOT)
+    local helmet = actor:item_in_slot(wd_vitals.HELMET_SLOT)
+    local armour = get_armour_protection(outfit, "cast_CustomOutfit") + get_armour_protection(helmet, "cast_Helmet")
     local booster = wd_vitals.get_booster_value(conditions, wd_vitals.BOOST.radiation_protection)
-    local per_tick = HIT_TICK * get_armour_protection() + belt_immunity + booster
-    return per_tick / (HIT_TICK * get_difficulty_factor()) * READING_SCALE
+    local per_tick = HIT_TICK * armour + belt_immunity + booster
+    return per_tick / (HIT_TICK * get_difficulty_factor() * get_arszi_hit_factor(outfit)) * READING_SCALE
 end

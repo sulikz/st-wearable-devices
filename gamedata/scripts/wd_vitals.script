@@ -54,6 +54,15 @@ for _, limb in ipairs(LIMBS) do
     limb_states[limb] = { perm = 1, total = 1 }
 end
 
+local arszi_radiation_module
+
+function get_arszi_radiation()
+    if arszi_radiation_module == nil then
+        arszi_radiation_module = arszi_radiation or false
+    end
+    return arszi_radiation_module or nil
+end
+
 local function get_rad_full()
     if grok_progressive_rad_damages then
         return RAD_FULL_GAMMA
@@ -93,6 +102,11 @@ function get_stamina_cap(conditions, msv)
     if grok_progressive_rad_damages then
         local sievert = msv / 1000
         cap = cap * math.max(RAD_STAMINA_FLOOR, 1 - sievert * RAD_STAMINA_LOSS_PER_SV)
+    end
+    local arszi = get_arszi_radiation()
+    local get_arszi_cap = arszi and arszi.get_power_total
+    if get_arszi_cap then
+        cap = math.min(cap, get_arszi_cap())
     end
     return clamp(cap, 0, 1)
 end
