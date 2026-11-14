@@ -2,11 +2,12 @@
 #undef USE_TDETAIL_BUMP
 
 #include "sload.h"
-#include "check_screenspace.h"
-#include "screenspace_mvectors.h"
 
-#ifdef SSFX_RAINDROPS
-	#include "screenspace_hud_raindrops.h"
+#ifdef SSFX_MV_LOADED
+	#include "check_screenspace.h"
+	#ifdef SSFX_RAINDROPS
+		#include "screenspace_hud_raindrops.h"
+	#endif
 #endif
 
 #include "wd_perturb_normal.h"
@@ -86,7 +87,9 @@ f_deffer main( p_flat I )
 		float4(D, gloss)
 	);
 
+#ifdef SSFX_MV_LOADED
 	O.velocity = ssfx_mv_calc(I.vel_curr, I.vel_prev, 1, 0);
+#endif
 
 	return O;
 }

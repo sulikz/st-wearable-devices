@@ -2,8 +2,6 @@
 #include "common.h"
 #include "skin.h"
 
-#include "screenspace_mvectors.h"
-
 v2p_flat _main( v_model I, float3 psp )
 {
 	// world-space  N
@@ -16,9 +14,10 @@ v2p_flat _main( v_model I, float3 psp )
 	O.N 		= mul( (float3x3)m_WV, (float3)I.N );
 	O.tcdh 		= float4( I.tc.xyyy	);
 
-	// Values to calc motion vectors
+#ifdef SSFX_MV_LOADED
 	O.vel_curr = O.hpos;
 	O.vel_prev = mul(m_wvp_prev, I.P_prev );
+#endif
 
 	//  Hemi cube lighting
 	float3	Nw	= mul		((float3x3)m_W, (float3)I.N);
@@ -40,12 +39,14 @@ v2p_flat _main( v_model I, float3 psp )
 
 	// HUD Rain drops - SSS Update 17
 	// https://www.moddb.com/mods/stalker-anomaly/addons/screen-space-shaders/
+#ifdef SSFX_MV_LOADED
 	if (!all(psp))
 		O.RDrops.xyz = I.P.xyz;
 	else
 		O.RDrops.xyz = psp;
 
 	O.RDrops.w = Nw.y; // Normal-Y [ World Space ]
+#endif
 
 	return	O;
 }

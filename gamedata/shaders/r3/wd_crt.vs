@@ -1,4 +1,3 @@
-// Wearable Devices' screen vertex shader, tagging each triangle corner so a bent picture stays inside its own art
 #include "common.h"
 #include "wd_arc_field.h"
 

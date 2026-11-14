@@ -1,6 +1,5 @@
 #include "common.h"
 #include "skin.h"
-#include "screenspace_mvectors.h"
 
 struct v2p_nixie
 {
@@ -14,7 +13,9 @@ v2p_nixie _main( v_model I )
 {
 	v2p_nixie O;
 	O.hpos = mul( m_WVP, I.P );
+#ifdef SSFX_MV_LOADED
 	O.hpos.xy = ssfx_taa_jitter(O.hpos);
+#endif
 	O.tc0 = I.tc.xy;
 	O.N = mul( (float3x3)m_WV, (float3)I.N );
 	O.P = (float3)mul( m_WV, I.P );

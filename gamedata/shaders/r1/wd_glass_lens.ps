@@ -1,0 +1,12 @@
+#define half float
+#define half2 float2
+#define half3 float3
+#define half4 float4
+#include "common.h"
+struct vf {float2 tc0:TEXCOORD0;};
+float4 main(vf I):COLOR0 {
+    float4 lens=tex2D(s_base,I.tc0*0.5);
+    float4 dirt=tex2D(s_base,I.tc0*0.5+float2(0.0,0.5));
+    float a=lens.a+dirt.a*(1.0-lens.a);
+    return float4(lerp(lens.rgb,dirt.rgb,dirt.a),a);
+}

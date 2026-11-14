@@ -1,0 +1,7 @@
+#define half float
+#define half2 float2
+#define half3 float3
+#define half4 float4
+#include "common.h"
+#include "wd_crt_input.h"
+float4 main(ui_vert_out I):COLOR0 {return tex2D(s_base,I.tc0)*I.c;}

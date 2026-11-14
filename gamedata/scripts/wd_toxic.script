@@ -49,6 +49,7 @@ local redux_stats_by_section = {}
 local redux_source = {}
 local redux_hits = { filter = 0, tank = 0 }
 local allow_redux_hit_refresh = wd_core.throttle(REDUX_HIT_REFRESH_MS)
+local worn_filter_id, worn_tank_id, worn_tank_section
 
 local function get_redux_item_stats(section)
     local stats = redux_stats_by_section[section]
@@ -74,9 +75,37 @@ function is_installed()
     return toxic_air ~= nil
 end
 
-local function get_redux_filter()
-    local filters = toxic_air.filters
-    return filters and filters[toxic_air.cached_filter_id]
+local function get_filter_id_in(actor, filters, slot)
+    local item = actor:item_in_slot(slot)
+    local item_id = item and item:id()
+    return filters[item_id] and item_id
+end
+
+local function get_worn_filter_id(actor, filters)
+    return get_filter_id_in(actor, filters, wd_outfit.OUTFIT_SLOT)
+        or get_filter_id_in(actor, filters, wd_vitals.HELMET_SLOT)
+end
+
+local function note_worn_tank(tanks, tank)
+    local tank_id = tank:id()
+    if tanks[tank_id] then
+        worn_tank_id, worn_tank_section = tank_id, tank:section()
+    end
+end
+
+local function refresh_worn()
+    worn_filter_id, worn_tank_id, worn_tank_section = nil, nil, nil
+    local actor = db.actor
+    if not actor then
+        return
+    end
+    local filters, tanks = toxic_air.filters, toxic_air.tanks
+    if filters and next(filters) then
+        worn_filter_id = get_worn_filter_id(actor, filters)
+    end
+    if tanks and next(tanks) then
+        actor:iterate_belt(note_worn_tank, tanks)
+    end
 end
 
 local function get_redux_filter_hit(section, flow_mult)
@@ -95,31 +124,23 @@ local function get_redux_filter_hit(section, flow_mult)
     return stats.flow_rate * (toxic / stats.air_immunity) ^ stats.flow_factor * flow_mult
 end
 
-local function get_redux_tank_hit(flow_mult)
-    local tanks = toxic_air.tanks
-    if not (tanks and next(tanks) and db.actor) then
-        return 0
-    end
-    local hit = 0
-    db.actor:iterate_belt(function(owner, tank)
-        if hit <= 0 and tanks[tank:id()] then
-            hit = get_redux_item_stats(tank:section()).flow_rate * flow_mult
-        end
-    end)
-    return hit
-end
-
 local function refresh_redux_hits(filter, filter_cond, tank_cond)
     local flow_mult = get_redux_config_mult("flow_rate_mult") or 1
     redux_hits.filter = filter_cond and get_redux_filter_hit(filter.name, flow_mult) or 0
-    redux_hits.tank = tank_cond and get_redux_tank_hit(flow_mult) or 0
+    redux_hits.tank = tank_cond and get_redux_item_stats(worn_tank_section).flow_rate * flow_mult or 0
 end
 
 get_redux_air_source = function()
-    local filter = get_redux_filter()
+    local refresh = allow_redux_hit_refresh()
+    if refresh then
+        refresh_worn()
+    end
+    local filters = toxic_air.filters
+    local filter = filters and filters[worn_filter_id]
     local filter_cond = filter and filter.cond
-    local tank_cond = toxic_air.cached_tank_cond
-    if allow_redux_hit_refresh() then
+    local tank_conds = toxic_air.tank_cond
+    local tank_cond = tank_conds and tank_conds[worn_tank_id]
+    if refresh then
         refresh_redux_hits(filter, filter_cond, tank_cond)
     end
     local filter_hit, tank_hit = redux_hits.filter, redux_hits.tank

@@ -1,5 +1,10 @@
 local PARK_OFF = 4000
 local PARKED_X = -1000
+local STAMINA_AUTOHIDE_TRIGGER = 0.95
+local BAR_UPDATES = {
+    Update_HealthHUD = "m_ui_health_bar_show",
+    Update_StaminaHUD = "m_ui_stamina_bar_show",
+}
 
 local function get_npc_id_module()
     return rawget(_G, "factionid_hud_mcm") or rawget(_G, "factionID_hud_mcm")
@@ -53,8 +58,8 @@ local FLAGS = {
     { key = "hud_ammo", label = "Ammo counter" },
     { key = "hud_status", label = "Status Icons" },
     { key = "hud_companions", label = "Companions" },
-    { key = "hud_bhs", label = "BHS HUD", default = 1 },
-    { key = "hud_bhs_inv", label = "BHS inventory only", invert = true },
+    { key = "hud_bhs", label = "Health/BHS", default = 1 },
+    { key = "hud_bhs_inv", label = "Health/BHS inventory only", invert = true },
     {
         key = "hud_npc_info",
         label = "NPC Identification",
@@ -193,17 +198,67 @@ local function is_bhs_hidden()
     return actor_menu.get_last_mode() ~= 1
 end
 
-local function apply_bhs()
-    if not zzz_player_injuries then
+local function apply_vanilla_bars(hud_states, hide)
+    if hide then
+        hud_states.m_ui_health_bar_show = false
+        hud_states.m_ui_stamina_bar_show = false
+        hud_states.m_back:Show(false)
+    elseif prev.hud_bhs then
+        hud_states.m_ui_health_bar_show = true
+        hud_states.m_ui_stamina_bar_show = not ui_options.get("video/hud/autohide_stamina_bar")
+            or db.actor.power < STAMINA_AUTOHIDE_TRIGGER
+        hud_states.m_back:Show(true)
+    end
+end
+
+local function apply_bhs(hud_states)
+    if zzz_player_injuries then
+        local hide = is_bhs_hidden()
+        if hide and not prev.hud_bhs then
+            zzz_player_injuries.show_hud_type = 0
+        elseif not hide and prev.hud_bhs then
+            zzz_player_injuries.show_hud_type = 2
+        end
+        prev.hud_bhs = hide
         return
     end
-    local hide = is_bhs_hidden()
-    if hide and not prev.hud_bhs then
-        zzz_player_injuries.show_hud_type = 0
-    elseif not hide and prev.hud_bhs then
-        zzz_player_injuries.show_hud_type = 2
+    if not hud_states then
+        return
     end
+    local hide = is_hidden("hud_bhs") or is_mode_on("hud_bhs_inv")
+    apply_vanilla_bars(hud_states, hide)
     prev.hud_bhs = hide
+end
+
+function hide_reshown_bar(field)
+    if not prev.hud_bhs then
+        return
+    end
+    local mgui = ActorMenu.get_maingame()
+    local hud_states = mgui and mgui.m_ui_hud_states
+    if hud_states and hud_states[field] then
+        hud_states[field] = false
+    end
+end
+
+local function pass_after_hide(field, ...)
+    wd_hud.hide_reshown_bar(field)
+    return ...
+end
+
+function install_bar_wraps()
+    if _G.wd_hud_bars_wrapped or not actor_effects or zzz_player_injuries then
+        return
+    end
+    for name, field in pairs(BAR_UPDATES) do
+        local original = actor_effects[name]
+        if original then
+            actor_effects[name] = function(...)
+                return pass_after_hide(field, original(...))
+            end
+        end
+    end
+    _G.wd_hud_bars_wrapped = true
 end
 
 local function apply_radio()
@@ -223,8 +278,8 @@ end
 
 function actor_on_update()
     local mgui = ActorMenu.get_maingame()
-    if mgui and mgui.m_ui_hud_states then
-        local st = mgui.m_ui_hud_states
+    local st = mgui and mgui.m_ui_hud_states
+    if st then
         if is_hidden("hud_psy") then
             st.m_ui_psy_bar_show = false
             forced_psy = true
@@ -241,7 +296,7 @@ function actor_on_update()
     apply_module(npc_id_module, "hud_npc_info")
     apply_module(axr_companions, "hud_companions")
     apply_module(toxic_air, "hud_toxic")
-    apply_bhs()
+    apply_bhs(st)
 end
 
 local function register_flag_toggle(flag)
@@ -299,6 +354,7 @@ function register()
             npc_id_module = get_npc_id_module()
             load()
             reset()
+            install_bar_wraps()
         end,
     })
 end
