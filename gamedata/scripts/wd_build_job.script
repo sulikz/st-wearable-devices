@@ -1,0 +1,135 @@
+function new(spec)
+    local driver = {}
+    local is_same_source = spec.is_same_source
+    local built = nil
+    local pending = nil
+    local probed = nil
+    local rest = nil
+    local logged = {}
+
+    local function is_made_for(record, transforms, ...)
+        return record ~= nil
+            and is_same_source(record, ...)
+            and wd_transforms.is_same_pose(record.transforms, transforms)
+    end
+
+    local function update_rest(transforms, now)
+        if not (rest and wd_transforms.is_same_pose(rest.transforms, transforms)) then
+            rest = { transforms = wd_transforms.copy_pose(transforms), since = now }
+        end
+    end
+
+    local function is_kept(...)
+        return built ~= nil and not built.failed and is_same_source(built, ...)
+    end
+
+    local function is_waiting(transforms, ...)
+        if not (pending or rest or is_kept(...)) then
+            return false
+        end
+        local now = time_global()
+        update_rest(transforms, now)
+        return now - rest.since < spec.get_rest_ms()
+    end
+
+    function driver.log_failure(key, reason)
+        if logged[key] then
+            return
+        end
+        logged[key] = true
+        printf(string.format(spec.log_format, key, tostring(reason)))
+    end
+
+    local function land(job)
+        if job.result == nil then
+            driver.log_failure(job.key, job.reason)
+            job.result, job.failed = spec.get_failed(job), true
+        end
+        pending = nil
+        built = job
+        return job.result
+    end
+
+    local function advance_pending()
+        if wd_build_slice.advance(pending, spec.get_prefetch_visuals) then
+            return land(pending)
+        end
+        return nil
+    end
+
+    function driver.request(can_build, transforms, ...)
+        if is_made_for(built, transforms, ...) then
+            pending = nil
+            rest = nil
+            return built.result
+        end
+        if is_made_for(pending, transforms, ...) then
+            return nil
+        end
+        local job = probed
+        if not is_made_for(job, transforms, ...) then
+            if is_waiting(transforms, ...) then
+                return nil
+            end
+            job = wd_build_probe.run("lookup", spec.new_job, wd_transforms.copy_pose(transforms), ...)
+            if job.result ~= nil then
+                probed = nil
+                return land(job)
+            end
+            probed = job
+        end
+        if not can_build then
+            return nil
+        end
+        probed = nil
+        job.task = wd_build_slice.new_task(spec.build, job)
+        pending = job
+        return advance_pending()
+    end
+
+    function driver.advance(transforms, ...)
+        if not pending then
+            return nil
+        end
+        local now = time_global()
+        if pending.sliced_at == now then
+            return nil
+        end
+        if not is_made_for(pending, transforms, ...) then
+            local moved = not wd_transforms.is_same_pose(pending.transforms, transforms)
+            pending = nil
+            if moved then
+                update_rest(transforms, now)
+            else
+                rest = nil
+            end
+            return nil
+        end
+        return advance_pending()
+    end
+
+    function driver.get_kept(...)
+        if built and is_same_source(built, ...) then
+            return built.result
+        end
+        return nil
+    end
+
+    function driver.is_building()
+        return pending ~= nil
+    end
+
+    function driver.stop()
+        pending = nil
+    end
+
+    function driver.reset()
+        built = nil
+        pending = nil
+        probed = nil
+        rest = nil
+        logged = {}
+    end
+
+    return driver
+end

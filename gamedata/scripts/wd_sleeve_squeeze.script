@@ -1,0 +1,885 @@
+jit.off(true, true)
+
+SQUEEZE_MAX = 0.015
+FILL_MAX = 0.012
+EDGE_SLACK = 0.0005
+PRESS_SLOPE = 1
+ENVELOPE_CAP = 0.05
+WRIST_MARGIN = 0.0075
+SLIDE_MAX = 0.025
+HIGH_PERCENTILE = 0.9
+COVER_PASSES = 3
+LIFT_REACH_MIN = 0.05
+FLOOR_REACH = 0.002
+LOW_PERCENTILE = 0.1
+FLUFF_ISLANDS_MIN = 200
+FLUFF_SHADERS = { ["models\\model_fur"] = true, ["models\\model_aref"] = true, ["models\\transparent"] = true }
+
+local abs = math.abs
+local atan2 = math.atan2
+local floor = math.floor
+local sqrt = math.sqrt
+local max = math.max
+local min = math.min
+local full_turn = 2 * math.pi
+
+local transform_xyz = wd_frame.transform_xyz
+local get_clamped = wd_sleeve_mesh.get_clamped
+local get_smoothstep = wd_sleeve_mesh.get_smoothstep
+local get_bone_roles = wd_sleeve_mesh.get_bone_roles
+local collect_sleeve = wd_sleeve_mesh.collect_sleeve
+local get_sector = wd_sleeve_mesh.get_sector
+local get_outer_ring = wd_sleeve_mesh.get_outer_ring
+local fit_outer_center = wd_sleeve_mesh.fit_outer_center
+local get_layer_faces = wd_sleeve_mesh.get_layer_faces
+local new_layer_cover = wd_sleeve_mesh.new_layer_cover
+local set_depths = wd_sleeve_mesh.set_depths
+local set_layer_spans = wd_sleeve_mesh.set_layer_spans
+local get_moved_face_hit = wd_sleeve_mesh.get_moved_face_hit
+local get_hand_weight = wd_sleeve_mesh.get_hand_weight
+local rigidify = wd_sleeve_mesh.rigidify
+local weld_twins = wd_sleeve_mesh.weld_twins
+local get_twins = wd_sleeve_mesh.get_twins
+local RAMP = wd_sleeve_mesh.RAMP
+local RAMP_MIN = wd_sleeve_mesh.RAMP_MIN
+local INNER_GAP = wd_sleeve_mesh.INNER_GAP
+local SECTORS = wd_sleeve_mesh.SECTORS
+local RIGID_RAMP = wd_sleeve_mesh.RIGID_RAMP
+local HAND_RAMP = wd_sleeve_mesh.HAND_RAMP
+local MOVE_MIN = wd_sleeve_mesh.MOVE_MIN
+local ARM_WEIGHT_MIN = wd_sleeve_mesh.ARM_WEIGHT_MIN
+local new_grid = wd_polar_grid.new_grid
+local sample = wd_polar_grid.sample
+local fill_row = wd_polar_grid.fill_row
+local fill_column = wd_polar_grid.fill_column
+local check_line = wd_polar_grid.check_line
+local Z_STEP = wd_polar_grid.Z_STEP
+local ANGLE_STEP = wd_polar_grid.ANGLE_STEP
+local read_indices = wd_ogf.read_indices
+local read_positions = wd_ogf.read_positions
+local read_slots_into = wd_ogf.read_slots_into
+local get_slot_weights = wd_sleeve_mesh.get_slot_weights
+local RADIUS_MAX = wd_sleeve_mesh.RADIUS_MAX
+local LEFT_WEIGHT_MIN = wd_sleeve_mesh.LEFT_WEIGHT_MIN
+local fluff_bones, fluff_weights = {}, {}
+
+local function get_percentile(sorted, fraction)
+    return sorted[max(1, math.ceil(fraction * #sorted))]
+end
+
+local function get_target_radius(ring)
+    local sorted = {}
+    for sector = 1, SECTORS do
+        sorted[sector] = ring[sector]
+    end
+    table.sort(sorted)
+    local r_hi, r_lo = get_percentile(sorted, HIGH_PERCENTILE), get_percentile(sorted, LOW_PERCENTILE)
+    local low, high = r_hi - SQUEEZE_MAX, r_lo + FILL_MAX
+    if low > high then
+        return low
+    end
+    return get_clamped((r_hi + r_lo) / 2, low, high)
+end
+
+local function get_fit_points(band_points)
+    local points = {}
+    for _, vert in ipairs(band_points) do
+        if vert.outer then
+            points[#points + 1] = vert
+        end
+    end
+    if #points == 0 then
+        return band_points
+    end
+    return points
+end
+
+local function get_ramp_weight(coord_z, lo, hi, ramp)
+    if coord_z < lo then
+        return get_smoothstep(lo - ramp, lo, coord_z)
+    end
+    if coord_z > hi then
+        return 1 - get_smoothstep(hi, hi + ramp, coord_z)
+    end
+    return 1
+end
+
+local function get_ramp_length(move)
+    return get_clamped(abs(move) / PRESS_SLOPE, RAMP_MIN, RAMP)
+end
+
+function get_case_rise(envelope, coord_z, angle)
+    return envelope and sample(envelope, envelope.rise, coord_z, angle) or ENVELOPE_CAP
+end
+
+local function get_squeeze_move(radius, target)
+    if radius > target then
+        return max(target, radius - SQUEEZE_MAX) - radius
+    end
+    return 0
+end
+
+local function get_band_move(radius, vert, target)
+    if vert.outer then
+        return get_clamped(target - radius - vert.depth, -SQUEEZE_MAX, FILL_MAX)
+    end
+    return get_squeeze_move(radius, target - INNER_GAP)
+end
+
+local function get_press_move(radius, vert, target)
+    if vert.outer then
+        return max(target - radius - vert.depth, -SQUEEZE_MAX)
+    end
+    return max(target - INNER_GAP - radius, -SQUEEZE_MAX)
+end
+
+local function get_hand_end(zones, wrist_z)
+    return min(max(zones.band.hi, zones.case.hi) + RAMP + HAND_RAMP, wrist_z - WRIST_MARGIN)
+end
+
+local function get_rigid_share(coord_z, zone, hand_end, shares)
+    local hand_weight = get_hand_weight(coord_z, hand_end)
+    shares[zone.hand] = get_smoothstep(zone.lo - RAMP, zone.lo, coord_z) * hand_weight
+    return get_smoothstep(zone.band.lo - RAMP - RIGID_RAMP, zone.band.lo - RAMP, coord_z) * hand_weight
+end
+
+local function is_rigid_bone(roles, bone)
+    return bone == roles.forearm or bone == roles.hand
+end
+
+local function is_pinned(vert)
+    return vert.arm < ARM_WEIGHT_MIN
+end
+
+local function mark_band_edge(inside, outside, lo, hi)
+    local coord_z = inside.z
+    if coord_z < lo or coord_z > hi or not (inside.record and outside.record) then
+        return
+    end
+    local outside_z = outside.z
+    local edge = outside_z < lo and lo or outside_z > hi and hi
+    if not edge then
+        return
+    end
+    local share = (edge - coord_z) / (outside_z - coord_z)
+    if share > (outside.edge_share or 0) then
+        outside.edge_share = share
+    end
+end
+
+local function mark_band_pair(first, second, lo, hi)
+    if first and second then
+        mark_band_edge(first, second, lo, hi)
+        mark_band_edge(second, first, lo, hi)
+    end
+end
+
+local function mark_face_edges(faces, band)
+    local lo, hi = band.lo, band.hi
+    local stride = wd_build_slice.STRIDE * 3
+    for base = 1, #faces - 2, 3 do
+        if base % stride == 1 then
+            wd_build_slice.check()
+        end
+        local first, second, third = faces[base] or nil, faces[base + 1] or nil, faces[base + 2] or nil
+        mark_band_pair(first, second, lo, hi)
+        mark_band_pair(second, third, lo, hi)
+        mark_band_pair(third, first, lo, hi)
+    end
+end
+
+local function move_sleeve(patch, verts, to_model, fit, zones, floor_layers)
+    local band, case = zones.band, zones.case
+    local center_x, center_y = fit.center_x, fit.center_y
+    local target = fit.radius
+    local stats = { moved = 0, max_squeeze = 0, max_fill = 0 }
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local coord_z = vert.z
+        local dx, dy = vert.x - center_x, vert.y - center_y
+        local radius = sqrt(dx * dx + dy * dy)
+        local angle = atan2(dy, dx)
+        local hand_weight = get_hand_weight(coord_z, fit.hand_end)
+        local band_move = get_band_move(radius, vert, target)
+        local band_ramp = get_ramp_weight(coord_z, band.lo, band.hi, get_ramp_length(band_move))
+        local move = 0
+        if band_ramp > 0 then
+            move = band_ramp * hand_weight * band_move
+            vert.sector = get_sector(angle)
+        end
+        local edge_share = vert.edge_share
+        if edge_share then
+            move = min(move, hand_weight * get_press_move(radius, vert, target + EDGE_SLACK / edge_share))
+        end
+        move =
+            min(move, hand_weight * get_press_move(radius, vert, target + get_case_rise(case.envelope, coord_z, angle)))
+        if vert.under or is_pinned(vert) or floor_layers[vert.layer] then
+            move = 0
+        elseif vert.floor and not edge_share and (coord_z < band.lo - RAMP or coord_z > band.hi + RAMP) then
+            move = max(move, min(0, INNER_GAP - vert.floor))
+        end
+        if move < 0 then
+            vert.lowered = -move
+        end
+        vert.angle = angle
+        vert.radius = radius + move
+        if abs(move) >= MOVE_MIN and radius > 0 then
+            local factor = (radius + move) / radius
+            local coord_x, coord_y = center_x + dx * factor, center_y + dy * factor
+            local ok, reason = patch.set_position(vert.record, transform_xyz(to_model, coord_x, coord_y, coord_z))
+            if not ok then
+                return nil, reason
+            end
+            vert.x, vert.y = coord_x, coord_y
+            stats.moved = stats.moved + 1
+            stats.max_squeeze = max(stats.max_squeeze, -move)
+            stats.max_fill = max(stats.max_fill, move)
+        end
+    end
+    return stats
+end
+
+local function get_residuals(verts, zones, target)
+    local band, case = zones.band, zones.case
+    local poke = -math.huge
+    local ring = {}
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local coord_z = vert.z
+        local in_band = coord_z >= band.lo and coord_z <= band.hi
+        if in_band then
+            poke = max(poke, vert.radius - target)
+        else
+            local rise = get_case_rise(case.envelope, coord_z, vert.angle)
+            if rise < SQUEEZE_MAX then
+                poke = max(poke, vert.radius - target - rise)
+            end
+        end
+        if in_band and vert.outer then
+            local sector = vert.sector
+            ring[sector] = max(ring[sector] or 0, vert.radius)
+        end
+    end
+    local gap = next(ring) == nil and 0 or -math.huge
+    for _, radius in pairs(ring) do
+        gap = max(gap, target - radius)
+    end
+    return poke, gap
+end
+
+function get_slide(space, zones)
+    local reach = max(zones.band.hi, zones.case.hi) + HAND_RAMP
+    return get_clamped(reach - (space.wrist_z - WRIST_MARGIN), 0, SLIDE_MAX)
+end
+
+local function get_dilated_envelope(rise, rows, bins)
+    local across = {}
+    for row = 1, rows do
+        check_line(row)
+        local base = (row - 1) * bins
+        local previous, current = rise[base + 1], rise[base + 1]
+        for bin = 1, bins do
+            local following = bin < bins and rise[base + bin + 1] or current
+            local lowest = previous < current and previous or current
+            if following < lowest then
+                lowest = following
+            end
+            across[base + bin] = lowest
+            previous, current = current, following
+        end
+    end
+    local dilated = {}
+    for row = 1, rows do
+        check_line(row)
+        local base = (row - 1) * bins
+        local below = row > 1 and base - bins or base
+        local above = row < rows and base + bins or base
+        for bin = 1, bins do
+            local lowest = across[base + bin]
+            local value = across[below + bin]
+            if value < lowest then
+                lowest = value
+            end
+            value = across[above + bin]
+            if value < lowest then
+                lowest = value
+            end
+            dilated[base + bin] = lowest < ENVELOPE_CAP and lowest or ENVELOPE_CAP
+        end
+    end
+    return dilated
+end
+
+local function sweep_envelope_row(rise, swept, base, bins, width, queue, values)
+    width = min(width, bins)
+    local head, tail = 1, 0
+    for step = 2 - width, bins do
+        local value = rise[base + (step - 1) % bins + 1]
+        while tail >= head and values[tail] >= value do
+            tail = tail - 1
+        end
+        tail = tail + 1
+        queue[tail], values[tail] = step, value
+        if queue[head] <= step - width then
+            head = head + 1
+        end
+        if step >= 1 then
+            swept[base + step] = values[head]
+        end
+    end
+end
+
+local function limit_envelope_slope(rise, rows, bins, angle_rise)
+    local z_rise = PRESS_SLOPE * Z_STEP
+    for row = 1, rows do
+        check_line(row)
+        local base = (row - 1) * bins
+        local carried = rise[base + 1]
+        for index = base + 2, base + bins do
+            carried = carried + angle_rise
+            local value = rise[index]
+            if value <= carried then
+                carried = value
+            else
+                rise[index] = carried
+            end
+        end
+        for index = base + bins - 1, base + 1, -1 do
+            carried = carried + angle_rise
+            local value = rise[index]
+            if value <= carried then
+                carried = value
+            else
+                rise[index] = carried
+            end
+        end
+    end
+    for bin = 1, bins do
+        check_line(bin)
+        local carried = rise[bin]
+        for index = bin + bins, (rows - 1) * bins + bin, bins do
+            carried = carried + z_rise
+            local value = rise[index]
+            if value <= carried then
+                carried = value
+            else
+                rise[index] = carried
+            end
+        end
+        for index = (rows - 2) * bins + bin, 1, -bins do
+            carried = carried + z_rise
+            local value = rise[index]
+            if value <= carried then
+                carried = value
+            else
+                rise[index] = carried
+            end
+        end
+    end
+end
+
+local function add_envelope_points(lowest, points, place, lowering)
+    local frame, scale, face, slide, first = place.frame, place.scale, place.face, place.slide, place.first
+    local rows, bins, angle_step = place.rows, place.bins, ANGLE_STEP
+    local xs, ys, zs = points.x, points.y, points.z
+    local stride = wd_build_slice.STRIDE
+    for index = 1, points.count do
+        if index % stride == 0 then
+            wd_build_slice.check()
+        end
+        local coord_x, coord_y, along = transform_xyz(frame, xs[index], ys[index], zs[index])
+        local row = floor((along * scale - slide - first) / Z_STEP + 0.5) + 1
+        if row >= 1 and row <= rows then
+            local offset = (atan2(coord_y, coord_x) - face + math.pi) % full_turn
+            local cell = (row - 1) * bins + min(floor(offset / angle_step) + 1, bins)
+            local radius = sqrt(coord_x * coord_x + coord_y * coord_y) * scale - lowering
+            if radius < (lowest[cell] or math.huge) then
+                lowest[cell] = radius
+            end
+        end
+    end
+end
+
+function new_case_envelope(case_points, window_points, window_lowering, place, roll_lo, roll_hi, z_lo, z_hi)
+    local angle_step = ANGLE_STEP
+    local pad = SQUEEZE_MAX / PRESS_SLOPE
+    local first = z_lo - pad
+    local roll_first = floor(roll_lo / angle_step + 0.5)
+    local envelope = new_grid(
+        first,
+        floor((z_hi + pad - first) / Z_STEP) + 1,
+        place.face - math.pi + (roll_first + 0.5) * angle_step
+    )
+    local rows, bins = envelope.rows, envelope.bins
+    place.first, place.rows, place.bins = first, rows, bins
+    local lowest = {}
+    add_envelope_points(lowest, case_points, place, 0)
+    for row = 1, rows do
+        check_line(row)
+        fill_row(lowest, (row - 1) * bins, bins, angle_step)
+    end
+    for bin = 1, bins do
+        check_line(bin)
+        fill_column(lowest, bin, rows, bins)
+    end
+    local huge = math.huge
+    local stride, check = wd_build_slice.STRIDE, wd_build_slice.check
+    local bottom = huge
+    for cell = 1, rows * bins do
+        if cell % stride == 0 then
+            check()
+        end
+        local radius = lowest[cell]
+        if radius and radius < bottom then
+            bottom = radius
+        end
+    end
+    if bottom == huge then
+        return nil
+    end
+    local windows = {}
+    add_envelope_points(windows, window_points, place, window_lowering)
+    local rise = {}
+    local cap = ENVELOPE_CAP
+    for cell = 1, rows * bins do
+        if cell % stride == 0 then
+            check()
+        end
+        local radius = lowest[cell] or huge
+        local window = windows[cell]
+        if window and window < radius then
+            radius = window
+        end
+        local value = radius - bottom
+        rise[cell] = value < 0 and 0 or (value > cap and cap or value)
+    end
+    rise = get_dilated_envelope(rise, rows, bins)
+    local width = floor(roll_hi / angle_step + 0.5) - roll_first + 1
+    local swept, queue, values = {}, {}, {}
+    for row = 1, rows do
+        check_line(row)
+        sweep_envelope_row(rise, swept, (row - 1) * bins, bins, width, queue, values)
+    end
+    limit_envelope_slope(swept, rows, bins, PRESS_SLOPE * bottom * angle_step)
+    envelope.rise = swept
+    return envelope
+end
+
+local function get_band_points(verts, band)
+    local band_points = {}
+    for _, vert in ipairs(verts) do
+        local coord_z = vert.z
+        if coord_z >= band.lo and coord_z <= band.hi and not is_pinned(vert) then
+            band_points[#band_points + 1] = vert
+        end
+    end
+    return band_points
+end
+
+local function get_floor_radius(layers, floor_layers, band, center_x, center_y)
+    local floor_radius = 0
+    for slot, layer in ipairs(layers) do
+        if floor_layers[slot] then
+            for _, point in ipairs(layer.point_list) do
+                local coord_z = point.z
+                if coord_z >= band.lo - FLOOR_REACH and coord_z <= band.hi + FLOOR_REACH and not point.under then
+                    local dx, dy = point.x - center_x, point.y - center_y
+                    floor_radius = max(floor_radius, sqrt(dx * dx + dy * dy))
+                end
+            end
+        end
+    end
+    return floor_radius
+end
+
+local function fit_ring(fit, band_points, layers, floor_layers, band)
+    local fit_points = get_fit_points(band_points)
+    fit.center_x, fit.center_y = fit_outer_center(fit_points)
+    fit.radius = max(
+        get_target_radius(get_outer_ring(fit_points, fit.center_x, fit.center_y)),
+        get_floor_radius(layers, floor_layers, band, fit.center_x, fit.center_y)
+    )
+end
+
+local function shift_point(patch, point, shift, to_model, center_x, center_y)
+    local dx, dy = point.x - center_x, point.y - center_y
+    local radius = sqrt(dx * dx + dy * dy)
+    if radius <= 0 then
+        return true
+    end
+    local factor = (radius + shift) / radius
+    local coord_x, coord_y = center_x + dx * factor, center_y + dy * factor
+    local ok, reason =
+        patch.set_position(point.record or point.layer_record, transform_xyz(to_model, coord_x, coord_y, point.z))
+    if not ok then
+        return nil, reason
+    end
+    point.x, point.y = coord_x, coord_y
+    point.radius = radius + shift
+    if point.lowered then
+        point.lowered = point.lowered - shift
+    end
+    return true
+end
+
+local function get_layer_twins(layers)
+    local points = {}
+    for _, layer in ipairs(layers) do
+        for _, point in ipairs(layer.point_list) do
+            points[#points + 1] = point
+        end
+    end
+    return get_twins(points)
+end
+
+local function is_liftable(corner, band)
+    local lowered = corner.lowered
+    return lowered and lowered > 0 and not corner.edge_share and (corner.z < band.lo or corner.z > band.hi)
+end
+
+local function shift_twin(patch, twin, shift, to_model, center_x, center_y)
+    local amount = shift
+    if shift > 0 then
+        amount = min(shift, twin.lowered or 0)
+    end
+    if amount == 0 then
+        return true
+    end
+    return shift_point(patch, twin, amount, to_model, center_x, center_y)
+end
+
+local function shift_twins(patch, twins, point, shift, to_model, center_x, center_y)
+    local group = twins[point]
+    if not group then
+        return shift_twin(patch, point, shift, to_model, center_x, center_y)
+    end
+    for _, twin in ipairs(group) do
+        local ok, reason = shift_twin(patch, twin, shift, to_model, center_x, center_y)
+        if not ok then
+            return nil, reason
+        end
+    end
+    return true
+end
+
+local function get_cover_deficit(point, face, cover, fit)
+    local center_x, center_y = fit.center_x, fit.center_y
+    local dx, dy = point.x - center_x, point.y - center_y
+    local radius = sqrt(dx * dx + dy * dy)
+    if radius <= 0 then
+        return 0
+    end
+    local hit, first, second, third, first_share, second_share, third_share =
+        get_moved_face_hit(cover, face, center_x, center_y, point.z, dx / radius, dy / radius)
+    return hit and radius + INNER_GAP - hit or 0, first, second, third, first_share, second_share, third_share
+end
+
+local function lower_twins(patch, twins, point, deficit, fit, to_model)
+    local ok, reason =
+        shift_twins(patch, twins, point, -min(deficit, SQUEEZE_MAX), to_model, fit.center_x, fit.center_y)
+    if not ok then
+        return nil, reason
+    end
+    return 1
+end
+
+local function settle_cover(patch, twins, point, cover, fit, to_model, band)
+    local deficit, first, second, third, first_share, second_share, third_share =
+        get_cover_deficit(point, point.cover_face, cover, fit)
+    if deficit <= MOVE_MIN then
+        return 0
+    end
+    local corners = { first, second, third }
+    local shares = { first_share, second_share, third_share }
+    local reach = 0
+    local reaches_band = min(first.z, second.z, third.z) <= band.hi and max(first.z, second.z, third.z) >= band.lo
+    for slot, corner in ipairs(corners) do
+        if is_liftable(corner, band) then
+            reach = reach + max(shares[slot], 0)
+        end
+    end
+    if reaches_band or reach <= LIFT_REACH_MIN then
+        return lower_twins(patch, twins, point, deficit, fit, to_model)
+    end
+    local needed = deficit / reach
+    for _, corner in ipairs(corners) do
+        if is_liftable(corner, band) then
+            local ok, reason =
+                shift_twins(patch, twins, corner, min(needed, corner.lowered), to_model, fit.center_x, fit.center_y)
+            if not ok then
+                return nil, reason
+            end
+        end
+    end
+    return 1
+end
+
+local function settle_self_cover(patch, twins, point, cover, fit, to_model)
+    local deficit = get_cover_deficit(point, point.self_cover_face, cover, fit)
+    if deficit <= MOVE_MIN then
+        return 0
+    end
+    return lower_twins(patch, twins, point, deficit, fit, to_model)
+end
+
+local function keep_covers(patch, layers, cover, fit, to_model, band)
+    local stride = wd_build_slice.STRIDE
+    local settled, visited = 0, 0
+    local twins = get_layer_twins(layers)
+    for _ = 1, COVER_PASSES do
+        local pass_start = settled
+        for _, layer in ipairs(layers) do
+            for _, point in ipairs(layer.point_list) do
+                visited = visited + 1
+                if visited % stride == 0 then
+                    wd_build_slice.check()
+                end
+                if point.cover_face then
+                    local count, reason = settle_cover(patch, twins, point, cover, fit, to_model, band)
+                    if not count then
+                        return nil, reason
+                    end
+                    settled = settled + count
+                end
+                if point.self_cover_face then
+                    local count, reason = settle_self_cover(patch, twins, point, cover, fit, to_model)
+                    if not count then
+                        return nil, reason
+                    end
+                    settled = settled + count
+                end
+            end
+        end
+        if settled == pass_start then
+            break
+        end
+    end
+    return settled
+end
+
+local function find_root(parent, index)
+    local above = parent[index]
+    while above ~= index do
+        local grand = parent[above]
+        parent[index] = grand
+        index, above = grand, parent[grand]
+    end
+    return index
+end
+
+local function count_islands(indices)
+    local parent, islands = {}, 0
+    for slot = 1, #indices do
+        local index = indices[slot]
+        if not parent[index] then
+            parent[index] = index
+            islands = islands + 1
+        end
+    end
+    local stride = wd_build_slice.STRIDE * 3
+    for base = 1, #indices - 2, 3 do
+        if base % stride == 1 then
+            wd_build_slice.check()
+        end
+        local root = find_root(parent, indices[base])
+        for corner = base + 1, base + 2 do
+            local other = find_root(parent, indices[corner])
+            if other ~= root then
+                parent[other] = root
+                islands = islands - 1
+            end
+        end
+    end
+    return islands
+end
+
+local function take_fluff(mesh, layers, surface_layers)
+    local fluff, slot = {}, 0
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        if vertices then
+            slot = slot + 1
+            local indices = FLUFF_SHADERS[child.shader] and read_indices(mesh, vertices)
+            if indices and count_islands(indices) >= FLUFF_ISLANDS_MIN then
+                fluff[slot] = vertices
+                local layer = layers[slot]
+                layer.points, layer.point_list = {}, {}
+                surface_layers[slot].points = {}
+            end
+        end
+    end
+    return fluff
+end
+
+local function get_sleeve_verts(verts, fluff)
+    if next(fluff) == nil then
+        return verts
+    end
+    local sleeve_verts = {}
+    for _, vert in ipairs(verts) do
+        if not fluff[vert.layer] then
+            sleeve_verts[#sleeve_verts + 1] = vert
+        end
+    end
+    return sleeve_verts
+end
+
+local function is_over_case(envelope, coord_z, dx, dy)
+    return get_case_rise(envelope, coord_z, atan2(dy, dx)) < SQUEEZE_MAX
+end
+
+local function place_fluff(mesh, vertices, roles, to_sleeve, fit)
+    local axis_i, axis_j, axis_k, origin = to_sleeve.i, to_sleeve.j, to_sleeve.k, to_sleeve.c
+    local positions = read_positions(mesh, vertices)
+    local source_xs, source_ys, source_zs = positions.x, positions.y, positions.z
+    local center_x, center_y = fit.center_x, fit.center_y
+    local radius_limit = RADIUS_MAX * RADIUS_MAX
+    local xs, ys, zs, on_arm = {}, {}, {}, {}
+    local stride = wd_build_slice.STRIDE
+    for index = 1, vertices.count do
+        if index % stride == 0 then
+            wd_build_slice.check()
+        end
+        local source_x, source_y, source_z = source_xs[index], source_ys[index], source_zs[index]
+        local coord_x = source_x * axis_i.x + source_y * axis_j.x + source_z * axis_k.x + origin.x
+        local coord_y = source_x * axis_i.y + source_y * axis_j.y + source_z * axis_k.y + origin.y
+        xs[index], ys[index] = coord_x - center_x, coord_y - center_y
+        zs[index] = source_x * axis_i.z + source_y * axis_j.z + source_z * axis_k.z + origin.z
+        local is_on_arm = false
+        if coord_x * coord_x + coord_y * coord_y < radius_limit then
+            local links = read_slots_into(mesh, vertices, index, fluff_bones, fluff_weights)
+            local _, _, left = get_slot_weights(roles, links, fluff_bones, fluff_weights)
+            is_on_arm = left >= LEFT_WEIGHT_MIN
+        end
+        on_arm[index] = is_on_arm
+    end
+    return xs, ys, zs, on_arm
+end
+
+local function collapse_fluff_child(patch, mesh, vertices, roles, to_sleeve, fit, zones)
+    local indices = read_indices(mesh, vertices)
+    local xs, ys, zs, on_arm = place_fluff(mesh, vertices, roles, to_sleeve, fit)
+    local band, envelope = zones.band, zones.case.envelope
+    local collapsed = 0
+    local stride = wd_build_slice.STRIDE * 3
+    for base = 1, #indices - 2, 3 do
+        if base % stride == 1 then
+            wd_build_slice.check()
+        end
+        local first, second, third = indices[base] + 1, indices[base + 1] + 1, indices[base + 2] + 1
+        if on_arm[first] or on_arm[second] or on_arm[third] then
+            local first_z, second_z, third_z = zs[first], zs[second], zs[third]
+            local first_x, second_x, third_x = xs[first], xs[second], xs[third]
+            local first_y, second_y, third_y = ys[first], ys[second], ys[third]
+            local is_hidden = min(first_z, second_z, third_z) <= band.hi and max(first_z, second_z, third_z) >= band.lo
+                or is_over_case(envelope, first_z, first_x, first_y)
+                or is_over_case(envelope, second_z, second_x, second_y)
+                or is_over_case(envelope, third_z, third_x, third_y)
+                or is_over_case(
+                    envelope,
+                    (first_z + second_z + third_z) / 3,
+                    (first_x + second_x + third_x) / 3,
+                    (first_y + second_y + third_y) / 3
+                )
+            if is_hidden then
+                patch.collapse_triangle(vertices, (base + 2) / 3)
+                collapsed = collapsed + 1
+            end
+        end
+    end
+    return collapsed
+end
+
+local function collapse_fluff(patch, mesh, fluff, roles, to_sleeve, fit, zones)
+    local collapsed = 0
+    for _, vertices in pairs(fluff) do
+        collapsed = collapsed + collapse_fluff_child(patch, mesh, vertices, roles, to_sleeve, fit, zones)
+    end
+    return collapsed
+end
+
+function squeeze(space, zones)
+    local mesh = space.mesh
+    local roles, roles_error = wd_build_probe.run("roles", get_bone_roles, mesh)
+    if not roles then
+        return nil, roles_error
+    end
+    local wrist_z = space.wrist_z
+    local band, case = zones.band, zones.case
+    local fit = { hand_end = get_hand_end(zones, wrist_z) }
+    local floor_z = min(band.lo - RAMP - RIGID_RAMP, case.lo - RAMP)
+    local collected, layers, surface_layers = wd_build_probe.run(
+        "collect",
+        collect_sleeve,
+        mesh,
+        roles,
+        space.to_sleeve,
+        floor_z,
+        fit.hand_end,
+        wrist_z,
+        true
+    )
+    local fluff = wd_build_probe.run("fluff", take_fluff, mesh, layers, surface_layers)
+    local verts = get_sleeve_verts(collected, fluff)
+    local band_points = get_band_points(verts, band)
+    if #band_points == 0 then
+        return nil, "no sleeve verts in the band"
+    end
+    local cover_x, cover_y = fit_outer_center(band_points)
+    local cover_faces, edge_faces = wd_build_probe.run("faces", get_layer_faces, mesh, layers, surface_layers)
+    local cover = wd_build_probe.run("cover", new_layer_cover, cover_x, cover_y, floor_z, fit.hand_end, cover_faces)
+    wd_build_probe.run("depth", set_depths, cover, verts, min(band.lo, case.lo) - RAMP)
+    local floor_layers = wd_build_probe.run("layers", set_layer_spans, cover, layers)
+    wd_build_probe.run("fit", fit_ring, fit, band_points, layers, floor_layers, band)
+    wd_build_probe.run("edges", mark_face_edges, edge_faces, band)
+    weld_twins(verts, "edge_share")
+    local patch = wd_ogf.new_patch(mesh)
+    local stats, move_error =
+        wd_build_probe.run("move", move_sleeve, patch, verts, space.to_model, fit, zones, floor_layers)
+    if not stats then
+        return nil, move_error
+    end
+    local raised, raise_error =
+        wd_build_probe.run("covers", keep_covers, patch, layers, cover, fit, space.to_model, band)
+    if not raised then
+        return nil, raise_error
+    end
+    local collapsed =
+        wd_build_probe.run("collapse", collapse_fluff, patch, mesh, fluff, roles, space.to_sleeve, fit, zones)
+    local rigidified, rigid_error = wd_build_probe.run(
+        "rigidify",
+        rigidify,
+        patch,
+        collected,
+        roles,
+        is_rigid_bone,
+        get_rigid_share,
+        { band = band, lo = min(band.lo, case.lo), hand = roles.hand },
+        fit.hand_end
+    )
+    if not rigidified then
+        return nil, rigid_error
+    end
+    local residual_poke, ring_gap = wd_build_probe.run("residuals", get_residuals, verts, zones, fit.radius)
+    local data, digest = wd_build_probe.run("bytes", patch.build)
+    return {
+        data = data,
+        digest = digest,
+        surface_layers = surface_layers,
+        center = { x = fit.center_x, y = fit.center_y },
+        radius = fit.radius,
+        moved = stats.moved,
+        rigidified = rigidified,
+        collapsed = collapsed,
+        max_squeeze = stats.max_squeeze,
+        max_fill = stats.max_fill,
+        residual_poke = residual_poke,
+        ring_gap = ring_gap,
+    }
+end

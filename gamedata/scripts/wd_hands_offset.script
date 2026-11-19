@@ -17,11 +17,6 @@ local function set_axes(target, source)
     end
 end
 
-function ease_smooth(progress)
-    progress = clamp(progress, 0, 1)
-    return progress * progress * (3 - 2 * progress)
-end
-
 local function lerp_axes(target, from, to, ease)
     for axis = 1, 3 do
         target[axis] = from[axis] + (to[axis] - from[axis]) * ease
@@ -48,7 +43,7 @@ function new_blend(from, to, now, duration)
 end
 
 function advance_blend(blend, now)
-    local ease = ease_smooth((now - blend.start) / blend.duration)
+    local ease = wd_frame.get_smoothstep((now - blend.start) / blend.duration)
     lerp_axes(blend.current.pos, blend.from.pos, blend.to.pos, ease)
     lerp_axes(blend.current.rot, blend.from.rot, blend.to.rot, ease)
     return blend.current

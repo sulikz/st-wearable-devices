@@ -1,5 +1,7 @@
 SECTION = "wd_bracer"
 MODEL = "wd\\bracer_rigid\\bracer_rigid"
+BAKED_WALL = MODEL .. "_wall.bin"
+ATT_BONE = "l_forearm_twist"
 
 BAKED_PATCH_TEXTURE = "wd\\bracer_rigid\\customization\\faction_patches\\patch_loners"
 
@@ -13,10 +15,31 @@ ACCESSORY_MESHES_PER_BONE = 3
 
 local accessory_by_section = {}
 
+function get_mount_parent()
+    if wd_slots.is_bracer_worn() then
+        return SECTION
+    end
+end
+
 DEFAULTS = {
-    model_pos = { 0.0578507975669, 0.0000962907679, 0.000420982957 },
-    model_rot = { 90.1812, -0.1302, 84.0 },
+    model_pos = { 0.0695, 0.0000962907679, 0.000420982957 },
+    model_rot = { 90.1812, -0.1302, 115.0 },
     model_scale = 0.86853166871047,
+}
+CLIP_ROLL = 132.1815
+WATCH_TWIST = 30
+HAND_RIM = 0.105162
+WRIST_REACH = 0.112155
+
+local function new_held_range(value)
+    return { value, value }
+end
+
+local default_pos, default_rot = DEFAULTS.model_pos, DEFAULTS.model_rot
+LIMITS = {
+    model_pos = { { 0.03, 0.12 }, new_held_range(default_pos[2]), new_held_range(default_pos[3]) },
+    model_rot = { new_held_range(default_rot[1]), new_held_range(default_rot[2]), new_held_range(default_rot[3]) },
+    model_scale = { 0.7, 1.1 },
 }
 
 MOUNT_BIND = {
@@ -36,13 +59,31 @@ local cfg = wd_config.new({
     family_fields = FIELDS,
     user_fields = "all",
     defaults = DEFAULTS,
+    limits = LIMITS,
 })
 
 transforms = cfg.transforms
 saved = cfg.saved
 reset_transforms = cfg.reset_transforms
 resolve = cfg.resolve
-load_transforms = cfg.load_transforms
+
+function get_slide_range()
+    local range = LIMITS.model_pos[1]
+    local reach = WRIST_REACH + wd_tube_squeeze.OVERHANG_MAX - HAND_RIM * transforms.model_scale
+    return math.max(range[1], DEFAULTS.model_pos[1] - reach), range[2]
+end
+
+function clamp_slide()
+    local low, high = get_slide_range()
+    local pos = transforms.model_pos
+    pos[1] = clamp(pos[1], low, high)
+end
+
+function load_transforms()
+    cfg.load_transforms()
+    clamp_slide()
+end
+
 save_global = cfg.save_global
 
 function get_patch_texture(patch_section)

@@ -90,7 +90,7 @@ local USER_FIELDS = {
 }
 
 DEFAULTS = {
-    model_pos = { 0.0002, -0.0077, 0.1237 },
+    model_pos = { 0.0002, -0.0092, 0.1237 },
     model_rot = { -89.099, 0.587, -177.99 },
     model_scale = 1.5600000314713,
     skin = "regular",

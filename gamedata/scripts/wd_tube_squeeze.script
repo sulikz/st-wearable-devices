@@ -1,0 +1,998 @@
+jit.off(true, true)
+
+TUBE_CLEARANCE = 0.001
+SETTLE_STEP = 0.002
+SETTLE_SAMPLES_MAX = 16
+SETTLE_PASSES = 3
+SETTLE_NEAR = 0.003
+SETTLE_MARGIN = 0.0005
+TAPER_RATIO = 1.2
+TAPER_MAX = 0.05
+RIM_INSET = 0.002
+TUBE_LIP = 0.02
+TUBE_RIGID_RAMP = 0.11
+HAND_FLEX = 0.02
+WRIST_FADE = 0.012
+LIP_MARGIN = 0.002
+OUTER_SPREAD = 2
+UNFOLD_PASSES = 4
+UNFOLD_SHARE = 0.5
+AXIS_INSET = 0.01
+AXIS_BAND = 0.03
+AXIS_OFFSET_MAX = 0.03
+AXIS_TILT_MAX = math.rad(6)
+OVERHANG_MAX = 0.015
+BAKED_WALL_MAGIC = "WDTW"
+BAKED_WALL_FORMAT = 1
+BAKED_WALL_HEADER = 84
+
+local WALL_CHECK_CASTS = 4096
+
+local atan2 = math.atan2
+local ceil = math.ceil
+local cos = math.cos
+local sin = math.sin
+local floor = math.floor
+local sqrt = math.sqrt
+local max = math.max
+local min = math.min
+local pi = math.pi
+local ldexp = math.ldexp
+local byte = string.byte
+local full_turn = 2 * pi
+
+local transform_xyz = wd_frame.transform_xyz
+local get_clamped = wd_sleeve_mesh.get_clamped
+local get_smoothstep = wd_sleeve_mesh.get_smoothstep
+local get_bone_roles = wd_sleeve_mesh.get_bone_roles
+local get_slot_weights = wd_sleeve_mesh.get_slot_weights
+local collect_sleeve = wd_sleeve_mesh.collect_sleeve
+local fit_inner_center = wd_sleeve_mesh.fit_inner_center
+local get_angle_span = wd_sleeve_mesh.get_angle_span
+local add_faces = wd_sleeve_mesh.add_faces
+local get_layer_faces = wd_sleeve_mesh.get_layer_faces
+local classify_verts = wd_sleeve_mesh.classify_verts
+local get_hand_weight = wd_sleeve_mesh.get_hand_weight
+local rigidify = wd_sleeve_mesh.rigidify
+local weld_twins = wd_sleeve_mesh.weld_twins
+local RAMP = wd_sleeve_mesh.RAMP
+local RAMP_MIN = wd_sleeve_mesh.RAMP_MIN
+local INNER_GAP = wd_sleeve_mesh.INNER_GAP
+local ARM_WEIGHT_MIN = wd_sleeve_mesh.ARM_WEIGHT_MIN
+local FINGER_WEIGHT_MAX = wd_sleeve_mesh.FINGER_WEIGHT_MAX
+local LEFT_WEIGHT_MIN = wd_sleeve_mesh.LEFT_WEIGHT_MIN
+local RADIUS_MAX = wd_sleeve_mesh.RADIUS_MAX
+local RIGID_RAMP = wd_sleeve_mesh.RIGID_RAMP
+local HAND_RAMP = wd_sleeve_mesh.HAND_RAMP
+local MOVE_MIN = wd_sleeve_mesh.MOVE_MIN
+local RAY_EPSILON = wd_sleeve_mesh.RAY_EPSILON
+local BARY_SLACK = wd_sleeve_mesh.BARY_SLACK
+local FOREARM_BONE = wd_sleeve_mesh.FOREARM_BONE
+local new_grid = wd_polar_grid.new_grid
+local sample = wd_polar_grid.sample
+local fill_circular = wd_polar_grid.fill_circular
+local fill_column = wd_polar_grid.fill_column
+local get_spread_min = wd_polar_grid.get_spread_min
+local Z_STEP = wd_polar_grid.Z_STEP
+
+function get_tube_wall(wall, coord_z, angle)
+    return sample(wall, wall.radius, get_clamped(coord_z, wall.z_lo, wall.z_hi), angle)
+end
+
+local function get_tube_limit(wall, coord_z, angle)
+    return get_tube_wall(wall, coord_z, angle) - TUBE_CLEARANCE
+end
+
+local function is_arm_bone(roles, bone)
+    return roles.left[bone] and bone ~= roles.twist and not roles.fingers[bone]
+end
+
+local WALL_T_Z, WALL_Q_X, WALL_Q_Y, WALL_DOT = {}, {}, {}, {}
+
+local function cast_wall_triangle(wall, hits, first, second, third)
+    local z_lo, z_step = wall.z_lo, wall.z_step
+    local az, bz, cz = first.z, second.z, third.z
+    local row_first = max(ceil((min(az, bz, cz) - z_lo) / z_step) + 1, 1)
+    local row_last = min(floor((max(az, bz, cz) - z_lo) / z_step) + 1, wall.rows)
+    if row_first > row_last then
+        return 0
+    end
+    local ax, ay = first.x, first.y
+    local angle_low, angle_high = get_angle_span(ax, ay, second.x, second.y, third.x, third.y)
+    if not angle_low then
+        return 0
+    end
+    local edge1_x, edge1_y, edge1_z = second.x - ax, second.y - ay, bz - az
+    local edge2_x, edge2_y, edge2_z = third.x - ax, third.y - ay, cz - az
+    local angle_step, bins = wall.angle_step, wall.bins
+    local dirs_x, dirs_y = wall.dirs_x, wall.dirs_y
+    local radius, outer = hits.radius, hits.outer
+    local bin_first = floor((angle_low - wall.origin) / angle_step)
+    local bin_last = floor((angle_high - wall.origin) / angle_step) + 1
+    local t_x, t_y = -ax, -ay
+    local q_z = t_x * edge1_y - t_y * edge1_x
+    local row_t_z, row_q_x, row_q_y, row_dot = WALL_T_Z, WALL_Q_X, WALL_Q_Y, WALL_DOT
+    for row = row_first, row_last do
+        local t_z = z_lo + (row - 1) * z_step - az
+        local q_x = t_y * edge1_z - t_z * edge1_y
+        local q_y = t_z * edge1_x - t_x * edge1_z
+        row_t_z[row], row_q_x[row], row_q_y[row] = t_z, q_x, q_y
+        row_dot[row] = edge2_x * q_x + edge2_y * q_y + edge2_z * q_z
+    end
+    for step = bin_first, bin_last do
+        local bin = step % bins + 1
+        local dir_x, dir_y = dirs_x[bin], dirs_y[bin]
+        local p_x, p_y, p_z = dir_y * edge2_z, -dir_x * edge2_z, dir_x * edge2_y - dir_y * edge2_x
+        local det = edge1_x * p_x + edge1_y * p_y + edge1_z * p_z
+        if det <= -RAY_EPSILON or det >= RAY_EPSILON then
+            local inverse = 1 / det
+            local partial = t_x * p_x + t_y * p_y
+            for row = row_first, row_last do
+                local bary_u = (partial + row_t_z[row] * p_z) * inverse
+                if bary_u >= -BARY_SLACK and bary_u <= 1 + BARY_SLACK then
+                    local bary_v = (dir_x * row_q_x[row] + dir_y * row_q_y[row]) * inverse
+                    if bary_v >= -BARY_SLACK and bary_u + bary_v <= 1 + BARY_SLACK then
+                        local distance = row_dot[row] * inverse
+                        if distance > 0 then
+                            local key = (row - 1) * bins + bin
+                            local nearest = radius[key]
+                            if not nearest or distance < nearest then
+                                radius[key] = distance
+                            end
+                            local farthest = outer[key]
+                            if not farthest or distance > farthest then
+                                outer[key] = distance
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return (row_last - row_first + 1) * (bin_last - bin_first + 1)
+end
+
+local function cast_wall(wall, tube, scale)
+    local points = {}
+    local xs, ys, zs = tube.x, tube.y, tube.z
+    for index = 1, tube.count do
+        points[index] = { x = xs[index] * scale, y = ys[index] * scale, z = zs[index] * scale }
+    end
+    local dirs_x, dirs_y = {}, {}
+    for bin = 1, wall.bins do
+        local angle = wall.origin + (bin - 1) * wall.angle_step
+        dirs_x[bin], dirs_y[bin] = cos(angle), sin(angle)
+    end
+    wall.dirs_x, wall.dirs_y = dirs_x, dirs_y
+    local hits = { radius = {}, outer = {} }
+    local indices = tube.indices
+    local casts = 0
+    for base = 1, #indices - 2, 3 do
+        if casts >= WALL_CHECK_CASTS then
+            casts = 0
+            wd_build_slice.check()
+        end
+        local first, second, third =
+            points[indices[base] + 1], points[indices[base + 1] + 1], points[indices[base + 2] + 1]
+        if first and second and third then
+            casts = casts + cast_wall_triangle(wall, hits, first, second, third)
+        end
+    end
+    wall.dirs_x, wall.dirs_y = nil, nil
+    return hits.radius, hits.outer
+end
+
+local function fill_wall(wall, radius)
+    local bins = wall.bins
+    local filled = {}
+    for row = 1, wall.rows do
+        wd_build_slice.check()
+        if fill_circular(radius, (row - 1) * bins, bins) then
+            filled[#filled + 1] = row
+        end
+    end
+    if #filled == 0 then
+        return nil
+    end
+    for bin = 1, bins do
+        wd_build_slice.check()
+        fill_column(radius, bin, wall.rows, bins)
+    end
+    local first, last = filled[1], filled[#filled]
+    local kept = {}
+    for index = 1, (last - first + 1) * bins do
+        kept[index] = radius[(first - 1) * bins + index]
+    end
+    return kept, first, last
+end
+
+function new_tube_wall(tube, scale)
+    local z_lo, z_hi = math.huge, -math.huge
+    for index = 1, tube.count do
+        local coord_z = tube.z[index] * scale
+        z_lo, z_hi = min(z_lo, coord_z), max(z_hi, coord_z)
+    end
+    if z_lo > z_hi then
+        return nil
+    end
+    local wall = new_grid(z_lo, floor((z_hi - z_lo) / Z_STEP) + 1, -pi)
+    local nearest, farthest = cast_wall(wall, tube, scale)
+    local radius, first, last = fill_wall(wall, nearest)
+    if not radius then
+        return nil
+    end
+    local outer = fill_wall(wall, farthest)
+    wall.z_lo = z_lo + (first - 1) * wall.z_step
+    wall.rows = last - first + 1
+    wall.radius = radius
+    wall.rim = outer
+    wall.outer = get_spread_min(outer, wall.rows, wall.bins, OUTER_SPREAD)
+    wall.z_hi = wall.z_lo + (wall.rows - 1) * wall.z_step
+    wall.lo, wall.hi = z_lo, z_hi
+    return wall
+end
+
+function read_tube_points(mesh)
+    local xs, ys, zs, indices = {}, {}, {}, {}
+    local count, index_count = 0, 0
+    local stride = wd_build_slice.STRIDE
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        local child_indices = vertices and wd_ogf.read_indices(mesh, vertices)
+        if child_indices then
+            local positions = wd_ogf.read_positions(mesh, vertices)
+            local child_xs, child_ys, child_zs = positions.x, positions.y, positions.z
+            for index = 1, vertices.count do
+                if index % stride == 0 then
+                    wd_build_slice.check()
+                end
+                xs[count + index], ys[count + index], zs[count + index] =
+                    child_xs[index], child_ys[index], child_zs[index]
+            end
+            for slot = 1, #child_indices do
+                if slot % stride == 0 then
+                    wd_build_slice.check()
+                end
+                indices[index_count + slot] = child_indices[slot] + count
+            end
+            index_count = index_count + #child_indices
+            count = count + vertices.count
+        end
+    end
+    if count == 0 then
+        return nil, "the bracer model has no triangles"
+    end
+    return { count = count, x = xs, y = ys, z = zs, indices = indices }
+end
+
+local function read_baked_u32(data, position)
+    local first, second, third, fourth = byte(data, position, position + 3)
+    return first + second * 256 + third * 65536 + fourth * 16777216
+end
+
+local function read_baked_f64(data, position)
+    local first, second, third, fourth, fifth, sixth, seventh, eighth = byte(data, position, position + 7)
+    local exponent = (eighth % 128) * 16 + floor(seventh / 16)
+    if exponent == 2047 then
+        return nil
+    end
+    local mantissa = (((((seventh % 16) * 256 + sixth) * 256 + fifth) * 256 + fourth) * 256 + third) * 65536
+        + second * 256
+        + first
+    local sign = eighth >= 128 and -1 or 1
+    if exponent == 0 then
+        return sign * ldexp(mantissa, -1074)
+    end
+    return sign * ldexp(mantissa + 4503599627370496, exponent - 1075)
+end
+
+local F64_HIDDEN_BIT = 4503599627370496
+local F64_EXPONENTS = 2048
+local f64_scales = nil
+
+local function get_f64_scales()
+    if not f64_scales then
+        f64_scales = {}
+        for exponent = 1, F64_EXPONENTS - 2 do
+            local scale = ldexp(1, exponent - 1075)
+            f64_scales[exponent], f64_scales[exponent + F64_EXPONENTS] = scale, -scale
+        end
+    end
+    return f64_scales
+end
+
+local function read_baked_cells(data, first, count)
+    local cells = {}
+    local stride = wd_build_slice.STRIDE
+    local check = wd_build_slice.check
+    local scales = get_f64_scales()
+    local at = first
+    for cell = 1, count do
+        if cell % stride == 0 then
+            check()
+        end
+        local b1, b2, b3, b4, b5, b6, b7, b8 = byte(data, at, at + 7)
+        local low_nibble = b7 % 16
+        local scale = scales[b8 * 16 + (b7 - low_nibble) / 16]
+        if scale then
+            cells[cell] = (
+                (((((low_nibble * 256 + b6) * 256 + b5) * 256 + b4) * 256 + b3) * 65536)
+                + b2 * 256
+                + b1
+                + F64_HIDDEN_BIT
+            ) * scale
+        else
+            cells[cell] = read_baked_f64(data, at)
+        end
+        at = at + 8
+    end
+    return cells
+end
+
+function read_tube_wall(data, scale, model_length)
+    if #data < BAKED_WALL_HEADER or data:sub(1, 4) ~= BAKED_WALL_MAGIC then
+        return nil, "not a baked tube wall"
+    end
+    if read_baked_u32(data, 5) ~= BAKED_WALL_FORMAT then
+        return nil, "baked tube wall format differs"
+    end
+    if read_baked_u32(data, 9) ~= model_length then
+        return nil, "baked for another bracer model"
+    end
+    if read_baked_f64(data, 21) ~= scale then
+        return nil, "baked for another scale"
+    end
+    local rows, bins = read_baked_u32(data, 13), read_baked_u32(data, 17)
+    local cells = rows * bins
+    if #data ~= BAKED_WALL_HEADER + cells * 16 then
+        return nil, "baked tube wall size differs"
+    end
+    local wall = {
+        rows = rows,
+        bins = bins,
+        z_lo = read_baked_f64(data, 29),
+        z_step = read_baked_f64(data, 37),
+        origin = read_baked_f64(data, 45),
+        angle_step = read_baked_f64(data, 53),
+        z_hi = read_baked_f64(data, 61),
+        lo = read_baked_f64(data, 69),
+        hi = read_baked_f64(data, 77),
+    }
+    wall.radius = read_baked_cells(data, BAKED_WALL_HEADER + 1, cells)
+    wall.rim = read_baked_cells(data, BAKED_WALL_HEADER + 1 + cells * 8, cells)
+    wall.outer = get_spread_min(wall.rim, rows, bins, OUTER_SPREAD)
+    return wall
+end
+
+local function get_tube_offset(vert)
+    return vert.outer and vert.depth or INNER_GAP
+end
+
+local function set_tube_radius(vert, radius)
+    local factor = radius / vert.source_radius
+    vert.x, vert.y = vert.source_x * factor, vert.source_y * factor
+    vert.radius = radius
+end
+
+local function get_rim_z(wall, coord_z)
+    if coord_z < wall.lo then
+        return wall.lo + RIM_INSET
+    end
+    return wall.hi - RIM_INSET
+end
+
+local function get_rim_outer(wall, coord_z, angle)
+    return sample(wall, wall.rim, get_clamped(get_rim_z(wall, coord_z), wall.z_lo, wall.z_hi), angle)
+end
+
+local function get_eased(excess, beyond)
+    local reach = min(beyond / get_clamped(excess * TAPER_RATIO, RAMP_MIN, TAPER_MAX), 1)
+    return excess * (1 - (1 - reach) * (1 - reach))
+end
+
+local function get_taper_move(wall, coord_z, angle, surface)
+    local rim = get_rim_outer(wall, coord_z, angle)
+    local excess = surface - rim
+    if excess <= 0 then
+        return 0
+    end
+    return rim + get_eased(excess, max(wall.lo - coord_z, coord_z - wall.hi)) - surface
+end
+
+local function get_swing_limit(limit, beyond)
+    if beyond <= 0 then
+        return limit
+    end
+    return sqrt(max(limit * limit - beyond * beyond, 0))
+end
+
+local function press_tube_sleeve(verts, wall, hand_end, wrist_z)
+    local lo, hi = wall.lo, wall.hi
+    local pressed = {}
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local coord_x, coord_y, coord_z = vert.x, vert.y, vert.z
+        local radius = sqrt(coord_x * coord_x + coord_y * coord_y)
+        if radius > 0 then
+            local angle = atan2(coord_y, coord_x)
+            local offset = get_tube_offset(vert)
+            local move
+            if coord_z >= lo and coord_z <= hi then
+                local limit = get_swing_limit(get_tube_limit(wall, coord_z, angle), coord_z - wrist_z)
+                move = min(limit - radius - offset, 0)
+            else
+                move = get_taper_move(wall, coord_z, angle, radius + offset)
+            end
+            vert.angle, vert.offset = angle, offset
+            vert.source_x, vert.source_y, vert.source_radius = coord_x, coord_y, radius
+            vert.hand_weight = get_hand_weight(coord_z, hand_end)
+            set_tube_radius(vert, radius + move * vert.hand_weight)
+            vert.pressed_radius = vert.radius
+            pressed[#pressed + 1] = vert
+        end
+    end
+    return pressed
+end
+
+local function get_settle_limit(wall, coord_z, angle)
+    local lo, hi = wall.lo, wall.hi
+    local z_lo, z_hi = wall.z_lo, wall.z_hi
+    local clamped = coord_z < z_lo and z_lo or (coord_z > z_hi and z_hi or coord_z)
+    local rows, bins = wall.rows, wall.bins
+    local row_position = (clamped - z_lo) / wall.z_step + 1
+    local bin_position = ((angle - wall.origin) % full_turn) / wall.angle_step + 1
+    local row, bin = floor(row_position), floor(bin_position)
+    local row_share, bin_share = row_position - row, bin_position - bin
+    local next_row, next_bin = row < rows and row + 1 or rows, bin % bins + 1
+    local base, next_base = (row - 1) * bins, (next_row - 1) * bins
+    local values = wall.radius
+    local near, far = values[base + bin], values[next_base + bin]
+    local low = near + (values[base + next_bin] - near) * bin_share
+    local high = far + (values[next_base + next_bin] - far) * bin_share
+    local limit = low + (high - low) * row_share - TUBE_CLEARANCE + SETTLE_MARGIN
+    local from_lo, from_hi = coord_z - lo, hi - coord_z
+    local lip = 1 - (from_lo < from_hi and from_lo or from_hi) / TUBE_LIP
+    if lip > 0 then
+        values = wall.outer
+        near, far = values[base + bin], values[next_base + bin]
+        low = near + (values[base + next_bin] - near) * bin_share
+        high = far + (values[next_base + next_bin] - far) * bin_share
+        local raised = low + (high - low) * row_share - LIP_MARGIN - limit
+        if raised > 0 then
+            limit = limit + raised * lip
+        end
+    end
+    return limit
+end
+
+local function get_unique_edges(faces)
+    local edges = faces.edges
+    if edges then
+        return edges
+    end
+    local stride = wd_build_slice.STRIDE * 3
+    local check = wd_build_slice.check
+    local ids, count = {}, 0
+    for slot = 1, #faces do
+        if slot % stride == 0 then
+            check()
+        end
+        local point = faces[slot]
+        if not ids[point] then
+            count = count + 1
+            ids[point] = count
+        end
+    end
+    local seen = {}
+    edges = {}
+    local edge_count = 0
+    for base = 1, #faces - 2, 3 do
+        if base % stride == 1 then
+            check()
+        end
+        local first, second, third = faces[base], faces[base + 1], faces[base + 2]
+        local first_id, second_id, third_id = ids[first], ids[second], ids[third]
+        local key = first_id < second_id and first_id * count + second_id or second_id * count + first_id
+        if not seen[key] then
+            seen[key] = true
+            edges[edge_count + 1], edges[edge_count + 2] = first, second
+            edge_count = edge_count + 2
+        end
+        key = second_id < third_id and second_id * count + third_id or third_id * count + second_id
+        if not seen[key] then
+            seen[key] = true
+            edges[edge_count + 1], edges[edge_count + 2] = second, third
+            edge_count = edge_count + 2
+        end
+        key = third_id < first_id and third_id * count + first_id or first_id * count + third_id
+        if not seen[key] then
+            seen[key] = true
+            edges[edge_count + 1], edges[edge_count + 2] = third, first
+            edge_count = edge_count + 2
+        end
+    end
+    faces.edges = edges
+    return edges
+end
+
+local function settle_tube_faces(faces, wall)
+    local edges = get_unique_edges(faces)
+    local stride = wd_build_slice.STRIDE * 2
+    local check = wd_build_slice.check
+    local lo, hi = wall.lo, wall.hi
+    local z_lo, z_hi, z_step = wall.z_lo, wall.z_hi, wall.z_step
+    local rows, bins, origin, angle_step = wall.rows, wall.bins, wall.origin, wall.angle_step
+    local inner, outer = wall.radius, wall.outer
+    local near_slack, settle_step, samples_max = -SETTLE_NEAR, SETTLE_STEP, SETTLE_SAMPLES_MAX
+    local clearance, margin, tube_lip, lip_margin = TUBE_CLEARANCE, SETTLE_MARGIN, TUBE_LIP, LIP_MARGIN
+    for base = 1, #edges - 1, 2 do
+        if base % stride == 1 then
+            check()
+        end
+        local first, second = edges[base], edges[base + 1]
+        if (first.changed or second.changed) and not (first.slack < near_slack and second.slack < near_slack) then
+            local first_z, second_z = first.z, second.z
+            if not ((first_z < lo and second_z < lo) or (first_z > hi and second_z > hi)) then
+                local first_x, first_y, first_offset = first.x, first.y, first.offset
+                local dx, dy, dz = second.x - first_x, second.y - first_y, second_z - first_z
+                local offset_span = second.offset - first_offset
+                local samples = ceil(sqrt(dx * dx + dy * dy + dz * dz) / settle_step)
+                if samples > samples_max then
+                    samples = samples_max
+                end
+                for slot = 1, samples - 1 do
+                    local share = slot / samples
+                    local coord_z = first_z + dz * share
+                    if coord_z >= lo and coord_z <= hi then
+                        local coord_x, coord_y = first_x + dx * share, first_y + dy * share
+                        local clamped = coord_z < z_lo and z_lo or (coord_z > z_hi and z_hi or coord_z)
+                        local row_position = (clamped - z_lo) / z_step + 1
+                        local bin_position = ((atan2(coord_y, coord_x) - origin) % full_turn) / angle_step + 1
+                        local row, bin = floor(row_position), floor(bin_position)
+                        local row_share, bin_share = row_position - row, bin_position - bin
+                        local next_bin = bin % bins + 1
+                        local near_cell = (row - 1) * bins
+                        local far_cell = row < rows and near_cell + bins or near_cell
+                        local near, far = inner[near_cell + bin], inner[far_cell + bin]
+                        local low = near + (inner[near_cell + next_bin] - near) * bin_share
+                        local high = far + (inner[far_cell + next_bin] - far) * bin_share
+                        local limit = low + (high - low) * row_share - clearance + margin
+                        local from_lo, from_hi = coord_z - lo, hi - coord_z
+                        local lip = 1 - (from_lo < from_hi and from_lo or from_hi) / tube_lip
+                        if lip > 0 then
+                            near, far = outer[near_cell + bin], outer[far_cell + bin]
+                            low = near + (outer[near_cell + next_bin] - near) * bin_share
+                            high = far + (outer[far_cell + next_bin] - far) * bin_share
+                            local raised = low + (high - low) * row_share - lip_margin - limit
+                            if raised > 0 then
+                                limit = limit + raised * lip
+                            end
+                        end
+                        local over = sqrt(coord_x * coord_x + coord_y * coord_y)
+                            + (first_offset + offset_span * share)
+                            - limit
+                        if over > 0 then
+                            local rest = 1 - share
+                            local norm = rest * rest + share * share
+                            local first_settle, second_settle = over * rest / norm, over * share / norm
+                            if first_settle > (first.settle or 0) then
+                                first.settle = first_settle
+                            end
+                            if second_settle > (second.settle or 0) then
+                                second.settle = second_settle
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function mark_changed(verts, wall)
+    local lo, hi = wall.lo, wall.hi
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local radius = vert.radius
+        vert.changed = radius ~= vert.settled_radius
+        if vert.changed then
+            vert.settled_radius = radius
+            vert.slack = radius + vert.offset - get_settle_limit(wall, get_clamped(vert.z, lo, hi), vert.angle)
+        end
+    end
+end
+
+local function get_pressed_faces(faces)
+    local touched, pressed = {}, {}
+    local stride = wd_build_slice.STRIDE * 3
+    for base = 1, #faces - 2, 3 do
+        if base % stride == 1 then
+            wd_build_slice.check()
+        end
+        local first, second, third = faces[base], faces[base + 1], faces[base + 2]
+        local first_pressed, second_pressed, third_pressed =
+            first.source_radius ~= nil, second.source_radius ~= nil, third.source_radius ~= nil
+        if first_pressed or second_pressed or third_pressed then
+            local count = #touched
+            touched[count + 1], touched[count + 2], touched[count + 3] = first, second, third
+        end
+        if first_pressed and second_pressed and third_pressed then
+            local count = #pressed
+            pressed[count + 1], pressed[count + 2], pressed[count + 3] = first, second, third
+        end
+    end
+    return touched, pressed
+end
+
+local function settle_tube_sleeve(faces, verts, wall)
+    local stride = wd_build_slice.STRIDE
+    for _ = 1, SETTLE_PASSES do
+        mark_changed(verts, wall)
+        settle_tube_faces(faces, wall)
+        weld_twins(verts, "settle")
+        local settled = false
+        for position, vert in ipairs(verts) do
+            if position % stride == 0 then
+                wd_build_slice.check()
+            end
+            local settle = vert.settle
+            if settle then
+                set_tube_radius(vert, vert.radius - settle * vert.hand_weight)
+                vert.settle = nil
+                settled = true
+            end
+        end
+        if not settled then
+            break
+        end
+    end
+end
+
+local function is_flipped(first, second, third)
+    local ax, ay, bx, by, cx, cy = first.x, first.y, second.x, second.y, third.x, third.y
+    local az, bz, cz = first.z, second.z, third.z
+    local ux, uy, uz = bx - ax, by - ay, bz - az
+    local vx, vy, vz = cx - ax, cy - ay, cz - az
+    local after_x, after_y, after_z = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    if first.source_radius then
+        ax, ay = first.source_x, first.source_y
+    end
+    if second.source_radius then
+        bx, by = second.source_x, second.source_y
+    end
+    if third.source_radius then
+        cx, cy = third.source_x, third.source_y
+    end
+    local before_x, before_y, before_z =
+        (by - ay) * (cz - az) - (bz - az) * (cy - ay),
+        (bz - az) * (cx - ax) - (bx - ax) * (cz - az),
+        (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+    return before_x * after_x + before_y * after_y + before_z * after_z < 0
+end
+
+local function mark_unfold(point, wall)
+    if point.source_radius and (point.z < wall.lo + TUBE_LIP or point.z > wall.hi - TUBE_LIP) then
+        point.unfold = 1
+        return 1
+    end
+    return 0
+end
+
+local function mark_flipped(faces, wall, states, pass)
+    local marked = 0
+    local stride = wd_build_slice.STRIDE * 3
+    for base = 1, #faces - 2, 3 do
+        if base % stride == 1 then
+            wd_build_slice.check()
+        end
+        local first, second, third = faces[base], faces[base + 1], faces[base + 2]
+        local flipped = states[base]
+        if flipped == nil or first.unfold_pass == pass or second.unfold_pass == pass or third.unfold_pass == pass then
+            flipped = is_flipped(first, second, third)
+            states[base] = flipped
+        end
+        if flipped then
+            marked = marked + mark_unfold(first, wall) + mark_unfold(second, wall) + mark_unfold(third, wall)
+        end
+    end
+    return marked
+end
+
+local function unfold_tube_sleeve(faces, verts, wall)
+    local states = {}
+    local stride = wd_build_slice.STRIDE
+    for pass = 1, UNFOLD_PASSES do
+        if mark_flipped(faces, wall, states, pass - 1) == 0 then
+            return
+        end
+        weld_twins(verts, "unfold")
+        for position, vert in ipairs(verts) do
+            if position % stride == 0 then
+                wd_build_slice.check()
+            end
+            if vert.unfold then
+                local radius = vert.radius + (vert.source_radius - vert.radius) * UNFOLD_SHARE
+                local coord_z = vert.z
+                if coord_z >= wall.lo and coord_z <= wall.hi then
+                    radius = min(radius, max(vert.radius, get_settle_limit(wall, coord_z, vert.angle) - vert.offset))
+                elseif coord_z > wall.hi then
+                    radius = min(radius, vert.pressed_radius)
+                end
+                if radius ~= vert.radius then
+                    vert.unfold_pass = pass
+                end
+                set_tube_radius(vert, radius)
+                vert.unfold = nil
+            end
+        end
+    end
+end
+
+local function write_tube_sleeve(patch, verts, to_model, moves)
+    local stats = { moved = 0, max_squeeze = 0 }
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local squeeze = vert.source_radius - vert.radius
+        if squeeze >= MOVE_MIN then
+            local coord_x, coord_y, coord_z = transform_xyz(to_model, vert.x, vert.y, vert.z)
+            local ok, reason = patch.set_position(vert.record, coord_x, coord_y, coord_z)
+            if not ok then
+                return nil, reason
+            end
+            wd_mesh_normals.add_move(moves, vert.record, coord_x, coord_y, coord_z)
+            stats.moved = stats.moved + 1
+            stats.max_squeeze = max(stats.max_squeeze, squeeze)
+        end
+    end
+    return stats
+end
+
+local function get_tube_rigid_share(coord_z, zone, _, shares)
+    local share, hand_share, forearm_share = 0, 0
+    if coord_z < zone.lo then
+        forearm_share = get_smoothstep(zone.rigid_from, zone.lo, coord_z)
+    else
+        share = 1 - get_smoothstep(zone.hand_from, zone.wrist, coord_z)
+        forearm_share = 1 - get_smoothstep(zone.wrist, zone.wrist_to, coord_z)
+        hand_share = 1 - get_smoothstep(zone.flex_from, zone.hi, coord_z)
+    end
+    if zone.forearm then
+        shares[zone.forearm] = forearm_share
+    end
+    shares[zone.hand] = hand_share
+    return share
+end
+
+local function new_rigid_zone(space, roles, wall, hand_end)
+    local rigid_from = wall.lo - TUBE_RIGID_RAMP
+    local elbow = wd_ogf.get_bind_frame(space.mesh, FOREARM_BONE)
+    if elbow then
+        local origin = elbow.c
+        local _, _, elbow_z = transform_xyz(space.to_sleeve, origin.x, origin.y, origin.z)
+        rigid_from = max(rigid_from, elbow_z)
+    end
+    return {
+        lo = wall.lo,
+        hi = wall.hi,
+        forearm = roles.forearm,
+        hand = roles.hand,
+        flex_from = wall.hi - HAND_FLEX,
+        rigid_from = min(rigid_from, wall.lo - RAMP_MIN),
+        hand_from = min(hand_end, space.wrist_z) - HAND_RAMP,
+        wrist = space.wrist_z,
+        wrist_to = space.wrist_z + WRIST_FADE,
+    }
+end
+
+local function get_tube_residual(verts, wall)
+    local poke = nil
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local coord_z = vert.z
+        if vert.outer and coord_z >= wall.lo and coord_z <= wall.hi then
+            local over = vert.radius + vert.depth - get_tube_wall(wall, coord_z, vert.angle)
+            poke = max(poke or over, over)
+        end
+    end
+    return poke
+end
+
+local scratch_bones, scratch_weights = {}, {}
+
+local function collect_arm_bands(space, roles, bands)
+    local mesh = space.mesh
+    local radius_limit = RADIUS_MAX * RADIUS_MAX
+    local stride = wd_build_slice.STRIDE
+    local check = wd_build_slice.check
+    local to_sleeve = space.to_sleeve
+    local axis_i, axis_j, axis_k, origin = to_sleeve.i, to_sleeve.j, to_sleeve.k, to_sleeve.c
+    local i_x, i_y, i_z = axis_i.x, axis_i.y, axis_i.z
+    local j_x, j_y, j_z = axis_j.x, axis_j.y, axis_j.z
+    local k_x, k_y, k_z = axis_k.x, axis_k.y, axis_k.z
+    local origin_x, origin_y, origin_z = origin.x, origin.y, origin.z
+    local span_lo, span_hi = math.huge, -math.huge
+    for _, band in ipairs(bands) do
+        span_lo, span_hi = min(span_lo, band.lo), max(span_hi, band.hi)
+    end
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        if vertices then
+            local positions = wd_ogf.read_positions(mesh, vertices)
+            local xs, ys, zs = positions.x, positions.y, positions.z
+            for index = 1, vertices.count do
+                if index % stride == 0 then
+                    check()
+                end
+                local source_x, source_y, source_z = xs[index], ys[index], zs[index]
+                local coord_z = source_x * i_z + source_y * j_z + source_z * k_z + origin_z
+                if coord_z >= span_lo and coord_z <= span_hi then
+                    local coord_x = source_x * i_x + source_y * j_x + source_z * k_x + origin_x
+                    local coord_y = source_x * i_y + source_y * j_y + source_z * k_y + origin_y
+                    for _, band in ipairs(bands) do
+                        if
+                            coord_z >= band.lo
+                            and coord_z <= band.hi
+                            and coord_x * coord_x + coord_y * coord_y < radius_limit
+                        then
+                            local links = wd_ogf.read_slots_into(mesh, vertices, index, scratch_bones, scratch_weights)
+                            local arm, finger, left = get_slot_weights(roles, links, scratch_bones, scratch_weights)
+                            if arm >= ARM_WEIGHT_MIN and finger < FINGER_WEIGHT_MAX and left >= LEFT_WEIGHT_MIN then
+                                band.points[#band.points + 1] = { x = coord_x, y = coord_y }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function get_clamped_length(coord_x, coord_y, limit)
+    local length = sqrt(coord_x * coord_x + coord_y * coord_y)
+    if length <= limit then
+        return coord_x, coord_y
+    end
+    return coord_x * limit / length, coord_y * limit / length
+end
+
+function collect_axis_bands(space, wall)
+    local roles = get_bone_roles(space.mesh)
+    if not roles then
+        return nil
+    end
+    local elbow = { lo = wall.lo + AXIS_INSET, hi = wall.lo + AXIS_INSET + AXIS_BAND, points = {} }
+    local hand = { lo = wall.hi - AXIS_INSET - AXIS_BAND, hi = wall.hi - AXIS_INSET, points = {} }
+    collect_arm_bands(space, roles, { elbow, hand })
+    return elbow, hand
+end
+
+function fit_tube_axis(space, wall)
+    local elbow, hand = collect_axis_bands(space, wall)
+    if not elbow then
+        return nil
+    end
+    local elbow_x, elbow_y = fit_inner_center(elbow.points)
+    local hand_x, hand_y = fit_inner_center(hand.points)
+    if not (elbow_x or hand_x) then
+        return nil
+    end
+    if not (elbow_x and hand_x) then
+        local coord_x, coord_y = get_clamped_length(elbow_x or hand_x, elbow_y or hand_y, AXIS_OFFSET_MAX)
+        return { x = coord_x, y = coord_y, slope_x = 0, slope_y = 0 }
+    end
+    local elbow_z, hand_z = (elbow.lo + elbow.hi) / 2, (hand.lo + hand.hi) / 2
+    local slope_x, slope_y = get_clamped_length(
+        (hand_x - elbow_x) / (hand_z - elbow_z),
+        (hand_y - elbow_y) / (hand_z - elbow_z),
+        math.tan(AXIS_TILT_MAX)
+    )
+    local coord_x, coord_y = get_clamped_length(
+        (elbow_x + hand_x) / 2 - slope_x * (elbow_z + hand_z) / 2,
+        (elbow_y + hand_y) / 2 - slope_y * (elbow_z + hand_z) / 2,
+        AXIS_OFFSET_MAX
+    )
+    return { x = coord_x, y = coord_y, slope_x = slope_x, slope_y = slope_y }
+end
+
+function get_tube_span(wall)
+    return wall.lo - RAMP - max(RIGID_RAMP, TUBE_RIGID_RAMP), wall.hi + RAMP
+end
+
+local function get_press_verts(verts, hand_end, under_hi)
+    local kept = {}
+    for _, vert in ipairs(verts) do
+        local coord_z = vert.z
+        if
+            coord_z <= hand_end
+            and vert.finger < FINGER_WEIGHT_MAX
+            and (coord_z <= under_hi or vert.arm >= ARM_WEIGHT_MIN)
+        then
+            kept[#kept + 1] = vert
+        end
+    end
+    return kept
+end
+
+local function get_tube_hand_end(wall, wrist_z)
+    return min(wall.hi + RAMP + HAND_RAMP, wrist_z + OVERHANG_MAX + HAND_RAMP)
+end
+
+function squeeze_tube(space, wall)
+    local mesh = space.mesh
+    local roles, roles_error = wd_build_probe.run("roles", get_bone_roles, mesh)
+    if not roles then
+        return nil, roles_error
+    end
+    local wrist_z = space.wrist_z
+    local hand_end = get_tube_hand_end(wall, wrist_z)
+    local floor_z, under_hi = get_tube_span(wall)
+    local reweight_hi = max(wrist_z + WRIST_FADE, hand_end)
+    local verts, layers = wd_build_probe.run(
+        "collect",
+        collect_sleeve,
+        mesh,
+        roles,
+        space.to_sleeve,
+        floor_z,
+        reweight_hi,
+        max(wrist_z, hand_end),
+        false,
+        math.huge
+    )
+    local press_verts = get_press_verts(verts, hand_end, under_hi)
+    if #press_verts == 0 then
+        return nil, "no sleeve verts under the bracer"
+    end
+    local faces = wd_build_probe.run("faces", get_layer_faces, mesh, layers)
+    wd_build_probe.run("cover", classify_verts, press_verts, 0, 0, floor_z, hand_end, add_faces, faces)
+    local pressed = wd_build_probe.run("press", press_tube_sleeve, press_verts, wall, hand_end, wrist_z)
+    local touched_faces, pressed_faces = get_pressed_faces(faces)
+    wd_build_probe.run("settle", settle_tube_sleeve, pressed_faces, pressed, wall)
+    wd_build_probe.run("unfold", unfold_tube_sleeve, touched_faces, pressed, wall)
+    wd_build_probe.run("settle", settle_tube_sleeve, pressed_faces, pressed, wall)
+    local patch = wd_ogf.new_patch(mesh)
+    local moves = wd_mesh_normals.new_moves()
+    local stats, move_error = wd_build_probe.run("move", write_tube_sleeve, patch, pressed, space.to_model, moves)
+    if not stats then
+        return nil, move_error
+    end
+    local rigidified, rigid_error = wd_build_probe.run(
+        "rigidify",
+        rigidify,
+        patch,
+        verts,
+        roles,
+        is_arm_bone,
+        get_tube_rigid_share,
+        new_rigid_zone(space, roles, wall, hand_end)
+    )
+    if not rigidified then
+        return nil, rigid_error
+    end
+    local turned, turn_error = wd_build_probe.run("normals", wd_mesh_normals.turn_normals, mesh, patch, moves)
+    if not turned then
+        return nil, turn_error
+    end
+    local residual_poke = wd_build_probe.run("residuals", get_tube_residual, pressed, wall)
+    local data, digest = wd_build_probe.run("bytes", patch.build)
+    return {
+        data = data,
+        digest = digest,
+        moved = stats.moved,
+        rigidified = rigidified,
+        max_squeeze = stats.max_squeeze,
+        residual_poke = residual_poke,
+    }
+end

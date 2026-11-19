@@ -7,6 +7,7 @@ FONTS = {
 
 CJK_FONT = { texture = "wd\\ui\\fonts\\noto_sans_cjk", id = "wd_font_noto_sans_cjk" }
 GAME_FONT_SECTION = "ui_font_letterica18_russian"
+LANGUAGE_SECTION = "string_table"
 
 local ELLIPSIS = "..."
 
@@ -193,7 +194,8 @@ end
 function is_multibyte()
     if multibyte == nil then
         local texture = ini_sys:r_string_ex(GAME_FONT_SECTION, "texture")
-        multibyte = texture ~= nil and open_ini(texture):section_exist(MB_SECTION)
+        local prefix = ini_sys:r_string_ex(LANGUAGE_SECTION, "font_prefix") or ""
+        multibyte = texture ~= nil and open_ini(texture .. prefix):section_exist(MB_SECTION)
     end
     return multibyte
 end

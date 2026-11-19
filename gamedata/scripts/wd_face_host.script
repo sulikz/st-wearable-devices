@@ -369,7 +369,6 @@ function new(spec)
                 wd_attach.attach({
                     name = entry.name,
                     model = attached_model,
-                    parent = anchor.parent,
                     mount = anchor.mount,
                     ui = entry.ui,
                     ui_bone = anchor.bone,

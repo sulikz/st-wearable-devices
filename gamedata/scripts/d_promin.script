@@ -1,6 +1,7 @@
 local SECTION = "wd_promin"
 local HAND_SECTION = "wd_promin_hand"
 local ATT_NAME = "wd_promin"
+local TRADER_MIN_SUPPLY = 3
 local ATT_MODULE_NAME = "wd_promin_module"
 local MODULES_KEY = "wd_promin_modules"
 local NO_PARENT_ID = 65535
@@ -747,6 +748,12 @@ local function get_promin_spec()
         eligible = function()
             return db.actor ~= nil
         end,
+        is_pose_worn = function(pose)
+            if pose == wd_inspect.POSE_WATCH then
+                return d_watch.has_watch() or d_vektor.is_worn()
+            end
+            return is_worn()
+        end,
         get_hand_section = function()
             return d_promin_config.get_hand_section()
         end,
@@ -1157,6 +1164,6 @@ function register()
             wheel_save_deadline = nil
         end,
     })
-    wd_trader.register(d_promin_config.TIERS[1].section, 1)
+    wd_trader.register(d_promin_config.TIERS[1].section, 1, TRADER_MIN_SUPPLY)
     register_gui()
 end

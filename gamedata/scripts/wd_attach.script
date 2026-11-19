@@ -1,5 +1,7 @@
 local TYPE_HUD = 0
+local TYPE_WORLD = 1
 local ROOT_BONE_ID = 0
+local RETIRE_FRAMES = 2
 
 local parents = {}
 local textures = {}
@@ -11,7 +13,13 @@ local models_hidden = {}
 local screens_hidden_by_name = {}
 local mounts = {}
 local mount_poses = {}
+local mount_bases = {}
+local lifted = nil
+local placed = nil
+local mount_anchors = {}
 local switch_resets = {}
+local retired = {}
+local retired_count = 0
 
 function get(name)
     if not (name and db.actor) then
@@ -88,6 +96,43 @@ function new_bone_switch(cfg)
     return switch
 end
 
+local function remove_retired()
+    if next(retired) == nil then
+        return
+    end
+    local frame = wd_core.get_render_device().frame
+    for retired_name, retired_frame in pairs(retired) do
+        if frame - retired_frame >= RETIRE_FRAMES then
+            retired[retired_name] = nil
+            db.actor:remove_attachment(retired_name)
+        end
+    end
+end
+
+local function retire(attachment, name)
+    if not attachment.set_visible then
+        db.actor:remove_attachment(name)
+        return
+    end
+    attachment:set_ui("")
+    attachment:detach_light()
+    attachment:set_visible(false)
+    attachment:set_type(TYPE_WORLD)
+    retired_count = retired_count + 1
+    local retired_name = "wd_retired_" .. retired_count
+    attachment:set_name(retired_name)
+    retired[retired_name] = wd_core.get_render_device().frame
+end
+
+function register()
+    wd_core.register({
+        id = "wd_attach",
+        callbacks = {
+            actor_on_update = { remove_retired },
+        },
+    })
+end
+
 function detach(name)
     if not name then
         return
@@ -98,8 +143,11 @@ function detach(name)
         if parent_attachment and parent_attachment:get_attachment(name) then
             parent_attachment:remove_attachment(name)
         end
-    elseif get(name) then
-        db.actor:remove_attachment(name)
+    else
+        local attachment = get(name)
+        if attachment then
+            retire(attachment, name)
+        end
     end
     parents[name] = nil
     textures[name] = nil
@@ -108,19 +156,83 @@ function detach(name)
     mounts[name] = nil
 end
 
+local function has_same_axes(first, second)
+    return first[1] == second[1] and first[2] == second[2] and first[3] == second[3]
+end
+
+local function get_lifted_pos(pos, rot, lift, scale)
+    local kept = lifted
+    if
+        not (
+            kept
+            and kept.lift == lift
+            and kept.scale == scale
+            and has_same_axes(kept.from, pos)
+            and has_same_axes(kept.rot, rot)
+        )
+    then
+        local up = wd_frame.new_pose_frame(pos, rot).j
+        local reach = scale * lift
+        kept = {
+            lift = lift,
+            scale = scale,
+            from = { pos[1], pos[2], pos[3] },
+            rot = { rot[1], rot[2], rot[3] },
+            pos = { pos[1] + reach * up.x, pos[2] + reach * up.y, pos[3] + reach * up.z },
+        }
+        lifted = kept
+    end
+    return kept.pos
+end
+
+local function get_placed_pose(base_frame, pos, rot, scale)
+    local kept = placed
+    if
+        not (
+            kept
+            and kept.frame == base_frame
+            and kept.from_scale == scale
+            and has_same_axes(kept.from, pos)
+            and has_same_axes(kept.from_rot, rot)
+        )
+    then
+        local placed_pos, placed_rot, placed_scale =
+            wd_frame.get_pose(wd_frame.compose_frames(base_frame, wd_frame.new_pose_frame(pos, rot, scale)))
+        kept = {
+            frame = base_frame,
+            from = { pos[1], pos[2], pos[3] },
+            from_rot = { rot[1], rot[2], rot[3] },
+            from_scale = scale,
+            pos = placed_pos,
+            rot = placed_rot,
+            scale = placed_scale,
+        }
+        placed = kept
+    end
+    return kept.pos, kept.rot, kept.scale
+end
+
 local function apply_model_transform(attachment, name, transform)
     local pos, rot = transform.model_pos, transform.model_rot
-    local adjust_pose = mount_poses[mounts[name]]
+    local scale = transform.model_scale
+    local mount = mounts[name]
+    local base = mount_bases[mount]
+    if base then
+        pos = get_lifted_pos(pos, rot, base.lift, scale)
+    end
+    local adjust_pose = mount_poses[mount]
     if adjust_pose then
         pos, rot = adjust_pose(pos, rot)
     end
+    if base then
+        pos, rot, scale = get_placed_pose(base.frame, pos, rot, scale)
+    end
     attachment:set_position(pos[1], pos[2], pos[3])
     attachment:set_rotation(rot[1], rot[2], rot[3])
-    attachment:set_scale(transform.model_scale)
+    attachment:set_scale(scale)
 end
 
-function set_mount_pose(mount, adjust_pose)
-    mount_poses[mount] = adjust_pose
+local function reapply_mount(mount)
     for name, attached_mount in pairs(mounts) do
         if attached_mount == mount then
             local attachment = get(name)
@@ -129,6 +241,29 @@ function set_mount_pose(mount, adjust_pose)
             end
         end
     end
+end
+
+function set_mount_pose(mount, adjust_pose)
+    mount_poses[mount] = adjust_pose
+    reapply_mount(mount)
+end
+
+function set_mount_base(mount, base)
+    mount_bases[mount] = base
+    reapply_mount(mount)
+end
+
+function set_mount_anchor(mount, anchor)
+    mount_anchors[mount] = anchor
+end
+
+local function get_anchor(desc)
+    local parent, bone = desc.parent, desc.bone
+    local anchor = not (parent or bone) and mount_anchors[desc.mount]
+    if anchor then
+        return anchor.get_parent(), anchor.bone
+    end
+    return parent, bone
 end
 
 local function apply_ui_scale(attachment, name)
@@ -259,13 +394,36 @@ end
 BULB_SHADER = "wd\\body"
 BULB_LIT_SHADER = "wd\\led"
 
+local pinned_materials = {}
+
+local function pin_material(shader, texture)
+    local pins = pinned_materials[shader]
+    if not pins then
+        pins = {}
+        pinned_materials[shader] = pins
+    end
+    if pins[texture] then
+        return
+    end
+    local wnd = CUIStatic()
+    wnd:InitTextureEx(texture, shader)
+    pins[texture] = wnd
+end
+
 function new_bulb(cfg)
     local child_id
     local on = false
     local bulb = {}
 
     function bulb.sync()
-        set_child_material(cfg.name, child_id, on and BULB_LIT_SHADER or BULB_SHADER, cfg.get_texture(on))
+        local lit_texture = cfg.get_texture(true)
+        local unlit_texture = cfg.get_texture(false)
+        local shader = on and BULB_LIT_SHADER or BULB_SHADER
+        if not set_child_material(cfg.name, child_id, shader, on and lit_texture or unlit_texture) then
+            return
+        end
+        pin_material(BULB_LIT_SHADER, lit_texture)
+        pin_material(BULB_SHADER, unlit_texture)
     end
 
     function bulb.set_child(id)
@@ -310,20 +468,20 @@ function attach(desc)
     if not (desc and desc.name and desc.model and desc.transforms and db.actor) then
         return nil
     end
-    if not (desc.bone or desc.parent) then
+    local parent, bone = get_anchor(desc)
+    if not (bone or parent) then
         return nil
     end
     detach(desc.name)
     local attachment
-    local started = os.clock() * 1000
-    if desc.parent then
-        local parent_attachment = get(desc.parent)
+    if parent then
+        local parent_attachment = get(parent)
         if not parent_attachment then
             return nil
         end
         attachment = parent_attachment:add_attachment(desc.name, desc.model)
         if attachment then
-            parents[desc.name] = desc.parent
+            parents[desc.name] = parent
         end
     else
         attachment = db.actor:add_attachment(desc.name, desc.model)
@@ -336,8 +494,8 @@ function attach(desc)
     mounts[desc.name] = desc.mount
     transforms[desc.name] = transform
     attachment:set_type(TYPE_HUD)
-    if desc.bone and not desc.parent then
-        attachment:set_parent_bone(desc.bone)
+    if bone and not parent then
+        attachment:set_parent_bone(bone)
     end
     apply_model_transform(attachment, desc.name, transform)
     if desc.ui then

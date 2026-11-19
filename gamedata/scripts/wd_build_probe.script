@@ -1,0 +1,43 @@
+local sink = nil
+
+function set_sink(new_sink)
+    sink = new_sink
+end
+
+function enter(label)
+    if sink then
+        sink.enter(label)
+    end
+end
+
+function leave(label)
+    if sink then
+        sink.leave(label)
+    end
+end
+
+function suspend()
+    if sink and sink.suspend then
+        sink.suspend()
+    end
+end
+
+function resume()
+    if sink and sink.resume then
+        sink.resume()
+    end
+end
+
+local function finish(current, label, ...)
+    current.leave(label)
+    return ...
+end
+
+function run(label, step, ...)
+    local current = sink
+    if not current then
+        return step(...)
+    end
+    current.enter(label)
+    return finish(current, label, step(...))
+end

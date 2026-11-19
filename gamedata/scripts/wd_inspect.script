@@ -97,6 +97,9 @@ function register(spec)
     spec.teardown_response = spec.teardown_response or "hard"
     spec.yields_now = spec.yields_now or FALSE
     spec.on_wheel = spec.on_wheel or FALSE
+    spec.is_pose_worn = spec.is_pose_worn or function()
+        return true
+    end
     registered = spec
     return true
 end
@@ -138,6 +141,7 @@ local MS = {
     FIRE_BLOCK = 350,
     ZOOM_BLOCK = 3000,
     SWAP_PAUSE = 670,
+    SWAP_BUILD_WAIT = 2000,
     ROOT_UNWIND = 200,
     OFFSET_BLEND = 500,
     ENGINE_LAYER_FADE = 400,
@@ -807,6 +811,9 @@ local function set_raise_anchor(wpn, detector)
 end
 
 local function show(now, ui_open)
+    if not (is_editor_gui_open() or active.is_pose_worn(POSE_BY_VARIANT[raise_variant])) then
+        return
+    end
     if now < yield_until then
         pending_show_until = math.max(pending_show_until, yield_until + MS.PENDING_SHOW)
         return
@@ -997,6 +1004,9 @@ end
 local function apply_variant_transition(now)
     local wanted = get_raise_variant(watch_hold)
     if wanted == raise_variant then
+        return false
+    end
+    if not (is_editor_gui_open() or active.is_pose_worn(POSE_BY_VARIANT[wanted])) then
         return false
     end
     local trans_base = wanted == VARIANT_WATCH and ANM_TO_WATCH or ANM_FROM_WATCH
@@ -1454,25 +1464,32 @@ local function handle_lowering(now, ui_open)
     end
     local resume = not replay_key and #pending > 0 and is_editor_gui_holding() and refresh_active() ~= nil
     swap_queue = pending
+    local holding = false
     if resume then
         swap_redraw = true
-        if begin_swap_hold(now) then
-            return
-        end
+        holding = begin_swap_hold(now)
     end
     drain_swap_queue()
-    if resume then
+    if resume and not holding then
         show(now, ui_open)
     end
 end
 
 local function handle_raising(now, ui_open)
     if swap_hold then
+        if has_pending_swap() then
+            drain_swap_queue()
+            state_deadline = now + MS.SWAP_PAUSE
+            watchdog_at = state_deadline
+        end
         if now < state_deadline then
             return
         end
+        if wd_hands_left.is_building() and now < state_deadline + MS.SWAP_BUILD_WAIT then
+            return
+        end
+        wd_hands_left.apply()
         swap_hold = false
-        drain_swap_queue()
         stop_motion()
         state = ST_IDLE
         show(now, ui_open)
@@ -1912,10 +1929,10 @@ function install_wheel_hook()
 end
 
 local function hold_hands_for_wheel_show(device)
-    local active = db.actor:active_detector()
-    if not active then
+    local detector = db.actor:active_detector()
+    if not detector then
         wd_hands_empty.hold_draw(MS.DETECTOR_SHOW_HOLD)
-    elseif active:id() ~= device:id() then
+    elseif detector:id() ~= device:id() then
         wd_hands_empty.hold_draw(MS.DETECTOR_SWAP_HOLD)
     end
 end
@@ -1952,6 +1969,23 @@ function install_action_wheel_detector_hook()
 end
 
 function register_engine()
+    wd_hands_left.register_motion_owner({
+        is_swap_blocked = function()
+            return state == ST_LOWERING or (state == ST_RAISING and not swap_hold)
+        end,
+        on_swap = function()
+            if swap_hold then
+                stop_motion()
+                play_hand(get_swap_anm(ANM_DRAW, raise_variant), true, 1, true, SWAP_HOLD_ANM_SPEED)
+                return
+            end
+            if state ~= ST_HELD then
+                return
+            end
+            stop_motion()
+            held_refire(time_global())
+        end,
+    })
     wd_core.register({
         id = "wd_inspect",
         callbacks = {

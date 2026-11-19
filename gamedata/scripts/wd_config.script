@@ -18,6 +18,20 @@ local function overlay_typed(dst, src, fields)
     end
 end
 
+local function clamp_fields(result, limits)
+    for name, range in pairs(limits) do
+        local value = result[name]
+        if type(value) == "table" then
+            for comp, bounds in ipairs(range) do
+                value[comp] = clamp(value[comp], bounds[1], bounds[2])
+            end
+        else
+            result[name] = clamp(value, range[1], range[2])
+        end
+    end
+    return result
+end
+
 local GATE_SECTION = "wd_config"
 local GATE_KEY = "use_saved_positions"
 
@@ -85,6 +99,7 @@ function new(cfg)
     local family_fields = cfg.family_fields or {}
     local tier_fields = cfg.tier_fields or {}
     local variant_defaults = cfg.variant_defaults or {}
+    local limits = cfg.limits or {}
     local fields = {}
     for _, field in ipairs(family_fields) do
         fields[#fields + 1] = field
@@ -209,7 +224,7 @@ function new(cfg)
             overlay_typed(result, variant_defaults[active_variant] or {}, variant_fields)
             wd_transforms.apply(result, store[get_variant_store_key(tier)] or {}, get_store_fields(variant_fields))
         end
-        return result
+        return clamp_fields(result, limits)
     end
 
     function self.get_variant()

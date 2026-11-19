@@ -1,105 +1,200 @@
-SLIM_VISUAL_DIR = "wd\\hands\\slim\\"
+FLAT_EXO_DIR = "wd\\hands\\flat_exo\\"
 LEFT_SECTION = "wd_hands_left"
 
 local UNKNOWN = "_unknown"
 
-local items = {}
-local applied_key = UNKNOWN
-local visuals_by_outfit = {}
+local sources = {}
+local base_visuals = {}
+local left_sources = {}
+local flat_exo_visuals = {}
+local applied_visual = UNKNOWN
+local applied_visual_2 = UNKNOWN
+local motion_owner = nil
 
-function register_item(id, is_worn)
-    items[id] = is_worn
+local function is_source_before(first, second)
+    if first.priority ~= second.priority then
+        return first.priority < second.priority
+    end
+    return first.id < second.id
 end
 
-local function is_any_item_worn()
-    for _, is_worn in pairs(items) do
-        if is_worn() then
+local function is_always_worn()
+    return true
+end
+
+local function is_never_building()
+    return false
+end
+
+function register_source(id, source, priority, is_worn, is_source_building)
+    for index, entry in ipairs(sources) do
+        if entry.id == id then
+            table.remove(sources, index)
+            break
+        end
+    end
+    sources[#sources + 1] = {
+        id = id,
+        source = source,
+        priority = priority,
+        is_worn = is_worn or is_always_worn,
+        is_building = is_source_building or is_never_building,
+    }
+    table.sort(sources, is_source_before)
+end
+
+function register_motion_owner(owner)
+    motion_owner = owner
+end
+
+local function is_any_source_building()
+    for index = 1, #sources do
+        if sources[index].is_building() then
             return true
         end
     end
     return false
 end
 
-local function get_slim_visual(sys, hands_section)
-    local base_visual = sys:r_string_ex(hands_section, "visual_2") or sys:r_string_ex(hands_section, "visual")
-    if not base_visual or base_visual == "" then
-        return nil
-    end
-    local stem = base_visual:match("([^\\/]+)$")
-    if not stem then
-        return nil
-    end
-    stem = stem:gsub("%.ogf$", "")
-    local slim_visual = SLIM_VISUAL_DIR .. stem
-    if not getFS():exist("$game_meshes$", slim_visual .. ".ogf") then
-        return nil
-    end
-    return slim_visual
+function is_building()
+    return is_any_source_building() and get_outfit_hands_section() ~= nil
 end
 
-local function resolve_visuals(hands_section)
+local function is_any_source_worn()
+    for index = 1, #sources do
+        if sources[index].is_worn() then
+            return true
+        end
+    end
+    return false
+end
+
+local function read_left_source(hands_section)
+    local sys = system_ini()
+    local visual = sys:r_string_ex(hands_section, "visual_2") or sys:r_string_ex(hands_section, "visual")
+    if not visual or visual == "" then
+        return false
+    end
+    return (visual:gsub("%.ogf$", ""))
+end
+
+function get_left_source(hands_section)
+    local left_source = left_sources[hands_section]
+    if left_source == nil then
+        left_source = read_left_source(hands_section)
+        left_sources[hands_section] = left_source
+    end
+    return left_source or nil
+end
+
+local function read_flat_exo_visual(hands_section)
+    local stem = (get_left_source(hands_section) or ""):match("([^\\/]+)$")
+    if not stem then
+        return false
+    end
+    local flat_exo_visual = FLAT_EXO_DIR .. stem
+    if not getFS():exist("$game_meshes$", flat_exo_visual .. ".ogf") then
+        return false
+    end
+    return flat_exo_visual
+end
+
+function get_flat_exo_visual(hands_section)
+    local flat_exo_visual = flat_exo_visuals[hands_section]
+    if flat_exo_visual == nil then
+        flat_exo_visual = read_flat_exo_visual(hands_section)
+        flat_exo_visuals[hands_section] = flat_exo_visual
+    end
+    return flat_exo_visual or nil
+end
+
+local function read_base_visual(hands_section)
     local sys = system_ini()
     if not sys:section_exist(LEFT_SECTION) or not sys:section_exist(hands_section) then
-        return nil
+        return false
     end
-    local visual = sys:r_string_ex(hands_section, "visual")
-    local slim_visual = get_slim_visual(sys, hands_section)
-    if not visual or not slim_visual then
-        return nil
-    end
-    return { visual = visual, visual_2 = slim_visual, key = visual .. "|" .. slim_visual }
+    return sys:r_string_ex(hands_section, "visual") or false
 end
 
-local function write_left_section(visuals)
+local function get_base_visual(hands_section)
+    local base_visual = base_visuals[hands_section]
+    if base_visual == nil then
+        base_visual = read_base_visual(hands_section)
+        base_visuals[hands_section] = base_visual
+    end
+    return base_visual
+end
+
+local function write_left_section(visual, visual_2)
     local sys = system_ini()
     sys:set_readonly(false)
     sys:set_override_names(true)
-    sys:w_string(LEFT_SECTION, "visual", visuals.visual)
-    sys:w_string(LEFT_SECTION, "visual_2", visuals.visual_2)
+    sys:w_string(LEFT_SECTION, "visual", visual)
+    sys:w_string(LEFT_SECTION, "visual_2", visual_2)
     sys:set_override_names(false)
     sys:set_readonly(true)
 end
 
+function get_outfit_hands_section()
+    return wd_outfit.get_hands_section(wd_outfit.get_key())
+end
+
 function get_base_hands_section()
-    return wd_outfit.get_hands_section(wd_outfit.get_key()) or wd_outfit.DEFAULT_HANDS
+    return get_outfit_hands_section() or wd_outfit.DEFAULT_HANDS
 end
 
 local function get_target_visuals()
-    if not is_any_item_worn() then
+    if not (applied_visual_2 or is_any_source_worn()) then
         return nil
     end
-    local outfit_key = wd_outfit.get_key()
-    local cached = visuals_by_outfit[outfit_key]
-    if cached == nil then
-        local hands_section = wd_outfit.get_hands_section(outfit_key)
-        cached = (hands_section and resolve_visuals(hands_section)) or false
-        visuals_by_outfit[outfit_key] = cached
+    local hands_section = get_outfit_hands_section()
+    if not hands_section then
+        return nil
     end
-    return cached or nil
+    local visual = get_base_visual(hands_section)
+    if not visual then
+        return nil
+    end
+    for _, entry in ipairs(sources) do
+        local visual_2 = entry.source(hands_section)
+        if visual_2 then
+            return visual, visual_2
+        end
+    end
+    return nil
 end
 
 function apply()
-    local target = get_target_visuals()
-    local key = target and target.key
-    if key == applied_key then
+    local visual, visual_2 = get_target_visuals()
+    if visual == applied_visual and visual_2 == applied_visual_2 then
+        return
+    end
+    if motion_owner and motion_owner.is_swap_blocked() then
         return
     end
     local hud = get_player_hud()
     if not hud then
         return
     end
-    if target then
-        write_left_section(target)
+    if visual_2 then
+        wd_build_probe.enter("hands_swap")
+        write_left_section(visual, visual_2)
         hud:set_hands(LEFT_SECTION)
+        wd_build_probe.leave("hands_swap")
     else
+        wd_build_probe.enter("hands_reset")
         hud:set_hands(get_base_hands_section())
         hud:reset_hands()
+        wd_build_probe.leave("hands_reset")
     end
-    applied_key = key
+    applied_visual, applied_visual_2 = visual, visual_2
+    if motion_owner then
+        motion_owner.on_swap()
+    end
 end
 
 function reset()
-    applied_key = UNKNOWN
+    applied_visual, applied_visual_2 = UNKNOWN, UNKNOWN
 end
 
 function register()

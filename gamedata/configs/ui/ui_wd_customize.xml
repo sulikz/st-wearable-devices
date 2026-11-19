@@ -4,6 +4,10 @@
 		<texture>wd_customize_main</texture>
 	</back>
 
+	<bracer_open x="668" y="160" width="76" height="50" stretch="1">
+		<texture>wd_customize_slot_open</texture>
+	</bracer_open>
+
 	<device_open_1 x="607" y="94" width="38" height="50" stretch="1">
 		<texture>wd_customize_slot_open</texture>
 	</device_open_1>
@@ -135,6 +139,35 @@
 			</bar>
 		</cell_3>
 	</cont_slots>
+
+	<cont_bracer x="668" y="160" width="76" height="50">
+		<scroll x="0" y="0" width="76" height="50" stretch="1" right_ident="0" left_ident="0" top_indent="0" bottom_indent="0" vert_interval="0" always_show_scroll="0"/>
+		<st x="0" y="0" width="76" height="50" stretch="1"/>
+		<cell stretch="1">
+			<pic stretch="1" align="c" alignment="c"/>
+		</cell>
+		<cell_1 x="0" y="0" width="76" height="50" stretch="1">
+			<pic stretch="1" align="c" alignment="c"/>
+			<highlight stretch="1">
+				<texture>ui_button_inv_h</texture>
+			</highlight>
+			<cnt x="-2" y="-1" width="21" height="11" stretch="1">
+				<texture a="200">ui_item_count_back</texture>
+				<text x="0" y="0" width="21" height="11" font="arial_14" color="ui_2" align="c" vert_align="c"/>
+			</cnt>
+			<ctxt stretch="1">
+				<text font="arial_14" color="ui_2" align="l" vert_align="b"/>
+			</ctxt>
+			<bar x="2" y="45" width="72" height="3" horz="1" min="0" max="1" pos="1" stretch="1">
+				<background width="72" height="3" stretch="1">
+					<texture r="62" g="74" b="74">ui_inGame2_inventory_item_status_bar</texture>
+				</background>
+				<progress stretch="1">
+					<texture r="142" g="149" b="149">ui_inGame2_inventory_item_status_bar</texture>
+				</progress>
+			</bar>
+		</cell_1>
+	</cont_bracer>
 
 	<cont_accessories x="768" y="94" width="38" height="50"/>
 

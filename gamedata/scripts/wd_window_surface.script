@@ -1,0 +1,545 @@
+jit.off(true, true)
+
+SURFACE_STEP = 0.001
+SURFACE_ANGLE_STEP = math.rad(1)
+
+local SLICE_SLACK = 1e-9
+local NO_SLICE = { -1 }
+local SLICE_Z_SLACK = 1e-6
+local SLICE_ANGLE_SLACK = 1e-6
+
+local atan2 = math.atan2
+local ceil = math.ceil
+local cos = math.cos
+local sin = math.sin
+local floor = math.floor
+local sqrt = math.sqrt
+local max = math.max
+local min = math.min
+local pi = math.pi
+local full_turn = 2 * pi
+
+local get_clamped = wd_sleeve_mesh.get_clamped
+local get_bone_roles = wd_sleeve_mesh.get_bone_roles
+local collect_sleeve = wd_sleeve_mesh.collect_sleeve
+local get_sector = wd_sleeve_mesh.get_sector
+local new_cover = wd_sleeve_mesh.new_cover
+local get_cover_row = wd_sleeve_mesh.get_cover_row
+local get_relative_angle = wd_sleeve_mesh.get_relative_angle
+local add_faces = wd_sleeve_mesh.add_faces
+local get_layer_faces = wd_sleeve_mesh.get_layer_faces
+local get_axis_length = wd_sleeve_mesh.get_axis_length
+local SECTORS = wd_sleeve_mesh.SECTORS
+local Z_BIN = wd_sleeve_mesh.Z_BIN
+local SECTOR_WIDTH = full_turn / SECTORS
+local ARC_SLACK_SECTORS = 1
+local RAY_EPSILON = wd_sleeve_mesh.RAY_EPSILON
+local BARY_SLACK = wd_sleeve_mesh.BARY_SLACK
+
+local function add_edge_point(points, ax, ay, az, bx, by, bz, coord_z)
+    if (az - coord_z) * (bz - coord_z) > 0 or az == bz then
+        return
+    end
+    local share = (coord_z - az) / (bz - az)
+    points[#points + 1] = ax + (bx - ax) * share
+    points[#points + 1] = ay + (by - ay) * share
+end
+
+local function get_slice_extent(points)
+    local best = -1
+    local reference = nil
+    local low, high = 0, 0
+    for slot = 1, #points - 1, 2 do
+        local coord_x, coord_y = points[slot], points[slot + 1]
+        best = max(best, coord_x * coord_x + coord_y * coord_y)
+        local angle = atan2(coord_y, coord_x)
+        if reference then
+            local relative = get_relative_angle(angle, reference)
+            low, high = min(low, relative), max(high, relative)
+        else
+            reference = angle
+        end
+    end
+    if not reference or high - low >= pi / 2 then
+        return best, nil, nil
+    end
+    return best, reference + low - SLICE_ANGLE_SLACK, high - low + 2 * SLICE_ANGLE_SLACK
+end
+
+local function new_slice(cover, triangle, coord_z)
+    local ax, ay, az = cover.ax[triangle], cover.ay[triangle], cover.az[triangle]
+    local bx, by, bz = cover.bx[triangle], cover.by[triangle], cover.bz[triangle]
+    local cx, cy, cz = cover.cx[triangle], cover.cy[triangle], cover.cz[triangle]
+    local z_low, z_high = min(az, bz, cz), max(az, bz, cz)
+    if coord_z < z_low - SLICE_Z_SLACK or coord_z > z_high + SLICE_Z_SLACK then
+        return NO_SLICE
+    end
+    local clamped = get_clamped(coord_z, z_low, z_high)
+    local points = {}
+    if az == clamped then
+        points[#points + 1], points[#points + 2] = ax, ay
+    end
+    if bz == clamped then
+        points[#points + 1], points[#points + 2] = bx, by
+    end
+    if cz == clamped then
+        points[#points + 1], points[#points + 2] = cx, cy
+    end
+    add_edge_point(points, ax, ay, az, bx, by, bz, clamped)
+    add_edge_point(points, bx, by, bz, cx, cy, cz, clamped)
+    add_edge_point(points, cx, cy, cz, ax, ay, az, clamped)
+    local best, angle_from, angle_span = get_slice_extent(points)
+    if z_low == z_high then
+        angle_from = nil
+    end
+    local edge1_x, edge1_y, edge1_z = bx - ax, by - ay, bz - az
+    local edge2_x, edge2_y, edge2_z = cx - ax, cy - ay, cz - az
+    local t_x, t_y, t_z = -ax, -ay, coord_z - az
+    local q_x = t_y * edge1_z - t_z * edge1_y
+    local q_y = t_z * edge1_x - t_x * edge1_z
+    local q_z = t_x * edge1_y - t_y * edge1_x
+    return {
+        sqrt(max(best, 0)) * (1 + SLICE_SLACK) + SLICE_SLACK,
+        edge1_x,
+        edge1_y,
+        edge1_z,
+        edge2_x,
+        edge2_y,
+        edge2_z,
+        t_x,
+        t_y,
+        t_z,
+        q_x,
+        q_y,
+        edge2_x * q_x + edge2_y * q_y + edge2_z * q_z,
+        angle_from or false,
+        angle_span or 0,
+    }
+end
+
+local function get_slice_distance(slice, dir_x, dir_y)
+    local edge1_x, edge1_y, edge1_z = slice[2], slice[3], slice[4]
+    local edge2_x, edge2_y, edge2_z = slice[5], slice[6], slice[7]
+    local p_x, p_y, p_z = dir_y * edge2_z, -dir_x * edge2_z, dir_x * edge2_y - dir_y * edge2_x
+    local det = edge1_x * p_x + edge1_y * p_y + edge1_z * p_z
+    if det > -RAY_EPSILON and det < RAY_EPSILON then
+        return nil
+    end
+    local inverse = 1 / det
+    local bary_u = (slice[8] * p_x + slice[9] * p_y + slice[10] * p_z) * inverse
+    if bary_u < -BARY_SLACK or bary_u > 1 + BARY_SLACK then
+        return nil
+    end
+    local bary_v = (dir_x * slice[11] + dir_y * slice[12]) * inverse
+    if bary_v < -BARY_SLACK or bary_u + bary_v > 1 + BARY_SLACK then
+        return nil
+    end
+    return slice[13] * inverse
+end
+
+local function get_surface_radius(cover, coord_z, angle, dir_x, dir_y)
+    local cell = cover.cells[get_cover_row(cover, coord_z) * SECTORS + get_sector(angle) - 1]
+    if not cell then
+        return 0
+    end
+    local slices = cover.slices
+    if not slices or cover.slice_z ~= coord_z then
+        slices = {}
+        cover.slices, cover.slice_z, cover.last_cell, cover.last_winner = slices, coord_z, nil, nil
+    end
+    local reach = cover.reach
+    local top = 0
+    local first = cover.last_cell == cell and cover.last_winner
+    if first then
+        local distance = get_slice_distance(slices[first], dir_x, dir_y)
+        if distance and distance > top then
+            top = distance
+        end
+    end
+    local winner = first
+    local bary_min, bary_max = -BARY_SLACK, 1 + BARY_SLACK
+    for slot = 1, #cell do
+        local triangle = cell[slot]
+        if triangle ~= first and reach[triangle] > top then
+            local slice = slices[triangle]
+            if not slice then
+                slice = new_slice(cover, triangle, coord_z)
+                slices[triangle] = slice
+            end
+            local angle_from = slice[14]
+            if slice[1] > top and (not angle_from or (angle - angle_from) % full_turn <= slice[15]) then
+                local edge2_x, edge2_y, edge2_z = slice[5], slice[6], slice[7]
+                local p_x, p_y, p_z = dir_y * edge2_z, -dir_x * edge2_z, dir_x * edge2_y - dir_y * edge2_x
+                local det = slice[2] * p_x + slice[3] * p_y + slice[4] * p_z
+                if not (det > -RAY_EPSILON and det < RAY_EPSILON) then
+                    local inverse = 1 / det
+                    local bary_u = (slice[8] * p_x + slice[9] * p_y + slice[10] * p_z) * inverse
+                    if not (bary_u < bary_min or bary_u > bary_max) then
+                        local bary_v = (dir_x * slice[11] + dir_y * slice[12]) * inverse
+                        if not (bary_v < bary_min or bary_u + bary_v > bary_max) then
+                            local distance = slice[13] * inverse
+                            if distance > top then
+                                top = distance
+                                winner = triangle
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    cover.last_cell, cover.last_winner = cell, top > 0 and winner or nil
+    return top
+end
+
+local function get_memo_row(memo, row)
+    local cells = memo[row]
+    if not cells then
+        cells = {}
+        memo[row] = cells
+    end
+    return cells
+end
+
+function new_surface_layers(space)
+    local roles, roles_error = get_bone_roles(space.mesh)
+    if not roles then
+        return nil, roles_error
+    end
+    local _, layers, surface_layers =
+        collect_sleeve(space.mesh, roles, space.to_sleeve, math.huge, -math.huge, -math.huge, true)
+    get_layer_faces(space.mesh, layers, surface_layers)
+    return surface_layers
+end
+
+function new_surface(surface_layers, center, z_lo, z_hi, sweep_lo, sweep_hi)
+    local cover = new_cover(center.x, center.y, z_lo, floor((z_hi - z_lo) / Z_BIN) + 2)
+    wd_build_probe.run("triangles", add_faces, cover, surface_layers.faces)
+    local step_lo, step_hi = floor(sweep_lo / SURFACE_ANGLE_STEP), 1 + ceil(sweep_hi / SURFACE_ANGLE_STEP)
+    return {
+        cover = cover,
+        lo = z_lo,
+        step_lo = step_lo,
+        step_hi = step_hi,
+        arc_lo = floor((step_lo - 1) * SURFACE_ANGLE_STEP / SECTOR_WIDTH) - ARC_SLACK_SECTORS,
+        arc_hi = floor(step_hi * SURFACE_ANGLE_STEP / SECTOR_WIDTH) + 1 + ARC_SLACK_SECTORS,
+        samples = {},
+        swept = {},
+        cosines = {},
+        sines = {},
+        cell_reach = {},
+        arc_reach = {},
+    }
+end
+
+local function fill_swept_row(surface, row, step_first, step_last)
+    local swept = get_memo_row(surface.swept, row)
+    local samples = get_memo_row(surface.samples, row)
+    local cover, coord_z = surface.cover, surface.lo + row * SURFACE_STEP
+    local step_lo, step_hi = surface.step_lo, surface.step_hi
+    local cosines, sines = surface.cosines, surface.sines
+    local queued_steps, queued_tops = {}, {}
+    local head, tail = 1, 0
+    local next_sample = step_first + step_lo
+    for step = step_first, step_last do
+        local last_sample = step + step_hi
+        while next_sample <= last_sample do
+            local top = samples[next_sample]
+            if not top then
+                local angle = next_sample * SURFACE_ANGLE_STEP
+                local dir_x, dir_y = cosines[next_sample], sines[next_sample]
+                if not dir_x then
+                    dir_x, dir_y = cos(angle), sin(angle)
+                    cosines[next_sample], sines[next_sample] = dir_x, dir_y
+                end
+                top = get_surface_radius(cover, coord_z, angle, dir_x, dir_y)
+                samples[next_sample] = top
+            end
+            while tail >= head and queued_tops[tail] <= top do
+                tail = tail - 1
+            end
+            tail = tail + 1
+            queued_steps[tail], queued_tops[tail] = next_sample, top
+            next_sample = next_sample + 1
+        end
+        while queued_steps[head] < step + step_lo do
+            head = head + 1
+        end
+        swept[step] = queued_tops[head]
+    end
+end
+
+local function get_swept_row(surface, row, step)
+    local swept = get_memo_row(surface.swept, row)
+    if not swept[step] then
+        fill_swept_row(surface, row, step, step)
+    end
+    return swept[step]
+end
+
+function get_swept_top(surface, coord_z, angle)
+    local position = (coord_z - surface.lo) / SURFACE_STEP
+    local row = floor(position)
+    local step = floor(angle / SURFACE_ANGLE_STEP)
+    local low = get_swept_row(surface, row, step)
+    return low + (position - row) * (get_swept_row(surface, row + 1, step) - low)
+end
+
+local CLUSTER_CELL = 0.002
+local CLUSTER_SLACK = 1e-9
+
+local function get_clusters(window)
+    local clusters = window.clusters
+    if clusters then
+        return clusters
+    end
+    clusters = { count = 0, first = {}, last = {}, x = {}, y = {}, z = {}, radius = {} }
+    local xs, ys, zs = window.x, window.y, window.z
+    local groups, keys = {}, {}
+    for index = 1, window.count do
+        local key = floor(xs[index] / CLUSTER_CELL) * 1048576
+            + floor(ys[index] / CLUSTER_CELL) * 1024
+            + floor(zs[index] / CLUSTER_CELL)
+        local group = groups[key]
+        if not group then
+            group = {}
+            groups[key] = group
+            keys[#keys + 1] = key
+        end
+        group[#group + 1] = index
+    end
+    table.sort(keys)
+    local order = {}
+    local ox, oy, oz = {}, {}, {}
+    local bounds = {}
+    for _, key in ipairs(keys) do
+        local first = #order + 1
+        for _, index in ipairs(groups[key]) do
+            order[#order + 1] = index
+            ox[#order], oy[#order], oz[#order] = xs[index], ys[index], zs[index]
+        end
+        bounds[#bounds + 1] = { first, #order }
+    end
+    clusters.x_of, clusters.y_of, clusters.z_of = ox, oy, oz
+    xs, ys, zs = ox, oy, oz
+    for _, bound in ipairs(bounds) do
+        local first, last = bound[1], bound[2]
+        local x_lo, y_lo, z_lo, x_hi, y_hi, z_hi = math.huge, math.huge, math.huge, -math.huge, -math.huge, -math.huge
+        for index = first, last do
+            x_lo, x_hi = min(x_lo, xs[index]), max(x_hi, xs[index])
+            y_lo, y_hi = min(y_lo, ys[index]), max(y_hi, ys[index])
+            z_lo, z_hi = min(z_lo, zs[index]), max(z_hi, zs[index])
+        end
+        local cx, cy, cz = (x_lo + x_hi) / 2, (y_lo + y_hi) / 2, (z_lo + z_hi) / 2
+        local reach = 0
+        for index = first, last do
+            local dx, dy, dz = xs[index] - cx, ys[index] - cy, zs[index] - cz
+            reach = max(reach, dx * dx + dy * dy + dz * dz)
+        end
+        local slot = clusters.count + 1
+        clusters.count = slot
+        clusters.first[slot], clusters.last[slot] = first, last
+        clusters.x[slot], clusters.y[slot], clusters.z[slot] = cx, cy, cz
+        clusters.radius[slot] = sqrt(reach)
+    end
+    window.clusters = clusters
+    return clusters
+end
+
+function get_seated_span(window, seat)
+    local axis_i, axis_j, axis_k = seat.i, seat.j, seat.k
+    local origin_z, scale, slide = seat.origin_z, seat.scale, seat.slide
+    local clusters = get_clusters(window)
+    local xs, ys, zs = clusters.x_of, clusters.y_of, clusters.z_of
+    local stretch = scale * max(get_axis_length(axis_i), get_axis_length(axis_j), get_axis_length(axis_k))
+    local centers, spreads = {}, {}
+    local low_bound, high_bound = math.huge, -math.huge
+    for cluster = 1, clusters.count do
+        local coord_x, coord_y, coord_z = clusters.x[cluster], clusters.y[cluster], clusters.z[cluster]
+        local along = (coord_x * axis_i.z + coord_y * axis_j.z + coord_z * axis_k.z + origin_z) * scale - slide
+        local spread = clusters.radius[cluster] * stretch * (1 + CLUSTER_SLACK) + CLUSTER_SLACK
+        centers[cluster], spreads[cluster] = along, spread
+        low_bound, high_bound = min(low_bound, along + spread), max(high_bound, along - spread)
+    end
+    local z_lo, z_hi = math.huge, -math.huge
+    for cluster = 1, clusters.count do
+        local along, spread = centers[cluster], spreads[cluster]
+        if along - spread <= low_bound or along + spread >= high_bound then
+            for index = clusters.first[cluster], clusters.last[cluster] do
+                local value = (xs[index] * axis_i.z + ys[index] * axis_j.z + zs[index] * axis_k.z + origin_z) * scale
+                    - slide
+                z_lo, z_hi = min(z_lo, value), max(z_hi, value)
+            end
+        end
+    end
+    return z_lo, z_hi
+end
+
+local PRUNE_SLACK = 1e-7
+local CLUSTER_CHECK = 64
+local HALF_TURN_PER_UNIT = pi / 2
+
+local function get_cell_reach(surface, key)
+    local cell_reach = surface.cell_reach
+    local top = cell_reach[key]
+    if not top then
+        top = 0
+        local cell = surface.cover.cells[key]
+        if cell then
+            local reach = surface.cover.reach
+            for slot = 1, #cell do
+                local value = reach[cell[slot]]
+                if value > top then
+                    top = value
+                end
+            end
+        end
+        cell_reach[key] = top
+    end
+    return top
+end
+
+local function get_arc_reach(surface, cover_row, sector)
+    local key = cover_row * SECTORS + sector
+    local arc_reach = surface.arc_reach
+    local top = arc_reach[key]
+    if not top then
+        top = 0
+        local row_base = cover_row * SECTORS
+        local arc_lo, arc_hi = surface.arc_lo, surface.arc_hi
+        if arc_hi - arc_lo + 1 >= SECTORS then
+            arc_lo, arc_hi = 0, SECTORS - 1
+        end
+        for offset = arc_lo, arc_hi do
+            local value = get_cell_reach(surface, row_base + (sector + offset) % SECTORS)
+            if value > top then
+                top = value
+            end
+        end
+        arc_reach[key] = top
+    end
+    return top
+end
+
+local function get_cluster_reach(surface, cover_first, cover_last, sector, margin)
+    local top = 0
+    for cover_row = cover_first, cover_last do
+        for offset = -margin, margin do
+            local value = get_arc_reach(surface, cover_row, (sector + offset) % SECTORS)
+            if value > top then
+                top = value
+            end
+        end
+    end
+    return top
+end
+
+function get_clearance(surface, window, seat, cap)
+    local prune_at = cap and cap + PRUNE_SLACK
+    local clusters = prune_at and get_clusters(window)
+    local axis_i, axis_j, axis_k = seat.i, seat.j, seat.k
+    local i_x, i_y, i_z = axis_i.x, axis_i.y, axis_i.z
+    local j_x, j_y, j_z = axis_j.x, axis_j.y, axis_j.z
+    local k_x, k_y, k_z = axis_k.x, axis_k.y, axis_k.z
+    local origin_x, origin_y, origin_z = seat.origin_x, seat.origin_y, seat.origin_z
+    local scale, slide, surface_lo = seat.scale, seat.slide, surface.lo
+    local cover_lo = surface.cover.lo
+    local source_x, source_y, source_z = window.x, window.y, window.z
+    local firsts, lasts, cluster_count = { 1 }, { window.count }, 1
+    local centers_x, centers_y, centers_z, spreads, stretch
+    if clusters then
+        source_x, source_y, source_z = clusters.x_of, clusters.y_of, clusters.z_of
+        firsts, lasts, cluster_count = clusters.first, clusters.last, clusters.count
+        centers_x, centers_y, centers_z, spreads = clusters.x, clusters.y, clusters.z, clusters.radius
+        stretch = scale * max(get_axis_length(axis_i), get_axis_length(axis_j), get_axis_length(axis_k))
+    end
+    local positions, rows, steps, radii = {}, {}, {}, {}
+    local span_first, span_last = {}, {}
+    local kept = 0
+    local stride = wd_build_slice.STRIDE
+    local check = wd_build_slice.check
+    local visited = 0
+    for cluster = 1, cluster_count do
+        local top = nil
+        local is_open = true
+        if clusters then
+            if cluster % CLUSTER_CHECK == 0 then
+                check()
+            end
+            local wx, wy, wz = centers_x[cluster], centers_y[cluster], centers_z[cluster]
+            local along = (wx * i_z + wy * j_z + wz * k_z + origin_z) * scale - slide
+            local coord_x = (wx * i_x + wy * j_x + wz * k_x + origin_x) * scale
+            local coord_y = (wx * i_y + wy * j_y + wz * k_y + origin_y) * scale
+            local spread = spreads[cluster] * stretch * (1 + CLUSTER_SLACK) + CLUSTER_SLACK
+            local radius = sqrt(coord_x * coord_x + coord_y * coord_y)
+            if spread < radius then
+                local row_first = floor((along - spread - surface_lo) / SURFACE_STEP)
+                local row_last = floor((along + spread - surface_lo) / SURFACE_STEP) + 1
+                top = get_cluster_reach(
+                    surface,
+                    floor((surface_lo + row_first * SURFACE_STEP - cover_lo) / Z_BIN),
+                    floor((surface_lo + row_last * SURFACE_STEP - cover_lo) / Z_BIN),
+                    floor((atan2(coord_y, coord_x) + pi) / SECTOR_WIDTH),
+                    ceil(spread / radius * HALF_TURN_PER_UNIT / SECTOR_WIDTH) + ARC_SLACK_SECTORS
+                )
+                is_open = radius - spread - top < prune_at
+            end
+        end
+        if is_open then
+            for index = firsts[cluster], lasts[cluster] do
+                visited = visited + 1
+                if visited % stride == 0 then
+                    check()
+                end
+                local wx, wy, wz = source_x[index], source_y[index], source_z[index]
+                local coord_x = (wx * i_x + wy * j_x + wz * k_x + origin_x) * scale
+                local coord_y = (wx * i_y + wy * j_y + wz * k_y + origin_y) * scale
+                local radius = sqrt(coord_x * coord_x + coord_y * coord_y)
+                if not top or radius - top < prune_at then
+                    local along = (wx * i_z + wy * j_z + wz * k_z + origin_z) * scale - slide
+                    local position = (along - surface_lo) / SURFACE_STEP
+                    local row = floor(position)
+                    local step = floor(atan2(coord_y, coord_x) / SURFACE_ANGLE_STEP)
+                    kept = kept + 1
+                    positions[kept], rows[kept], steps[kept], radii[kept] = position, row, step, radius
+                    local known = span_first[row]
+                    if not known then
+                        span_first[row], span_last[row] = step, step
+                    elseif step < known then
+                        span_first[row] = step
+                    elseif step > span_last[row] then
+                        span_last[row] = step
+                    end
+                    local next_row = row + 1
+                    known = span_first[next_row]
+                    if not known then
+                        span_first[next_row], span_last[next_row] = step, step
+                    elseif step < known then
+                        span_first[next_row] = step
+                    elseif step > span_last[next_row] then
+                        span_last[next_row] = step
+                    end
+                end
+            end
+        end
+    end
+    for row, step_first in pairs(span_first) do
+        check()
+        fill_swept_row(surface, row, step_first, span_last[row])
+    end
+    local swept = surface.swept
+    local clearance = math.huge
+    for index = 1, kept do
+        if index % stride == 0 then
+            check()
+        end
+        local row, step = rows[index], steps[index]
+        local low = swept[row][step]
+        local top = low + (positions[index] - row) * (swept[row + 1][step] - low)
+        local gap = radii[index] - top
+        if gap < clearance then
+            clearance = gap
+        end
+    end
+    return clearance
+end

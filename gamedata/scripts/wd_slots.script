@@ -95,7 +95,7 @@ function can_mount(section, spec)
     if not spec then
         return false, "not_registered"
     end
-    if not is_bracer_worn() then
+    if not (spec.bare or is_bracer_worn()) then
         return false, "no_bracer"
     end
     if not get_device_object(spec, section) then
@@ -174,13 +174,21 @@ end
 
 function unmount_all(remember)
     for _, spec in pairs(devices) do
-        if spec.is_attached() then
+        if spec.is_attached() and not spec.bare then
             if remember then
                 record_loadout(spec)
             else
                 loadout[spec.slot] = nil
             end
             spec.detach()
+        end
+    end
+end
+
+function resync_bare_devices()
+    for _, spec in pairs(devices) do
+        if spec.bare and spec.is_attached() then
+            spec.resync()
         end
     end
 end

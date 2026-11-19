@@ -1,0 +1,131 @@
+jit.off(true, true)
+
+Z_STEP = 0.001
+ANGLE_STEP = math.rad(2)
+BRIDGE_MAX = math.rad(90)
+
+local GRID_CHECK_LINES = 16
+
+local floor = math.floor
+local min = math.min
+local sin = math.sin
+local full_turn = 2 * math.pi
+
+local BINS = floor(full_turn / ANGLE_STEP + 0.5)
+
+function new_grid(z_lo, rows, origin)
+    return { z_lo = z_lo, z_step = Z_STEP, rows = rows, origin = origin, angle_step = ANGLE_STEP, bins = BINS }
+end
+
+function sample(grid, values, coord_z, angle)
+    local rows, bins = grid.rows, grid.bins
+    local row_position = (coord_z - grid.z_lo) / grid.z_step + 1
+    if row_position < 1 or row_position > rows then
+        return nil
+    end
+    local bin_position = ((angle - grid.origin) % full_turn) / grid.angle_step + 1
+    local row, bin = floor(row_position), floor(bin_position)
+    local row_share, bin_share = row_position - row, bin_position - bin
+    local next_row, next_bin = min(row + 1, rows), bin % bins + 1
+    local base, next_base = (row - 1) * bins, (next_row - 1) * bins
+    local low = values[base + bin] + (values[base + next_bin] - values[base + bin]) * bin_share
+    local high = values[next_base + bin] + (values[next_base + next_bin] - values[next_base + bin]) * bin_share
+    return low + (high - low) * row_share
+end
+
+function fill_circular(values, base, bins)
+    local known = {}
+    for bin = 1, bins do
+        if values[base + bin] then
+            known[#known + 1] = bin
+        end
+    end
+    if #known == 0 then
+        return false
+    end
+    for slot = 1, #known do
+        local bin, next_bin = known[slot], known[slot % #known + 1]
+        local span = (next_bin - bin - 1) % bins + 1
+        local from, to = values[base + bin], values[base + next_bin]
+        for gap = 1, span - 1 do
+            values[base + (bin + gap - 1) % bins + 1] = from + (to - from) * gap / span
+        end
+    end
+    return true
+end
+
+local function get_line_radius(radius_a, angle_a, radius_b, angle_b, angle)
+    local denominator = radius_a * sin(angle - angle_a) + radius_b * sin(angle_b - angle)
+    if denominator <= 0 then
+        return min(radius_a, radius_b)
+    end
+    return radius_a * radius_b * sin(angle_b - angle_a) / denominator
+end
+
+function fill_row(values, base, bins, angle_step)
+    local previous = nil
+    for bin = 1, bins do
+        local radius = values[base + bin]
+        if radius then
+            if previous and bin - previous > 1 and (bin - previous) * angle_step <= BRIDGE_MAX then
+                local radius_a = values[base + previous]
+                for gap = previous + 1, bin - 1 do
+                    values[base + gap] =
+                        get_line_radius(radius_a, previous * angle_step, radius, bin * angle_step, gap * angle_step)
+                end
+            end
+            previous = bin
+        end
+    end
+end
+
+function fill_column(values, bin, rows, bins)
+    local previous = nil
+    for row = 1, rows do
+        local radius = values[(row - 1) * bins + bin]
+        if radius then
+            if previous and row - previous > 1 then
+                local low = values[(previous - 1) * bins + bin]
+                for gap = previous + 1, row - 1 do
+                    values[(gap - 1) * bins + bin] = low + (radius - low) * (gap - previous) / (row - previous)
+                end
+            end
+            previous = row
+        end
+    end
+end
+
+function get_spread_min(values, rows, bins, spread)
+    local lowest = {}
+    local check = wd_build_slice.check
+    for row = 1, rows do
+        check()
+        local base = (row - 1) * bins
+        for bin = 1, bins do
+            local value = values[base + bin]
+            if bin > spread and bin + spread <= bins then
+                for cell = base + bin - spread, base + bin + spread do
+                    local other = values[cell]
+                    if other < value then
+                        value = other
+                    end
+                end
+            else
+                for offset = -spread, spread do
+                    local other = values[base + (bin + offset - 1) % bins + 1]
+                    if other < value then
+                        value = other
+                    end
+                end
+            end
+            lowest[base + bin] = value
+        end
+    end
+    return lowest
+end
+
+function check_line(line)
+    if line % GRID_CHECK_LINES == 0 then
+        wd_build_slice.check()
+    end
+end

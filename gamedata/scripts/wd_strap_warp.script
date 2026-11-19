@@ -1,0 +1,618 @@
+jit.off(true, true)
+
+STRAP_PATTERN = "strap"
+WINDOW_PATTERNS = { "aref", "glass", "nixie", "halo", "screen" }
+BLEND = 0.008
+LUG_BLEND = 0.001
+BRIDGE_SPAN = math.rad(8)
+SURFACE_TOLERANCE = 0.0001
+WINDOW_STEP = 0.001
+CASE_SURFACE_HEIGHT = 0.015
+UNDERSIDE_STEP = 0.001
+
+local SECTORS = 36
+local FIT_PASSES = 4
+local MIN_SECTORS = 12
+local MIN_INNER_POINTS = 2
+local INNER_FACING = -0.5
+local BRIDGE_END = math.rad(0.5)
+local DEGENERATE = 1e-9
+
+local acos = math.acos
+local atan2 = math.atan2
+local ceil = math.ceil
+local cos = math.cos
+local sin = math.sin
+local floor = math.floor
+local sqrt = math.sqrt
+local min = math.min
+local max = math.max
+local pi = math.pi
+
+local SECTOR_WIDTH = 2 * pi / SECTORS
+
+function is_strap_child(child)
+    return child.vertices ~= nil and child.texture:lower():find(STRAP_PATTERN, 1, true) ~= nil
+end
+
+local function is_case_child(child)
+    return child.vertices ~= nil and not is_strap_child(child)
+end
+
+function is_window_child(child)
+    if not is_case_child(child) then
+        return false
+    end
+    local texture, shader = child.texture:lower(), child.shader:lower()
+    for _, pattern in ipairs(WINDOW_PATTERNS) do
+        if texture:find(pattern, 1, true) or shader:find(pattern, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function get_sector(delta_z, delta_y)
+    return floor((atan2(delta_y, delta_z) + pi) / SECTOR_WIDTH) % SECTORS + 1
+end
+
+local function read_positions(mesh, accept)
+    local xs, ys, zs = {}, {}, {}
+    local count = 0
+    local stride = wd_build_slice.STRIDE
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        if accept(child) then
+            for index = 1, vertices.count do
+                if index % stride == 0 then
+                    wd_build_slice.check()
+                end
+                count = count + 1
+                xs[count], ys[count], zs[count] = wd_ogf.read_position(mesh, vertices, index)
+            end
+        end
+    end
+    return { count = count, x = xs, y = ys, z = zs }
+end
+
+local function read_strap(mesh)
+    local xs, ys, zs, normal_ys, normal_zs = {}, {}, {}, {}, {}
+    local count = 0
+    local stride = wd_build_slice.STRIDE
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        if is_strap_child(child) then
+            for index = 1, vertices.count do
+                if index % stride == 0 then
+                    wd_build_slice.check()
+                end
+                local record = wd_ogf.read_vertex(mesh, vertices, index)
+                local position, normal = record.position, record.normal
+                count = count + 1
+                xs[count], ys[count], zs[count] = position.x, position.y, position.z
+                normal_ys[count], normal_zs[count] = normal.y, normal.z
+            end
+        end
+    end
+    return { count = count, x = xs, y = ys, z = zs, normal_y = normal_ys, normal_z = normal_zs }
+end
+
+local function get_edge_steps(xs, ys, zs, first, second)
+    local delta_x, delta_y, delta_z = xs[second] - xs[first], ys[second] - ys[first], zs[second] - zs[first]
+    return ceil(sqrt(delta_x * delta_x + delta_y * delta_y + delta_z * delta_z) / WINDOW_STEP)
+end
+
+local function add_triangle_samples(samples, first, second, third)
+    local xs, ys, zs = samples.x, samples.y, samples.z
+    local steps = max(
+        get_edge_steps(xs, ys, zs, first, second),
+        get_edge_steps(xs, ys, zs, second, third),
+        get_edge_steps(xs, ys, zs, third, first)
+    )
+    local first_x, first_y, first_z = xs[first], ys[first], zs[first]
+    local second_x, second_y, second_z = xs[second] - first_x, ys[second] - first_y, zs[second] - first_z
+    local third_x, third_y, third_z = xs[third] - first_x, ys[third] - first_y, zs[third] - first_z
+    local count = samples.count
+    for along = 0, steps - 1 do
+        local share_b = along / steps
+        local base_x, base_y, base_z =
+            first_x + share_b * second_x, first_y + share_b * second_y, first_z + share_b * second_z
+        local across_first, across_last = 0, steps - along
+        if along == 0 then
+            across_first, across_last = 1, steps - 1
+        end
+        for across = across_first, across_last do
+            local share_c = across / steps
+            count = count + 1
+            xs[count] = base_x + share_c * third_x
+            ys[count] = base_y + share_c * third_y
+            zs[count] = base_z + share_c * third_z
+        end
+    end
+    samples.count = count
+end
+
+local function sample_children(mesh, accept, y_max)
+    local positions = read_positions(mesh, accept)
+    local samples = { count = positions.count, x = positions.x, y = positions.y, z = positions.z }
+    local ys = samples.y
+    local base = 0
+    for _, child in ipairs(mesh.children) do
+        if accept(child) then
+            local indices = wd_ogf.read_indices(mesh, child.vertices) or {}
+            local stride = wd_build_slice.STRIDE * 3
+            for slot = 1, #indices - 2, 3 do
+                if slot % stride == 1 then
+                    wd_build_slice.check()
+                end
+                local first, second, third =
+                    base + indices[slot] + 1, base + indices[slot + 1] + 1, base + indices[slot + 2] + 1
+                if min(ys[first], ys[second], ys[third]) <= y_max then
+                    add_triangle_samples(samples, first, second, third)
+                end
+            end
+            base = base + child.vertices.count
+        end
+    end
+    return samples
+end
+
+local function sample_windows(mesh)
+    return sample_children(mesh, is_window_child, math.huge)
+end
+
+local function is_body_child(child)
+    return is_case_child(child) and not is_window_child(child)
+end
+
+local function get_underside(points)
+    local xs, ys, zs = points.x, points.y, points.z
+    local columns = {}
+    local stride = wd_build_slice.STRIDE
+    for index = 1, points.count do
+        if index % stride == 0 then
+            wd_build_slice.check()
+        end
+        local column, line = xs[index] / UNDERSIDE_STEP + 0.5, zs[index] / UNDERSIDE_STEP + 0.5
+        local key = (column - column % 1) * 65536 + (line - line % 1)
+        local known = columns[key]
+        if not known or ys[index] < ys[known] then
+            columns[key] = index
+        end
+    end
+    local keys = {}
+    for key in pairs(columns) do
+        keys[#keys + 1] = key
+    end
+    table.sort(keys)
+    local underside = { count = #keys, x = {}, y = {}, z = {} }
+    for slot, key in ipairs(keys) do
+        local index = columns[key]
+        underside.x[slot], underside.y[slot], underside.z[slot] = xs[index], ys[index], zs[index]
+    end
+    return underside
+end
+
+local function sample_case_underside(mesh, case)
+    local lowest = math.huge
+    for index = 1, case.count do
+        lowest = min(lowest, case.y[index])
+    end
+    return get_underside(sample_children(mesh, is_body_child, lowest + CASE_SURFACE_HEIGHT))
+end
+
+local function fit_circle(point_z, point_y)
+    local count = #point_z
+    if count < 3 then
+        return nil
+    end
+    local mean_z, mean_y = 0, 0
+    for index = 1, count do
+        mean_z = mean_z + point_z[index]
+        mean_y = mean_y + point_y[index]
+    end
+    mean_z, mean_y = mean_z / count, mean_y / count
+    local sum_zz, sum_yy, sum_zy, sum_zzz, sum_yyy, sum_zyy, sum_yzz = 0, 0, 0, 0, 0, 0, 0
+    for index = 1, count do
+        local offset_z, offset_y = point_z[index] - mean_z, point_y[index] - mean_y
+        sum_zz = sum_zz + offset_z * offset_z
+        sum_yy = sum_yy + offset_y * offset_y
+        sum_zy = sum_zy + offset_z * offset_y
+        sum_zzz = sum_zzz + offset_z * offset_z * offset_z
+        sum_yyy = sum_yyy + offset_y * offset_y * offset_y
+        sum_zyy = sum_zyy + offset_z * offset_y * offset_y
+        sum_yzz = sum_yzz + offset_y * offset_z * offset_z
+    end
+    local determinant = sum_zz * sum_yy - sum_zy * sum_zy
+    if determinant <= DEGENERATE * sum_zz * sum_yy then
+        return nil
+    end
+    local right_z = (sum_zzz + sum_zyy) / 2
+    local right_y = (sum_yyy + sum_yzz) / 2
+    local center_z = (right_z * sum_yy - right_y * sum_zy) / determinant
+    local center_y = (right_y * sum_zz - right_z * sum_zy) / determinant
+    local radius = sqrt(center_z * center_z + center_y * center_y + (sum_zz + sum_yy) / count)
+    return { z = mean_z + center_z, y = mean_y + center_y, radius = radius }
+end
+
+local function collect_sector_radii(loop, center_z, center_y)
+    local sectors = {}
+    local zs, ys = loop.z, loop.y
+    for index = 1, loop.count do
+        local delta_z, delta_y = zs[index] - center_z, ys[index] - center_y
+        local radius = sqrt(delta_z * delta_z + delta_y * delta_y)
+        local sector = get_sector(delta_z, delta_y)
+        local entry = sectors[sector]
+        if not entry then
+            sectors[sector] = { low = radius, index = index }
+        elseif radius < entry.low then
+            entry.low = radius
+            entry.index = index
+        end
+    end
+    return sectors
+end
+
+local function fit_inner_ring(loop)
+    local ring = fit_circle(loop.z, loop.y)
+    for _ = 1, FIT_PASSES do
+        if not ring then
+            return nil
+        end
+        local sectors = collect_sector_radii(loop, ring.z, ring.y)
+        local inner_z, inner_y = {}, {}
+        for sector = 1, SECTORS do
+            local entry = sectors[sector]
+            if entry then
+                inner_z[#inner_z + 1] = loop.z[entry.index]
+                inner_y[#inner_y + 1] = loop.y[entry.index]
+            end
+        end
+        if #inner_z < MIN_SECTORS then
+            return nil
+        end
+        ring = fit_circle(inner_z, inner_y)
+    end
+    return ring
+end
+
+local function get_extent(positions, axis)
+    local values = positions[axis]
+    local low, high = math.huge, -math.huge
+    for index = 1, positions.count do
+        low = min(low, values[index])
+        high = max(high, values[index])
+    end
+    return low, high
+end
+
+local function get_case_back(case, band_low, band_high)
+    local lowest = math.huge
+    local xs, ys = case.x, case.y
+    for index = 1, case.count do
+        local along = xs[index]
+        if along >= band_low and along <= band_high then
+            lowest = min(lowest, ys[index])
+        end
+    end
+    return lowest
+end
+
+local function collect_loop(strap, limit)
+    local loop = { count = 0, z = {}, y = {} }
+    for index = 1, strap.count do
+        local height = strap.y[index]
+        if height < limit then
+            local count = loop.count + 1
+            loop.count = count
+            loop.z[count], loop.y[count] = strap.z[index], height
+        end
+    end
+    return loop
+end
+
+local function get_polar_angle(delta_z, delta_y)
+    return atan2(delta_z, -delta_y)
+end
+
+local function is_earlier(first, second)
+    return first.angle < second.angle
+end
+
+local function collect_inner_points(strap, ring, limit)
+    local points = {}
+    local ys, zs, normal_ys, normal_zs = strap.y, strap.z, strap.normal_y, strap.normal_z
+    for index = 1, strap.count do
+        local height = ys[index]
+        if height < limit then
+            local delta_z, delta_y = zs[index] - ring.z, height - ring.y
+            local radius = sqrt(delta_z * delta_z + delta_y * delta_y)
+            if normal_zs[index] * delta_z + normal_ys[index] * delta_y < INNER_FACING * radius then
+                points[#points + 1] = { angle = get_polar_angle(delta_z, delta_y), radius = radius }
+            end
+        end
+    end
+    table.sort(points, is_earlier)
+    local merged = {}
+    for _, point in ipairs(points) do
+        local last = merged[#merged]
+        if last and last.angle == point.angle then
+            last.radius = min(last.radius, point.radius)
+        else
+            merged[#merged + 1] = point
+        end
+    end
+    return merged
+end
+
+local function get_chord_radius(first, last, angle)
+    return first.radius + (last.radius - first.radius) * (angle - first.angle) / (last.angle - first.angle)
+end
+
+local function is_bridgeable(points, first_index, last_index)
+    local first, last = points[first_index], points[last_index]
+    local first_angle, last_angle = first.angle, last.angle
+    local ceiling = max(first.radius, last.radius) + SURFACE_TOLERANCE
+    for index = first_index + 1, last_index - 1 do
+        local point = points[index]
+        local angle, radius = point.angle, point.radius
+        if
+            angle - first_angle > BRIDGE_END
+            and last_angle - angle > BRIDGE_END
+            and radius < ceiling
+            and radius > get_chord_radius(first, last, angle) + SURFACE_TOLERANCE
+        then
+            return false
+        end
+    end
+    return true
+end
+
+local function new_inner_profile(points)
+    local count = #points
+    local angles, radii = {}, {}
+    for index = 1, count do
+        angles[index], radii[index] = points[index].angle, points[index].radius
+    end
+    for first_index = 1, count - 2 do
+        local first = points[first_index]
+        local span_end = first.angle + BRIDGE_SPAN
+        local last_index = first_index + 2
+        while last_index <= count and angles[last_index] <= span_end do
+            if is_bridgeable(points, first_index, last_index) then
+                local last = points[last_index]
+                for index = first_index + 1, last_index - 1 do
+                    radii[index] = min(radii[index], get_chord_radius(first, last, angles[index]))
+                end
+            end
+            last_index = last_index + 1
+        end
+    end
+    return { count = count, angles = angles, radii = radii }
+end
+
+local function get_inner_radius(profile, angle)
+    local angles, radii = profile.angles, profile.radii
+    local low, high = 1, profile.count
+    if angle <= angles[low] then
+        return radii[low]
+    end
+    if angle >= angles[high] then
+        return radii[high]
+    end
+    while high - low > 1 do
+        local middle = floor((low + high) / 2)
+        if angles[middle] <= angle then
+            low = middle
+        else
+            high = middle
+        end
+    end
+    return radii[low] + (radii[high] - radii[low]) * (angle - angles[low]) / (angles[high] - angles[low])
+end
+
+local function get_lug(ring, profile, index)
+    local angle, radius = profile.angles[index], profile.radii[index]
+    return { angle = angle, z = ring.z + radius * sin(angle), y = ring.y - radius * cos(angle) }
+end
+
+local function get_ring(strap, case_back_y)
+    return fit_inner_ring(collect_loop(strap, case_back_y - BLEND))
+end
+
+local function get_profile(strap, ring, case_back_y)
+    local inner_points = collect_inner_points(strap, ring, case_back_y)
+    if #inner_points < MIN_INNER_POINTS then
+        return nil
+    end
+    return new_inner_profile(inner_points)
+end
+
+function get_geometry(mesh)
+    local strap = wd_build_probe.run("positions", read_strap, mesh)
+    if strap.count == 0 then
+        return nil, "no strap vertices"
+    end
+    local case = wd_build_probe.run("positions", read_positions, mesh, is_case_child)
+    if case.count == 0 then
+        return nil, "no case vertices"
+    end
+    local band_low, band_high = get_extent(strap, "x")
+    local case_back_y = get_case_back(case, band_low, band_high)
+    if case_back_y == math.huge then
+        return nil, "the case does not reach the strap band"
+    end
+    local ring = wd_build_probe.run("ring", get_ring, strap, case_back_y)
+    if not ring then
+        return nil, "no strap ring found"
+    end
+    local profile = wd_build_probe.run("profile", get_profile, strap, ring, case_back_y)
+    if not profile then
+        return nil, "no inner strap surface found"
+    end
+    local window_floor = wd_build_probe.run("windows", sample_windows, mesh)
+    local case_x_min, case_x_max = get_extent(case, "x")
+    local case_z_min, case_z_max = get_extent(case, "z")
+    return {
+        case_x_min = case_x_min,
+        case_x_max = case_x_max,
+        case_z_min = case_z_min,
+        case_z_max = case_z_max,
+        case_floor = case,
+        case_underside = wd_build_probe.run("case_underside", sample_case_underside, mesh, case),
+        strap = strap,
+        window_floor = window_floor,
+        window_underside = wd_build_probe.run("window_underside", get_underside, window_floor),
+        case_back_y = case_back_y,
+        ring = ring,
+        profile = profile,
+        lugs = { [-1] = get_lug(ring, profile, 1), [1] = get_lug(ring, profile, profile.count) },
+    }
+end
+
+local function get_lowest(points, slope_y)
+    if points.lowest_slope == slope_y then
+        return points.lowest
+    end
+    local xs, ys = points.x, points.y
+    local lowest = math.huge
+    for index = 1, points.count do
+        lowest = min(lowest, ys[index] - slope_y * xs[index])
+    end
+    points.lowest_slope, points.lowest = slope_y, lowest
+    return lowest
+end
+
+function get_seat_y(geometry, slope_y)
+    return get_lowest(geometry.case_floor, slope_y)
+end
+
+function get_window_y(geometry, slope_y)
+    return get_lowest(geometry.window_floor, slope_y)
+end
+
+local function is_valid_target(target)
+    return type(target) == "table"
+        and wd_ogf.is_finite_number(target.center_z)
+        and wd_ogf.is_finite_number(target.center_y)
+        and wd_ogf.is_finite_number(target.slope_z)
+        and wd_ogf.is_finite_number(target.slope_y)
+        and wd_ogf.is_finite_number(target.radius)
+        and target.radius > 0
+end
+
+local function get_side(angle)
+    if angle < 0 then
+        return -1
+    end
+    return 1
+end
+
+local function get_circle_point(center_z, center_y, radius, angle)
+    return center_z + radius * sin(angle), center_y - radius * cos(angle)
+end
+
+local function get_tangent(lug, side, center_z, center_y, radius)
+    local delta_z, delta_y = lug.z - center_z, lug.y - center_y
+    local distance = sqrt(delta_z * delta_z + delta_y * delta_y)
+    if not (side * lug.angle > 0 and distance > radius) then
+        return nil
+    end
+    local tangent = get_polar_angle(delta_z, delta_y) - side * acos(radius / distance)
+    if side * tangent <= 0 then
+        return nil
+    end
+    return tangent, sqrt(distance * distance - radius * radius)
+end
+
+local function get_taut_point(placed, lug, radius)
+    local tangent, span, depth = placed.tangent, placed.span, placed.depth
+    local arc = radius * placed.side * tangent
+    local along = (arc + span) * placed.angle / lug.angle
+    if along <= arc then
+        return get_circle_point(placed.center_z, placed.center_y, radius + depth, placed.side * along / radius)
+    end
+    local normal_z, normal_y = sin(tangent), -cos(tangent)
+    local touch_z, touch_y = get_circle_point(placed.center_z, placed.center_y, radius, tangent)
+    local share = (along - arc) / span
+    return touch_z + share * (lug.z - touch_z) + depth * normal_z,
+        touch_y + share * (lug.y - touch_y) + depth * normal_y
+end
+
+local function collect_placements(mesh, geometry, target)
+    local ring, profile, case_back_y, lugs = geometry.ring, geometry.profile, geometry.case_back_y, geometry.lugs
+    local placements, taut = {}, { [-1] = true, [1] = true }
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        if is_strap_child(child) then
+            for index = 1, vertices.count do
+                local record = wd_ogf.read_vertex(mesh, vertices, index)
+                local position = record.position
+                if position.y < case_back_y then
+                    local delta_z, delta_y = position.z - ring.z, position.y - ring.y
+                    local angle = get_polar_angle(delta_z, delta_y)
+                    local side = get_side(angle)
+                    local center_z = target.center_z + target.slope_z * position.x
+                    local center_y = target.center_y + target.slope_y * position.x
+                    local tangent, span = get_tangent(lugs[side], side, center_z, center_y, target.radius)
+                    if not tangent then
+                        taut[side] = false
+                    end
+                    placements[#placements + 1] = {
+                        record = record,
+                        angle = angle,
+                        side = side,
+                        depth = sqrt(delta_z * delta_z + delta_y * delta_y) - get_inner_radius(profile, angle),
+                        center_z = center_z,
+                        center_y = center_y,
+                        tangent = tangent,
+                        span = span,
+                    }
+                end
+            end
+        end
+    end
+    return placements, taut
+end
+
+local function move_strap(patch, placements, taut, geometry, radius)
+    local case_back_y, lugs = geometry.case_back_y, geometry.lugs
+    for _, placed in ipairs(placements) do
+        local record = placed.record
+        local position = record.position
+        local side = placed.side
+        local warped_z, warped_y, weight
+        if taut[side] then
+            warped_z, warped_y = get_taut_point(placed, lugs[side], radius)
+            weight = wd_frame.get_smoothstep((case_back_y - position.y) / LUG_BLEND)
+        else
+            warped_z, warped_y = get_circle_point(placed.center_z, placed.center_y, radius + placed.depth, placed.angle)
+            weight = wd_frame.get_smoothstep((case_back_y - position.y) / BLEND)
+        end
+        local ok, reason = patch.set_position(
+            record,
+            position.x,
+            position.y + weight * (warped_y - position.y),
+            position.z + weight * (warped_z - position.z)
+        )
+        if not ok then
+            return nil, reason
+        end
+    end
+    return true
+end
+
+function warp(mesh, geometry, target)
+    if not is_valid_target(target) then
+        return nil, "target is not a circle"
+    end
+    local placements, taut = wd_build_probe.run("placements", collect_placements, mesh, geometry, target)
+    local patch = wd_ogf.new_patch(mesh)
+    local moved, reason = wd_build_probe.run("move", move_strap, patch, placements, taut, geometry, target.radius)
+    if not moved then
+        return nil, reason
+    end
+    local fallbacks = (taut[-1] and 0 or 1) + (taut[1] and 0 or 1)
+    local data, digest = wd_build_probe.run("bytes", patch.build)
+    return data, fallbacks, digest
+end

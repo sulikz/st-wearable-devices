@@ -2,9 +2,6 @@
     <file name="wd\ui\fill">
         <texture id="wd_fill" x="0" y="0" width="4" height="4" />
     </file>
-    <file name="wd\ui\promin\medik_bar_sys_hp">
-        <texture id="wd_gizmo_line" x="28" y="4" width="8" height="8" />
-    </file>
 
     <file name="wd\ui\promin\tablet_ui_digits">
         <texture id="dig2_0" x="23"  y="30" width="36" height="45" />

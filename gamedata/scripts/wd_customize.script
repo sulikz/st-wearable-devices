@@ -1,6 +1,8 @@
 SLOT_BY_INDEX = { "wrist", "forearm", "side" }
 ACCESSORY_BY_INDEX = { "patch" }
-SLOTS_BY_BAG = { slots = SLOT_BY_INDEX, accessories = ACCESSORY_BY_INDEX }
+BRACER_SLOT = "bracer"
+SLOTS_BY_BAG = { slots = SLOT_BY_INDEX, accessories = ACCESSORY_BY_INDEX, bracer = { BRACER_SLOT } }
+CELL_PATH_BY_BAG = { bracer = "cont_bracer" }
 REFRESH_SYNC_MS = 1500
 REFRESH_STEP_MS = 300
 
@@ -124,6 +126,16 @@ function get_install_reject_reason(installed, active_bay_ids, module)
     return "module_locked"
 end
 
+local function get_promin_missing_reason()
+    if not d_bracer.is_worn() then
+        return "no_bracer"
+    end
+    if not d_promin.is_worn() then
+        return "no_promin"
+    end
+    return nil
+end
+
 local function get_installed_name_at_bay(bay_id)
     for _, name in ipairs(d_promin.get_installed_modules()) do
         local module = d_promin_config.get_module(name)
@@ -137,13 +149,44 @@ end
 function list_backpack_objects()
     local result = wd_slots.list_unmounted_objects()
     if db and db.actor then
+        local worn_bracer_id = d_bracer.get_worn_id()
         db.actor:iterate_inventory(function(_owner, item)
-            if d_promin_config.get_module_of_section(item:section()) then
+            local section = item:section()
+            if
+                d_promin_config.get_module_of_section(section)
+                or (d_bracer.is_bracer_section(section) and item:id() ~= worn_bracer_id)
+            then
                 result[#result + 1] = item
             end
         end, db.actor)
     end
     return result
+end
+
+local function get_mounted_object(slot)
+    if slot == BRACER_SLOT then
+        return d_bracer.get_worn_object()
+    end
+    return wd_slots.get_mounted_object(slot)
+end
+
+local function mount_object(slot, obj_id)
+    local obj = db.actor:object_id(obj_id)
+    if not obj then
+        return false, "not_in_inventory"
+    end
+    if slot == BRACER_SLOT then
+        return d_bracer.wear(obj)
+    end
+    return wd_slots.mount(obj, true)
+end
+
+local function unmount_slot(slot)
+    if slot == BRACER_SLOT then
+        d_bracer.take_off()
+        return
+    end
+    wd_slots.unmount(slot)
 end
 
 local function get_item_traits(bag_id, obj)
@@ -152,33 +195,44 @@ local function get_item_traits(bag_id, obj)
     end
     local section = obj:section()
     local is_module = bag_id == "modules" or d_promin_config.get_module_of_section(section) ~= nil
+    if d_bracer.is_bracer_section(section) then
+        return is_module, BRACER_SLOT
+    end
     return is_module, wd_slots.get_slot_of(section)
+end
+
+local function refresh_after_slot_change(win, slot)
+    if slot == BRACER_SLOT then
+        win:schedule_sync_refresh()
+    end
+    win:refresh()
 end
 
 function apply_decision(win, decision, obj)
     if decision.act == "mount" then
+        local obj_id = obj:id()
         run_slot_change(decision.slot, function()
-            local ok, reason = wd_slots.mount(obj, true)
+            local ok, reason = mount_object(decision.slot, obj_id)
             if win.closed then
                 return
             end
             if not ok then
                 win:set_status(game.translate_string("st_wd_customize_" .. reason))
             end
-            win:refresh()
+            refresh_after_slot_change(win, decision.slot)
         end)
     elseif decision.act == "unmount" then
         run_slot_change(decision.slot, function()
-            wd_slots.unmount(decision.slot)
+            unmount_slot(decision.slot)
             if win.closed then
                 return
             end
-            win:refresh()
+            refresh_after_slot_change(win, decision.slot)
         end)
     elseif decision.act == "install" then
         local module = d_promin_config.get_module_of_section(obj:section())
-        local reason =
-            get_install_reject_reason(d_promin.get_installed_modules(), d_promin.get_active_bay_ids(), module)
+        local reason = get_promin_missing_reason()
+            or get_install_reject_reason(d_promin.get_installed_modules(), d_promin.get_active_bay_ids(), module)
         if reason then
             win:set_status(game.translate_string("st_wd_customize_" .. reason))
             return
@@ -238,6 +292,7 @@ function UIWdCustomize:InitControls()
     xml:ParseFile("ui_wd_customize.xml")
     self.xml = xml
     self.back = xml:InitStatic("back", self)
+    xml:InitStatic("bracer_open", self)
     for index = 1, #SLOT_BY_INDEX do
         xml:InitStatic("device_open_" .. index, self)
         xml:InitStatic((ACCESSORY_BY_INDEX[index] and "accessory_open_" or "accessory_restricted_") .. index, self)
@@ -256,7 +311,14 @@ function UIWdCustomize:InitControls()
     self:AddCallback("btn_close", ui_events.BUTTON_CLICKED, self.on_close, self)
     self.CC = {}
     for bag_id, slots in pairs(SLOTS_BY_BAG) do
-        local container = utils_ui.UICellContainer(bag_id, self, "cont_slots", "cont_" .. bag_id, self, true)
+        local container = utils_ui.UICellContainer(
+            bag_id,
+            self,
+            CELL_PATH_BY_BAG[bag_id] or "cont_slots",
+            "cont_" .. bag_id,
+            self,
+            true
+        )
         container.disable_callback["On_CC_Add"] = true
         container.disable_callback["On_CC_Remove"] = true
         for index = 1, #slots do
@@ -291,7 +353,7 @@ end
 function UIWdCustomize:refresh()
     for bag_id, slots in pairs(SLOTS_BY_BAG) do
         for index, slot in ipairs(slots) do
-            local obj = wd_slots.get_mounted_object(slot)
+            local obj = get_mounted_object(slot)
             if obj then
                 self.CC[bag_id]:AddItemManual(obj, nil, index)
             else
