@@ -1,0 +1,307 @@
+SLEEVE_KIND = "sleeve_bracer"
+REST_MS = 200
+
+local SOURCE_ID = "wd_bracer_sleeve"
+local LOG_FORMAT = "[wd_bracer_sleeve] %s: %s"
+local KEY_FORMAT = "%s|%d|%s|%s|%s"
+local AXIS_FIELDS = { "x", "y", "slope_x", "slope_y" }
+local NO_AXIS = { x = 0, y = 0, slope_x = 0, slope_y = 0 }
+
+local driver = nil
+local centred = nil
+local tube = nil
+local axes = {}
+
+local function read_tube_points(record)
+    if not record.points then
+        local mesh, mesh_error = wd_mesh_cache.read_mesh(d_bracer_config.MODEL)
+        if not mesh then
+            return nil, mesh_error
+        end
+        local points, points_error = wd_tube_squeeze.read_tube_points(mesh)
+        if not points then
+            return nil, points_error
+        end
+        record.points = points
+    end
+    return record.points
+end
+
+local function read_baked_wall(scale)
+    local length = wd_mesh_cache.get_source_length(d_bracer_config.MODEL)
+    local data = length and wd_mesh_cache.read_bytes(d_bracer_config.BAKED_WALL)
+    if not data then
+        return nil
+    end
+    return wd_tube_squeeze.read_tube_wall(data, scale, length)
+end
+
+local function build_wall(record, scale)
+    if scale == d_bracer_config.DEFAULTS.model_scale then
+        local baked = wd_build_probe.run("baked_wall", read_baked_wall, scale)
+        if baked then
+            return baked
+        end
+    end
+    local points, reason = wd_build_probe.run("tube", read_tube_points, record)
+    if not points then
+        return nil, reason
+    end
+    local wall = wd_build_probe.run("wall", wd_tube_squeeze.new_tube_wall, points, scale)
+    if not wall then
+        return nil, "the bracer has no inner wall"
+    end
+    return wall
+end
+
+local function keep_wall(walls, scale, wall)
+    local default_scale = d_bracer_config.DEFAULTS.model_scale
+    for kept in pairs(walls) do
+        if kept ~= default_scale then
+            walls[kept] = nil
+        end
+    end
+    walls[scale] = wall
+end
+
+local function get_wall(model_key, scale)
+    if not (tube and tube.key == model_key) then
+        tube = { key = model_key, walls = {} }
+    end
+    local wall = tube.walls[scale]
+    if not wall then
+        local reason
+        wall, reason = build_wall(tube, scale)
+        if not wall then
+            return nil, reason
+        end
+        keep_wall(tube.walls, scale, wall)
+    end
+    return wall
+end
+
+local function new_axis_frame(axis, scale)
+    local tilt_x, tilt_y = axis.slope_x, axis.slope_y
+    local frame = {
+        i = wd_frame.new_vec(1, 0, 0),
+        j = wd_frame.new_vec(0, 1, 0),
+        k = wd_frame.new_vec(0, 0, 1),
+        c = wd_frame.new_vec(axis.x / scale, axis.y / scale, 0),
+    }
+    local tilt = math.sqrt(tilt_x * tilt_x + tilt_y * tilt_y)
+    if tilt == 0 then
+        return frame
+    end
+    local length = math.sqrt(1 + tilt * tilt)
+    local turn = wd_frame.new_vec(-tilt_y / tilt, tilt_x / tilt, 0)
+    local angle = math.atan2(tilt, 1)
+    frame.i = wd_frame.rotate_about_axis(frame.i, turn, angle)
+    frame.j = wd_frame.rotate_about_axis(frame.j, turn, angle)
+    frame.k = wd_frame.new_vec(tilt_x / length, tilt_y / length, 1 / length)
+    return frame
+end
+
+local function new_bone_shift(axis)
+    local defaults = d_bracer_config.DEFAULTS
+    local fitted_at = wd_frame.new_pose_frame(defaults.model_pos, defaults.model_rot, defaults.model_scale)
+    local on_axis = wd_frame.compose_frames(fitted_at, new_axis_frame(axis, defaults.model_scale))
+    return wd_frame.compose_frames(on_axis, wd_frame.invert_frame(fitted_at))
+end
+
+local function get_centred_transforms(transforms, axis)
+    local pose_frame = wd_frame.new_pose_frame(transforms.model_pos, transforms.model_rot, transforms.model_scale)
+    local pos, rot, scale = wd_frame.get_pose(wd_frame.compose_frames(new_bone_shift(axis), pose_frame))
+    return { model_pos = pos, model_rot = rot, model_scale = scale }
+end
+
+local function fit_axis(mesh, model_key)
+    local defaults = d_bracer_config.DEFAULTS
+    local space, space_error = wd_sleeve_mesh.new_bracer_space(mesh, defaults)
+    if not space then
+        return nil, space_error
+    end
+    local wall, wall_error = get_wall(model_key, defaults.model_scale)
+    if not wall then
+        return nil, wall_error
+    end
+    return wd_tube_squeeze.fit_tube_axis(space, wall) or NO_AXIS
+end
+
+local function get_axis(job, mesh)
+    local key = job.source_key .. "|" .. job.model_key
+    local axis = axes[key]
+    if not axis then
+        local reason
+        axis, reason = wd_build_probe.run("axis", fit_axis, mesh, job.model_key)
+        if not axis then
+            return nil, reason
+        end
+        axes[key] = axis
+    end
+    return axis
+end
+
+local function squeeze_sleeve(job)
+    local mesh, mesh_error = wd_build_probe.run("hands_mesh", wd_mesh_cache.read_mesh, job.left_source)
+    if not mesh then
+        return nil, mesh_error
+    end
+    local axis, axis_error = get_axis(job, mesh)
+    if not axis then
+        return nil, axis_error
+    end
+    job.axis = axis
+    local space, space_error = wd_sleeve_mesh.new_bracer_space(mesh, get_centred_transforms(job.transforms, axis))
+    if not space then
+        return nil, space_error
+    end
+    local wall, wall_error = get_wall(job.model_key, job.transforms.model_scale)
+    if not wall then
+        return nil, wall_error
+    end
+    return wd_build_probe.run("squeeze", wd_tube_squeeze.squeeze_tube, space, wall)
+end
+
+local function build_sleeve(job)
+    local result, reason = squeeze_sleeve(job)
+    if not result then
+        return nil, reason
+    end
+    local fields = {}
+    for _, name in ipairs(AXIS_FIELDS) do
+        fields["axis_" .. name] = job.axis[name]
+    end
+    local entry = wd_build_probe.run(
+        "store",
+        wd_mesh_cache.store,
+        SLEEVE_KIND,
+        job.key,
+        job.left_source,
+        result.data,
+        fields,
+        job.source_key .. "|" .. result.digest
+    )
+    if not entry then
+        return nil, "cannot store the squeezed sleeve"
+    end
+    return { visual = entry.visual, axis = job.axis }
+end
+
+local function read_axis(fields)
+    local axis = {}
+    for _, name in ipairs(AXIS_FIELDS) do
+        local value = fields["axis_" .. name]
+        if not value then
+            return nil
+        end
+        axis[name] = value
+    end
+    return axis
+end
+
+local function is_same_source(record, hands_section)
+    return record.hands_section == hands_section
+end
+
+local function new_job(transforms, hands_section)
+    local job = { hands_section = hands_section, transforms = transforms }
+    local left_source = wd_hands_left.get_left_source(hands_section)
+    local source_key = left_source and wd_build_probe.run("source_key", wd_mesh_cache.get_source_key, left_source)
+    local model_key = wd_build_probe.run("source_key", wd_mesh_cache.get_source_key, d_bracer_config.MODEL)
+    if not (source_key and model_key) then
+        driver.log_failure(tostring(left_source or hands_section), "no source mesh")
+        job.result, job.failed = false, true
+        return job
+    end
+    job.left_source, job.source_key, job.model_key = left_source, source_key, model_key
+    job.key = string.format(
+        KEY_FORMAT,
+        source_key,
+        wd_mesh_cache.BUILD_VERSION,
+        model_key,
+        wd_transforms.format_pose(job.transforms),
+        wd_transforms.format_pose(d_bracer_config.DEFAULTS)
+    )
+    local entry = wd_build_probe.run("find", wd_mesh_cache.find, SLEEVE_KIND, job.key)
+    local axis = entry and read_axis(entry.fields)
+    job.result = axis and { visual = entry.visual, axis = axis }
+    return job
+end
+
+local function get_prefetch_visuals(sleeve)
+    return {}, { sleeve.visual }
+end
+
+local function get_failed()
+    return false
+end
+
+local function get_rest_ms()
+    if wd_gui.is_dragging() then
+        return math.huge
+    end
+    return REST_MS
+end
+
+driver = wd_build_job.new({
+    log_format = LOG_FORMAT,
+    get_rest_ms = get_rest_ms,
+    is_same_source = is_same_source,
+    new_job = new_job,
+    build = build_sleeve,
+    get_prefetch_visuals = get_prefetch_visuals,
+    get_failed = get_failed,
+})
+
+local function serve(hands_section)
+    local transforms = d_bracer_config.transforms
+    local sleeve = driver.request(true, transforms, hands_section)
+        or driver.advance(transforms, hands_section)
+        or driver.get_kept(hands_section)
+    return sleeve and sleeve.visual or nil
+end
+
+local function is_active()
+    return wd_slots.is_bracer_worn() and not wd_exo.is_exo()
+end
+
+function get_bracer_transforms(hands_section)
+    local sleeve = driver.get_kept(hands_section)
+    local axis = sleeve and sleeve.axis
+    if not (axis and is_active()) then
+        return nil
+    end
+    local transforms = d_bracer_config.transforms
+    if not (centred and centred.axis == axis and wd_transforms.is_same_pose(centred.source, transforms)) then
+        centred = {
+            axis = axis,
+            source = wd_transforms.copy_pose(transforms),
+            transforms = get_centred_transforms(transforms, axis),
+        }
+    end
+    return centred.transforms
+end
+
+function get_left_visual(hands_section)
+    if not is_active() then
+        return nil
+    end
+    return wd_build_probe.run("bracer", serve, hands_section)
+end
+
+function is_building()
+    return driver.is_building()
+end
+
+function stop()
+    driver.stop()
+end
+
+local function reset()
+    driver.reset()
+    centred = nil
+end
+
+function register()
+    wd_core.register({ id = SOURCE_ID, on_start = reset })
+end

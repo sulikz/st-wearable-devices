@@ -253,12 +253,12 @@ end
 
 function get_highport_power(elapsed_ms)
     if elapsed_ms < HIGHPORT_IN_MS then
-        return HIGHPORT_OVERSHOOT * wd_hands_offset.ease_smooth(elapsed_ms / HIGHPORT_IN_MS)
+        return HIGHPORT_OVERSHOOT * wd_frame.get_smoothstep(elapsed_ms / HIGHPORT_IN_MS)
     end
     if elapsed_ms < HIGHPORT_IN_MS + HIGHPORT_SETTLE_MS then
         return HIGHPORT_OVERSHOOT
             + (1.0 - HIGHPORT_OVERSHOOT)
-                * wd_hands_offset.ease_smooth((elapsed_ms - HIGHPORT_IN_MS) / HIGHPORT_SETTLE_MS)
+                * wd_frame.get_smoothstep((elapsed_ms - HIGHPORT_IN_MS) / HIGHPORT_SETTLE_MS)
     end
     return 1.0
 end

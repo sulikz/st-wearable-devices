@@ -49,13 +49,17 @@ local host = wd_face_host.new({
     is_worn = function()
         return is_worn()
     end,
-    anchor = { parent = d_bracer_config.SECTION, body = ATT_NAME, bone = UI_BONE, mount = wd_wrist_roll.MOUNT },
+    anchor = {
+        body = ATT_NAME,
+        bone = UI_BONE,
+        mount = wd_wrist_roll.MOUNT,
+    },
     provides = { status_bar = d_vektor_config.get_status_bar },
 })
 
 local owner = wd_worn.new({
-    attach_label = "st_attach_vektor",
-    detach_label = "st_detach_vektor",
+    attach_label = "st_wear_vektor",
+    detach_label = "st_take_off_vektor",
     save_key = "vektor_worn",
     get_obj_value = function(obj)
         return obj and obj:section()
@@ -135,13 +139,18 @@ local function get_body_transforms()
     }
 end
 
+local function get_base_model()
+    return d_vektor_config.get_model()
+end
+
+local bare = { id = SECTION, get_base_model = get_base_model, defaults = d_vektor_config.DEFAULTS }
+
 local function sync_led_hosts(model, transforms)
     for _, name in ipairs(LED_HOST_NAMES) do
         if model then
             wd_attach.attach({
                 name = name,
                 model = model,
-                parent = d_bracer_config.SECTION,
                 mount = wd_wrist_roll.MOUNT,
                 transforms = transforms,
                 bone_visible = { [UI_BONE] = false },
@@ -162,12 +171,11 @@ function sync_attachment()
         host.sync(nil)
         return nil
     end
-    local model = d_vektor_config.get_model()
+    local model = wd_bare_wrist.get_watch_model(bare)
     local transforms = get_body_transforms()
     local body = wd_attach.attach({
         name = ATT_NAME,
         model = model,
-        parent = d_bracer_config.SECTION,
         mount = wd_wrist_roll.MOUNT,
         ui = host.get_screen_ui(),
         ui_bone = UI_BONE,
@@ -262,7 +270,7 @@ local function register_gui()
         { "status_bar", nil, 1, "Gauge" },
     }
     wd_clock.add_gui_rows(fields, screen_rows, d_vektor_config)
-    wd_wrist_roll.add_gui_check(fields, screen_rows)
+    wd_wrist_roll.add_gui_rows(fields, screen_rows)
 
     wd_gui.register_device({
         id = "vektor",
@@ -383,6 +391,7 @@ function register()
     wd_slots.register_device({
         id = "vektor",
         slot = "wrist",
+        bare = bare,
         matches_section = function(section)
             return d_vektor_config.get_tier_of(section) ~= nil
         end,

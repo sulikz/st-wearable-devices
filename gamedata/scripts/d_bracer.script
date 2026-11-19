@@ -1,5 +1,6 @@
 local SECTION = "wd_bracer"
-local ATT_BONE = "l_forearm_twist"
+local PLACE_INTERVAL_MS = 1000
+local TRADER_MIN_SUPPLY = 3
 
 local accessory_bones = wd_attach.new_bone_switch({
     name = SECTION,
@@ -28,6 +29,17 @@ local accessory_owner = wd_worn.new({
     end,
 })
 
+local function resync_bare_wrist()
+    if not wd_bare_wrist.update() then
+        wd_slots.resync_bare_devices()
+    end
+end
+
+local function remount_devices()
+    resync_bare_wrist()
+    wd_slots.remount_loadout()
+end
+
 local owner = wd_worn.new({
     attach_label = "st_attach_wd_bracer",
     detach_label = "st_detach_wd_bracer",
@@ -37,11 +49,13 @@ local owner = wd_worn.new({
         if not sync_attachment() then
             return false
         end
-        wd_slots.remount_loadout()
+        remount_devices()
         return true
     end,
     on_detach = function()
+        wd_bracer_sleeve.stop()
         wd_slots.unmount_all(true)
+        resync_bare_wrist()
         sync_attachment()
     end,
 })
@@ -54,29 +68,66 @@ local function is_attachment_present()
     return wd_attach.has_attachment(SECTION)
 end
 
+local applied_transforms = nil
+local asked_at = 0
+
+local function get_worn_transforms(hands_section)
+    return wd_bracer_sleeve.get_bracer_transforms(hands_section) or d_bracer_config.transforms
+end
+
+function get_transforms()
+    return is_worn() and applied_transforms or nil
+end
+
 function sync_attachment()
     if not is_worn() then
         wd_attach.detach(SECTION)
         return nil
     end
+    applied_transforms = get_worn_transforms(wd_hands_left.get_outfit_hands_section())
     local attachment = wd_attach.attach({
         name = SECTION,
         model = d_bracer_config.MODEL,
-        bone = ATT_BONE,
-        transforms = d_bracer_config.transforms,
+        bone = d_bracer_config.ATT_BONE,
+        transforms = applied_transforms,
     })
     show_accessory(accessory_owner.get_value())
     return attachment
 end
 
+local function apply_transforms(transforms)
+    applied_transforms = transforms
+    return wd_attach.reapply_transforms(SECTION, transforms)
+end
+
 function reapply_transforms()
-    return wd_attach.reapply_transforms(SECTION, d_bracer_config.transforms)
+    return apply_transforms(get_worn_transforms(wd_hands_left.get_outfit_hands_section()))
+end
+
+local function place_on_arm(hands_section)
+    local transforms = get_worn_transforms(hands_section)
+    if transforms ~= applied_transforms then
+        apply_transforms(transforms)
+    end
+end
+
+local function get_sleeve_visual(hands_section)
+    asked_at = time_global()
+    local visual = wd_hands_left.get_flat_exo_visual(hands_section) or wd_bracer_sleeve.get_left_visual(hands_section)
+    place_on_arm(hands_section)
+    return visual
+end
+
+local function place_unasked()
+    if time_global() - asked_at >= PLACE_INTERVAL_MS and is_worn() then
+        place_on_arm(wd_hands_left.get_outfit_hands_section())
+    end
 end
 
 function actor_on_first_update()
     owner.detach_if_dropped()
     if sync_attachment() then
-        wd_slots.remount_loadout()
+        remount_devices()
     end
 end
 
@@ -88,17 +139,46 @@ function toggle_attach(obj)
     owner.toggle(obj)
 end
 
+function is_bracer_section(section)
+    return section == SECTION
+end
+
+function get_worn_object()
+    return owner.get_object()
+end
+
+function get_worn_id()
+    return owner.get_id()
+end
+
+function wear(obj)
+    local worn_id = owner.get_id()
+    if worn_id == obj:id() then
+        return true
+    end
+    owner.toggle(obj)
+    if owner.is_attached() then
+        return true
+    end
+    local worn = worn_id and db.actor:object_id(worn_id)
+    if worn then
+        owner.toggle(worn)
+    end
+    return false, "attach_failed"
+end
+
+function take_off()
+    owner.detach()
+end
+
 function get_customize_text(obj)
-    if not (obj and owner.is_attached()) then
+    if not obj then
         return nil
     end
     return game.translate_string("st_wd_customize")
 end
 
-function open_customize(obj)
-    if not owner.is_attached() then
-        return
-    end
+function open_customize(_obj)
     wd_customize.open_from_inventory()
 end
 
@@ -106,47 +186,56 @@ function open_customize_on_chord(_key, bind, dis, flags)
     if dis or bind ~= key_bindings.kINVENTORY then
         return
     end
-    if not owner.is_attached() then
+    if key_state(wd_mcm.get_hold_key_dik()) == 0 then
         return
     end
-    if key_state(wd_mcm.get_hold_key_dik()) == 0 then
+    if not db.actor:object(SECTION) then
         return
     end
     flags.ret_value = false
     wd_customize.open_from_inventory()
 end
 
-local function get_forearm_frame()
-    if not (db.actor and is_attachment_present()) then
-        return nil
+local function stop_sleeve_in_exo(is_exo)
+    if is_exo then
+        wd_bracer_sleeve.stop()
     end
-    local bone = db.actor:bone_id(ATT_BONE, true)
-    if bone == 65535 then
-        return nil
-    end
-    return db.actor:bone_transform(bone, true)
 end
 
-local function get_gizmo_frame()
-    local frame = get_forearm_frame()
-    if not frame then
-        return nil
-    end
-    local basis_i, basis_j, basis_k, center = frame.i, frame.j, frame.k, frame.c
-    local pos = d_bracer_config.transforms.model_pos
-    return {
-        i = basis_i,
-        j = basis_j,
-        k = basis_k,
-        c = {
-            x = center.x + basis_i.x * pos[1] + basis_j.x * pos[2] + basis_k.x * pos[3],
-            y = center.y + basis_i.y * pos[1] + basis_j.y * pos[2] + basis_k.y * pos[3],
-            z = center.z + basis_i.z * pos[1] + basis_j.z * pos[2] + basis_k.z * pos[3],
-        },
-    }
+local function get_default_slide()
+    return d_bracer_config.DEFAULTS.model_pos[1]
+end
+
+local function get_slide_position()
+    return get_default_slide() - d_bracer_config.transforms.model_pos[1]
+end
+
+local function set_slide_position(position)
+    d_bracer_config.transforms.model_pos[1] = get_default_slide() - position
+end
+
+local function get_slide_position_range()
+    local low, high = d_bracer_config.get_slide_range()
+    local default = get_default_slide()
+    return default - high, default - low
+end
+
+local function restore_slide(source_name)
+    local source = source_name == "default" and d_bracer_config.DEFAULTS or d_bracer_config.saved
+    d_bracer_config.transforms.model_pos[1] = source.model_pos[1]
+end
+
+local function new_slide_field()
+    local slide = wd_gui.new_ranged_slider(get_slide_position_range)
+    slide.get = get_slide_position
+    slide.set = set_slide_position
+    slide.restore = restore_slide
+    slide.text = wd_gui.get_mm_text
+    return slide
 end
 
 local function register_gui()
+    local limits = d_bracer_config.LIMITS
     wd_gui.register_device({
         id = "bracer",
         label = "Bracer",
@@ -162,12 +251,12 @@ local function register_gui()
         end,
         save_global = d_bracer_config.save_global,
         on_apply = function()
+            d_bracer_config.clamp_slide()
             reapply_transforms()
         end,
         fields = {
-            model_pos = wd_gui.new_slider(-0.3, 0.3),
-            model_rot = wd_gui.new_slider(-180, 180),
-            model_scale = wd_gui.new_slider(0.01, 3),
+            slide = new_slide_field(),
+            model_scale = wd_gui.new_slider(limits.model_scale[1], limits.model_scale[2]),
         },
     })
     wd_gui.register_tab({
@@ -176,27 +265,15 @@ local function register_gui()
         label = "Bracer Position",
         default = true,
         rows = {
-            { "model_pos", 1, 0.0005, "Position x" },
-            { "model_pos", 2, 0.0005, "Position y" },
-            { "model_pos", 3, 0.0005, "Position z" },
-            { "model_rot", 1, 0.05, "Yaw (Y)" },
-            { "model_rot", 2, 0.05, "Pitch (X)" },
-            { "model_rot", 3, 0.05, "Roll (Z)" },
+            { "slide", nil, 0.0005, wd_gui.FOREARM_POSITION_LABEL },
             { "model_scale", nil, 0.001, "Scale" },
         },
-    })
-    wd_gizmo.register({
-        tab = "bracer_model",
-        pos_field = "model_pos",
-        rot_field = "model_rot",
-        scale_field = "model_scale",
-        get_frame = get_gizmo_frame,
     })
 end
 
 local function start()
     d_bracer_config.load_transforms()
-    wd_trader.register(SECTION, 1)
+    wd_trader.register(SECTION, 1, TRADER_MIN_SUPPLY)
 end
 
 function register()
@@ -211,19 +288,28 @@ function register()
     wd_exo.register_device({
         id = "bracer",
         names = { SECTION },
+        on_change = stop_sleeve_in_exo,
         resync = sync_attachment,
     })
     wd_core.register({
         id = "bracer",
         callbacks = {
             actor_on_first_update = { actor_on_first_update },
-            actor_on_update = { owner.drop_poll },
+            actor_on_update = { owner.drop_poll, { place_unasked, interval = PLACE_INTERVAL_MS } },
             on_before_key_press = { { open_customize_on_chord, unless = wd_blocking.is_input_captured } },
             save_state = { owner.save, accessory_owner.save },
             load_state = { owner.load, accessory_owner.load },
         },
         on_start = start,
     })
-    wd_hands_left.register_item("bracer", is_worn)
+    wd_attach.set_mount_anchor(wd_wrist_roll.MOUNT, {
+        get_parent = d_bracer_config.get_mount_parent,
+        bone = d_bracer_config.ATT_BONE,
+    })
+    wd_hands_left.register_source("bracer", function(hands_section)
+        if is_worn() then
+            return get_sleeve_visual(hands_section)
+        end
+    end, 1, is_worn, wd_bracer_sleeve.is_building)
     register_gui()
 end

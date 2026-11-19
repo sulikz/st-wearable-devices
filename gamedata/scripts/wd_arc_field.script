@@ -1,8 +1,10 @@
 LANE = "wd_arc_field"
 MIN_BUS_VERSION = 7
 UPDATE_MS = 50
+SENSE_MS = 1000
 ELECTRIC_HIT = "shock"
 SENSE_REACH = 25
+SENSE_MARGIN = 10
 DEFAULT_SHAPE_RADIUS = 3
 FIELD_SHOWS = 0.3
 FADE_FROM = 0.7
@@ -29,9 +31,11 @@ local ARC_CORE = ARC_SCALE / EDGE_FIELD
 local token = nil
 local electric_by_section = {}
 local reach_by_id = {}
+local candidates = {}
+local candidate_count = 0
+local next_sense_at = 0
 local arcs = {}
 local arc_count = 0
-local sense_origin = nil
 local origin_x, origin_z = 0, 0
 local last_update_at = nil
 local compass_sample = nil
@@ -90,30 +94,47 @@ local function get_reach(obj)
     return reach
 end
 
-local function take_arc(obj)
+local function take_candidate(obj)
     if not (wd_sensor_anomaly.is_anomaly(obj) and is_electric(obj)) then
         return
     end
     local pos = obj:position()
-    local reach = get_reach(obj)
-    local edge = math.max(sense_origin:distance_to(pos) - reach, 0)
-    if edge >= FIELD_START then
-        return
+    candidate_count = candidate_count + 1
+    local candidate = candidates[candidate_count]
+    if not candidate then
+        candidate = {}
+        candidates[candidate_count] = candidate
     end
+    candidate.x, candidate.y, candidate.z, candidate.reach = pos.x, pos.y, pos.z, get_reach(obj)
+end
+
+local function sense_candidates(origin)
+    candidate_count = 0
+    level.iterate_nearest(origin, FIELD_START + SENSE_REACH + SENSE_MARGIN, take_candidate)
+end
+
+local function take_arc(candidate, edge)
     arc_count = arc_count + 1
     local arc = arcs[arc_count]
     if not arc then
         arc = {}
         arcs[arc_count] = arc
     end
-    arc.x, arc.z, arc.reach, arc.edge = pos.x, pos.z, reach, edge
+    arc.x, arc.z, arc.reach, arc.edge = candidate.x, candidate.z, candidate.reach, edge
 end
 
-local function sense_arcs(origin)
+local function measure_arcs(origin)
     arc_count = 0
-    sense_origin = origin
     origin_x, origin_z = origin.x, origin.z
-    level.iterate_nearest(origin, FIELD_START + SENSE_REACH, take_arc)
+    local origin_y = origin.y
+    for candidate_index = 1, candidate_count do
+        local candidate = candidates[candidate_index]
+        local dx, dy, dz = origin_x - candidate.x, origin_y - candidate.y, origin_z - candidate.z
+        local edge = math.max(math.sqrt(dx * dx + dy * dy + dz * dz) - candidate.reach, 0)
+        if edge < FIELD_START then
+            take_arc(candidate, edge)
+        end
+    end
 end
 
 local function get_fade(edge)
@@ -188,6 +209,8 @@ local function set_field(field_x, field_z, seconds, dt)
 end
 
 local function clear_field()
+    candidate_count = 0
+    next_sense_at = 0
     arc_count = 0
     field_row[1], field_row[2], field_row[3], field_row[4] = 0, 0, 0, 0
     degauss_row[1], degauss_row[2] = NO_DEGAUSS, 0
@@ -214,7 +237,12 @@ local function update()
     local dt = last_update_at and (now - last_update_at) / 1000 or 0
     last_update_at = now
     if is_worn() then
-        sense_arcs(db.actor:position())
+        local origin = db.actor:position()
+        if now >= next_sense_at then
+            next_sense_at = now + SENSE_MS
+            sense_candidates(origin)
+        end
+        measure_arcs(origin)
         local field_x, field_z = get_field()
         set_field(field_x, field_z, now / 1000, dt)
     else

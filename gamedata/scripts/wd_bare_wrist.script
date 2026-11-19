@@ -1,0 +1,719 @@
+UPDATE_MS = 200
+REST_MS = 200
+CLEARANCE = 0.001
+SINK = 0.0025
+SINK_MARGIN = 0.001
+RADIUS_STEP = 0.00025
+ROLL_SPREAD_MIN = math.rad(26)
+ROLL_SPREAD_MAX = math.rad(140)
+AXIS_TILT_MAX = math.rad(10)
+SLEEVE_KIND = "sleeve_"
+STRAP_KIND = "strap_"
+
+local SOURCE_ID = "wd_bare_wrist"
+local SOURCE_PRIORITY = 2
+local LOG_FORMAT = "[wd_bare_wrist] %s: %s"
+local SLEEVE_KEY_FORMAT = "%s|%s|%d|%s|%s|%s|%s|%s|%s"
+local ROLL_RANGE_FORMAT = "%.6g;%.6g"
+local BIND_FORMAT = "%.6g,%.6g,%.6g;%.6g,%.6g,%.6g"
+local STRAP_KEY_FORMAT = "%s|%.6f|%.6f|%.6f|%.6f|%.6g|%.6g|%d"
+local AXIS_TILT_FORMAT = "the watch band is turned more than %g degrees off the tube axis"
+local NO_FIT = { x = 0, y = 0, slide = 0 }
+
+local floor = math.floor
+local min = math.min
+local max = math.max
+
+local driver = nil
+local shown = nil
+local provisional = nil
+local published_base = nil
+local served = {}
+local watch_models = {}
+local slid_pose = { model_pos = { 0, 0, 0 }, model_rot = { 0, 0, 0 }, model_scale = 1 }
+
+local function finish_guarded(ok, ...)
+    if not ok then
+        return nil, (...)
+    end
+    return ...
+end
+
+local function call_guarded(step, ...)
+    return finish_guarded(pcall(step, ...))
+end
+
+local function get_bare_mount()
+    if wd_slots.is_bracer_worn() or wd_exo.is_exo() then
+        return nil
+    end
+    local mounted = wd_slots.get_mounted(wd_wrist_roll.MOUNT)
+    if mounted and mounted.bare then
+        return mounted
+    end
+    return nil
+end
+
+function is_active()
+    return get_bare_mount() ~= nil
+end
+
+local function get_slid_pose(transforms, position)
+    if position == 0 then
+        return transforms
+    end
+    local shift = position / d_bracer_config.DEFAULTS.model_scale
+    local tube = wd_wrist_roll.get_tube_in_mount()
+    local pos, rot = transforms.model_pos, transforms.model_rot
+    local out_pos, out_rot = slid_pose.model_pos, slid_pose.model_rot
+    out_pos[1], out_pos[2], out_pos[3] = pos[1] + tube.x * shift, pos[2] + tube.y * shift, pos[3] + tube.z * shift
+    out_rot[1], out_rot[2], out_rot[3] = rot[1], rot[2], rot[3]
+    slid_pose.model_scale = transforms.model_scale
+    return slid_pose
+end
+
+local function get_active_watch()
+    local mounted = get_bare_mount()
+    if not mounted then
+        return nil
+    end
+    return mounted, get_slid_pose(mounted.get_transforms(), wd_wrist_roll.get_slide())
+end
+
+local function is_same_source(record, watch, hands_section, base_model)
+    return record.watch == watch and record.hands_section == hands_section and record.base_model == base_model
+end
+
+local function format_bind(bind)
+    local pos, rot = bind.pos, bind.rot
+    return string.format(BIND_FORMAT, pos[1], pos[2], pos[3], rot[1], rot[2], rot[3])
+end
+
+local function read_watch_model(base_model)
+    local mesh, mesh_error = wd_mesh_cache.read_mesh(base_model)
+    if not mesh then
+        return nil, mesh_error
+    end
+    local geometry, geometry_error = wd_build_probe.run("geometry", wd_strap_warp.get_geometry, mesh)
+    if not geometry then
+        return nil, geometry_error
+    end
+    return { mesh = mesh, geometry = geometry }
+end
+
+local function get_watch_model_cached(base_model, watch_key)
+    local cached = watch_models[base_model]
+    if cached and cached.key == watch_key then
+        return cached.model
+    end
+    local model, reason = wd_build_probe.run("watch_mesh", call_guarded, read_watch_model, base_model)
+    if model then
+        watch_models[base_model] = { key = watch_key, model = model }
+    end
+    return model, reason
+end
+
+local function get_band(strap, watch_frame, bracer_scale)
+    local low, high = math.huge, -math.huge
+    local xs, ys, zs = strap.x, strap.y, strap.z
+    for index = 1, strap.count do
+        local _, _, along = wd_frame.transform_xyz(watch_frame, xs[index], ys[index], zs[index])
+        along = along * bracer_scale
+        low, high = min(low, along), max(high, along)
+    end
+    return { lo = low, hi = high }
+end
+
+local function get_case(geometry, watch_frame, bracer_scale)
+    local back_y, x_min, x_max = geometry.case_back_y, geometry.case_x_min, geometry.case_x_max
+    local first = wd_frame.transform_point(watch_frame, wd_frame.new_vec(x_min, back_y, 0))
+    local second = wd_frame.transform_point(watch_frame, wd_frame.new_vec(x_max, back_y, 0))
+    local middle = wd_frame.new_vec((x_min + x_max) / 2, back_y, (geometry.case_z_min + geometry.case_z_max) / 2)
+    local center = wd_frame.transform_point(watch_frame, middle)
+    local face = math.atan2(center.y, center.x)
+    return {
+        lo = min(first.z, second.z) * bracer_scale,
+        hi = max(first.z, second.z) * bracer_scale,
+        face = face,
+    }
+end
+
+local function get_zones(watch_model, watch_frame, bracer_scale)
+    return {
+        band = get_band(watch_model.geometry.strap, watch_frame, bracer_scale),
+        case = get_case(watch_model.geometry, watch_frame, bracer_scale),
+    }
+end
+
+local function get_slid_zones(zones, slide)
+    local band, case = zones.band, zones.case
+    return {
+        band = { lo = band.lo - slide, hi = band.hi - slide },
+        case = { lo = case.lo - slide, hi = case.hi - slide, face = case.face },
+    }
+end
+
+local function new_fit(visual, fields)
+    return {
+        visual = visual,
+        x = fields.cx,
+        y = fields.cy,
+        radius = fields.radius,
+        slide = fields.slide,
+        sink = fields.sink,
+    }
+end
+
+local function read_fit(entry)
+    local fields = entry and entry.fields
+    if not (fields and fields.cx and fields.cy and fields.radius and fields.slide and fields.sink) then
+        return nil
+    end
+    return new_fit(entry.visual, fields)
+end
+
+local function get_scale(transforms)
+    return transforms.model_scale * d_bracer_config.DEFAULTS.model_scale
+end
+
+local function get_target_radius(radius, scale)
+    return floor((radius + CLEARANCE) / RADIUS_STEP + 0.5) * RADIUS_STEP / scale
+end
+
+local function get_center_y(seat_y, sink, target_radius, scale)
+    return seat_y + (CLEARANCE + sink) / scale - target_radius
+end
+
+local function new_seat(frame, lift, slide)
+    local axis_j, origin = frame.j, frame.c
+    return {
+        i = frame.i,
+        j = axis_j,
+        k = frame.k,
+        origin_x = origin.x + lift * axis_j.x,
+        origin_y = origin.y + lift * axis_j.y,
+        origin_z = origin.z + lift * axis_j.z,
+        scale = d_bracer_config.DEFAULTS.model_scale,
+        slide = slide,
+    }
+end
+
+function get_roll_range()
+    local bracer_roll = d_bracer_config.DEFAULTS.model_rot[3]
+    local rest = wd_wrist_roll.get_rest_roll_for(bracer_roll)
+    local idle = wd_wrist_roll.get_idle_roll_for(bracer_roll)
+    return min(idle, rest + ROLL_SPREAD_MIN), max(idle, rest + ROLL_SPREAD_MAX)
+end
+
+local function get_design_sink(job, geometry)
+    local axis = job.axis
+    local seat_y = wd_strap_warp.get_seat_y(geometry, axis.slope_y)
+    local window_height = (wd_strap_warp.get_window_y(geometry, axis.slope_y) - seat_y) * get_scale(job.transforms)
+    return min(SINK, window_height - SINK_MARGIN), seat_y
+end
+
+local function get_sink(job, geometry, result, slide, sink, seat_y)
+    local axis = job.axis
+    local scale = get_scale(job.transforms)
+    local window = geometry.window_floor
+    if window.count == 0 then
+        return sink
+    end
+    local center_y = get_center_y(seat_y, sink, get_target_radius(result.radius, scale), scale)
+    local seat = new_seat(job.watch_frame, axis.y - center_y, slide)
+    local z_lo, z_hi = wd_window_surface.get_seated_span(window, seat)
+    local roll_lo, roll_hi = get_roll_range()
+    local surface = wd_build_probe.run(
+        "surface",
+        wd_window_surface.new_surface,
+        result.surface_layers,
+        result.center,
+        z_lo,
+        z_hi,
+        roll_lo,
+        roll_hi
+    )
+    local clearance =
+        wd_build_probe.run("clearance", wd_window_surface.get_clearance, surface, window, seat, SINK_MARGIN)
+    return min(sink, sink + clearance - SINK_MARGIN)
+end
+
+local function get_failed_fit(key, reason)
+    driver.log_failure(key, reason)
+    return NO_FIT
+end
+
+local function get_live_zones(job, watch_model, space, design_sink)
+    local bracer_scale = d_bracer_config.DEFAULTS.model_scale
+    local slide = wd_sleeve_squeeze.get_slide(space, get_zones(watch_model, job.default_frame, bracer_scale))
+    local zones = get_slid_zones(get_zones(watch_model, job.watch_frame, bracer_scale), slide)
+    local case = zones.case
+    local geometry = watch_model.geometry
+    local place = { frame = job.watch_frame, scale = bracer_scale, face = case.face, slide = slide }
+    local roll_lo, roll_hi = get_roll_range()
+    case.envelope = wd_sleeve_squeeze.new_case_envelope(
+        geometry.case_underside,
+        geometry.window_underside,
+        design_sink + SINK_MARGIN,
+        place,
+        roll_lo,
+        roll_hi,
+        case.lo,
+        case.hi
+    )
+    return zones, slide
+end
+
+local function squeeze_sleeve(job)
+    local mesh, mesh_error = wd_build_probe.run("hands_mesh", wd_mesh_cache.read_mesh, job.left_source)
+    if not mesh then
+        return nil, mesh_error
+    end
+    local space, space_error =
+        wd_build_probe.run("space", wd_sleeve_mesh.new_bracer_space, mesh, d_bracer_config.DEFAULTS)
+    if not space then
+        return nil, space_error
+    end
+    local watch_model, watch_error = get_watch_model_cached(job.base_model, job.watch_key)
+    if not watch_model then
+        return nil, watch_error
+    end
+    local design_sink, seat_y = get_design_sink(job, watch_model.geometry)
+    local zones, slide = wd_build_probe.run("zones", get_live_zones, job, watch_model, space, design_sink)
+    local result, squeeze_error = wd_build_probe.run("squeeze", wd_sleeve_squeeze.squeeze, space, zones)
+    if not result then
+        return nil, squeeze_error
+    end
+    result.slide = slide
+    result.sink = wd_build_probe.run("sink", get_sink, job, watch_model.geometry, result, slide, design_sink, seat_y)
+    return result
+end
+
+local function build_sleeve(job)
+    local result, squeeze_error = squeeze_sleeve(job)
+    if not result then
+        return nil, squeeze_error
+    end
+    local fields = {
+        cx = result.center.x,
+        cy = result.center.y,
+        radius = result.radius,
+        slide = result.slide,
+        sink = result.sink,
+    }
+    local identity = job.source_key .. "|" .. result.digest
+    local entry = wd_build_probe.run(
+        "store",
+        wd_mesh_cache.store,
+        job.sleeve_kind,
+        job.key,
+        job.left_source,
+        result.data,
+        fields,
+        identity
+    )
+    if not entry then
+        return nil, "cannot store the squeezed sleeve"
+    end
+    return new_fit(entry.visual, fields)
+end
+
+local function find_fit(job)
+    local left_source = wd_hands_left.get_left_source(job.hands_section)
+    if not left_source then
+        return get_failed_fit(job.hands_section, "no left-arm visual")
+    end
+    local source_key = wd_build_probe.run("source_key", wd_mesh_cache.get_source_key, left_source)
+    if not source_key then
+        return get_failed_fit(left_source, "no source mesh")
+    end
+    local watch = job.watch
+    job.left_source, job.source_key = left_source, source_key
+    job.sleeve_kind = SLEEVE_KIND .. watch.bare.id
+    job.key = string.format(
+        SLEEVE_KEY_FORMAT,
+        source_key,
+        watch.bare.id,
+        wd_mesh_cache.BUILD_VERSION,
+        job.watch_key,
+        wd_transforms.format_pose(job.transforms),
+        wd_transforms.format_pose(job.defaults),
+        wd_transforms.format_pose(d_bracer_config.DEFAULTS),
+        format_bind(d_bracer_config.MOUNT_BIND),
+        string.format(ROLL_RANGE_FORMAT, get_roll_range())
+    )
+    return read_fit(wd_build_probe.run("find", wd_mesh_cache.find, job.sleeve_kind, job.key))
+end
+
+local function build_fit(job)
+    return wd_build_probe.run("build", build_sleeve, job)
+end
+
+local function build_strap(job, strap)
+    local watch_model, watch_error = get_watch_model_cached(job.base_model, job.watch_key)
+    if not watch_model then
+        driver.log_failure(strap.key, watch_error)
+        return nil
+    end
+    local geometry = watch_model.geometry
+    local axis = job.axis
+    local slope_y = axis.slope_y
+    local target = {
+        center_z = axis.z,
+        center_y = get_center_y(wd_strap_warp.get_seat_y(geometry, slope_y), strap.sink, strap.radius, strap.scale),
+        slope_z = axis.slope_z,
+        slope_y = slope_y,
+        radius = strap.radius,
+    }
+    local data, warp_detail, digest =
+        wd_build_probe.run("warp", call_guarded, wd_strap_warp.warp, watch_model.mesh, geometry, target)
+    if not data then
+        driver.log_failure(strap.key, warp_detail)
+        return nil
+    end
+    local entry = wd_build_probe.run(
+        "store",
+        wd_mesh_cache.store,
+        strap.kind,
+        strap.key,
+        job.base_model,
+        data,
+        { center_y = target.center_y },
+        job.watch_key .. "|" .. digest
+    )
+    if not entry then
+        driver.log_failure(strap.key, "cannot store the warped watch")
+        return nil
+    end
+    return { visual = entry.visual, center_y = target.center_y }
+end
+
+local function new_strap(job, fit)
+    local axis = job.axis
+    local scale = get_scale(job.transforms)
+    local target_radius = get_target_radius(fit.radius, scale)
+    return {
+        kind = STRAP_KIND .. job.watch.bare.id,
+        key = string.format(
+            STRAP_KEY_FORMAT,
+            job.watch_key,
+            target_radius,
+            axis.z,
+            axis.slope_z,
+            axis.slope_y,
+            scale,
+            fit.sink,
+            wd_mesh_cache.BUILD_VERSION
+        ),
+        radius = target_radius,
+        scale = scale,
+        sink = fit.sink,
+    }
+end
+
+local function get_strap(job, fit, building)
+    local strap = job.strap
+    if not strap then
+        strap = new_strap(job, fit)
+        job.strap = strap
+        local entry = wd_build_probe.run("find", wd_mesh_cache.find, strap.kind, strap.key)
+        local cached_center = entry and entry.fields.center_y
+        if cached_center then
+            return { visual = entry.visual, center_y = cached_center }
+        end
+    end
+    if not building then
+        return nil
+    end
+    return wd_build_probe.run("build", build_strap, job, strap)
+end
+
+local function get_axis(watch_frame)
+    local inverse = wd_frame.invert_frame(watch_frame)
+    local point, direction = inverse.c, inverse.k
+    local across = math.sqrt(direction.y * direction.y + direction.z * direction.z)
+    local is_along = across <= math.abs(direction.x) * math.tan(AXIS_TILT_MAX)
+    if not is_along then
+        return nil, string.format(AXIS_TILT_FORMAT, math.deg(AXIS_TILT_MAX))
+    end
+    local slope_y, slope_z = direction.y / direction.x, direction.z / direction.x
+    return { y = point.y - slope_y * point.x, z = point.z - slope_z * point.x, slope_y = slope_y, slope_z = slope_z }
+end
+
+local function new_bracer_frame(fit, position)
+    local defaults = d_bracer_config.DEFAULTS
+    local scale = defaults.model_scale
+    local frame = wd_frame.new_pose_frame(defaults.model_pos, defaults.model_rot, scale)
+    local along = (position - fit.slide) / scale
+    frame.c = wd_frame.transform_point(frame, wd_frame.new_vec(fit.x / scale, fit.y / scale, along))
+    return frame
+end
+
+local function new_bracer_transforms(bracer_frame)
+    local defaults, origin = d_bracer_config.DEFAULTS, bracer_frame.c
+    return {
+        model_pos = { origin.x, origin.y, origin.z },
+        model_rot = wd_transforms.copy_axes(defaults.model_rot),
+        model_scale = defaults.model_scale,
+    }
+end
+
+local function new_placement(fit, position, lift)
+    local bracer_frame = new_bracer_frame(fit, position)
+    return {
+        position = position,
+        bracer_frame = bracer_frame,
+        bracer_transforms = new_bracer_transforms(bracer_frame),
+        base = { frame = wd_frame.compose_frames(bracer_frame, wd_wrist_roll.get_mount_frame()), lift = lift },
+    }
+end
+
+local function new_pair(job, fit, model, lift)
+    return {
+        hands_section = job.hands_section,
+        base_model = job.base_model,
+        left_visual = fit.visual,
+        model = model,
+        fit = fit,
+        lift = lift,
+    }
+end
+
+local function place_pair(pair, position)
+    local placement = pair.placement
+    if not (placement and placement.position == position) then
+        placement = new_placement(pair.fit, position, pair.lift)
+        pair.placement = placement
+    end
+    return placement
+end
+
+local function new_watch_frame(pose)
+    return wd_frame.compose_frames(
+        wd_wrist_roll.get_mount_frame(),
+        wd_frame.new_pose_frame(pose.model_pos, pose.model_rot, pose.model_scale)
+    )
+end
+
+local function get_pair(job, fit, building)
+    if not fit.radius then
+        return new_pair(job, fit, job.base_model, 0)
+    end
+    local axis = job.axis
+    local strap = wd_build_probe.run("strap", get_strap, job, fit, building)
+    if strap then
+        return new_pair(job, fit, strap.visual, axis.y - strap.center_y)
+    end
+    if building then
+        return new_pair(job, fit, job.base_model, 0)
+    end
+    return nil
+end
+
+local function build(job)
+    local fit, reason = job.fit, nil
+    if not fit then
+        fit, reason = wd_build_probe.run("sleeve", build_fit, job)
+    end
+    if not fit then
+        return nil, reason
+    end
+    return get_pair(job, fit, true)
+end
+
+local function build_pair(job)
+    return wd_build_probe.run("pair", build, job)
+end
+
+local function get_failed_pair(job)
+    return new_pair(job, NO_FIT, job.base_model, 0)
+end
+
+local function fail_job(job)
+    job.result, job.failed = get_failed_pair(job), true
+    return job
+end
+
+local function new_job(transforms, watch, hands_section, base_model)
+    local job = {
+        watch = watch,
+        hands_section = hands_section,
+        base_model = base_model,
+        transforms = transforms,
+        defaults = watch.bare.defaults,
+    }
+    if not hands_section then
+        return fail_job(job)
+    end
+    job.watch_key = wd_build_probe.run("source_key", wd_mesh_cache.get_source_key, base_model)
+    if not job.watch_key then
+        driver.log_failure(base_model, "no source mesh")
+        return fail_job(job)
+    end
+    job.watch_frame = new_watch_frame(job.transforms)
+    job.default_frame = new_watch_frame(job.defaults)
+    local axis, axis_error = get_axis(job.watch_frame)
+    if not axis then
+        driver.log_failure(base_model, axis_error)
+        return fail_job(job)
+    end
+    job.axis = axis
+    job.fit = wd_build_probe.run("sleeve", find_fit, job)
+    job.result = job.fit and get_pair(job, job.fit, false)
+    return job
+end
+
+local function get_prefetch_visuals(result)
+    local attachment_visuals = {}
+    if result.model ~= result.base_model then
+        attachment_visuals[1] = result.model
+    end
+    return attachment_visuals, { result.left_visual }
+end
+
+local function get_rest_ms()
+    if wd_gui.is_dragging() then
+        return math.huge
+    end
+    return REST_MS
+end
+
+driver = wd_build_job.new({
+    log_format = LOG_FORMAT,
+    get_rest_ms = get_rest_ms,
+    is_same_source = is_same_source,
+    new_job = new_job,
+    build = build_pair,
+    get_prefetch_visuals = get_prefetch_visuals,
+    get_failed = get_failed_pair,
+})
+
+local function get_provisional(base_model)
+    if not (provisional and provisional.model == base_model) then
+        provisional = get_failed_pair({ base_model = base_model })
+    end
+    return provisional
+end
+
+local function stop()
+    driver.stop()
+    if published_base then
+        wd_attach.set_mount_base(wd_wrist_roll.MOUNT, nil)
+        published_base = nil
+    end
+end
+
+local function publish(watch, transforms, base_model, can_build)
+    local hands_section = wd_hands_left.get_outfit_hands_section()
+    shown = driver.request(can_build, transforms, watch, hands_section, base_model)
+        or driver.get_kept(watch, hands_section, base_model)
+        or get_provisional(base_model)
+    local base = place_pair(shown, wd_wrist_roll.get_slide()).base
+    if published_base ~= base then
+        wd_build_probe.run("publish", wd_attach.set_mount_base, wd_wrist_roll.MOUNT, base)
+        published_base = base
+    end
+end
+
+local function sync_watch(watch, transforms)
+    publish(watch, transforms, watch.bare.get_base_model(), true)
+    local served_model = served[watch.bare.id]
+    if not served_model or served_model == shown.model then
+        return false
+    end
+    served[watch.bare.id] = shown.model
+    wd_build_probe.run("resync", watch.resync)
+    return true
+end
+
+local function sync_pair(label, watch, transforms)
+    local shown_before = shown
+    local resynced = wd_build_probe.run(label, sync_watch, watch, transforms)
+    if shown ~= shown_before then
+        wd_hands_left.apply()
+    end
+    return resynced
+end
+
+function update()
+    local watch, transforms = get_active_watch()
+    if not watch then
+        stop()
+        return false
+    end
+    return sync_pair("tick", watch, transforms)
+end
+
+local function update_build()
+    if not driver.is_building() then
+        return
+    end
+    local watch, transforms = get_active_watch()
+    if not watch then
+        driver.stop()
+        return
+    end
+    local hands_section = wd_hands_left.get_outfit_hands_section()
+    if driver.advance(transforms, watch, hands_section, watch.bare.get_base_model()) then
+        sync_pair("apply", watch, transforms)
+    end
+end
+
+function is_building()
+    return driver.is_building()
+end
+
+function get_watch_model(bare)
+    local model = bare.get_base_model()
+    local active, transforms = get_active_watch()
+    if active and active.bare == bare then
+        publish(active, transforms, model, false)
+        model = shown.model
+    end
+    served[bare.id] = model
+    return model
+end
+
+function get_left_visual(hands_section)
+    if shown and shown.hands_section == hands_section and get_bare_mount() then
+        return shown.left_visual
+    end
+    return nil
+end
+
+function get_bracer_frame()
+    if published_base and get_bare_mount() then
+        return shown.placement.bracer_frame
+    end
+    return nil
+end
+
+function get_bracer_transforms()
+    if published_base and get_bare_mount() then
+        return shown.placement.bracer_transforms
+    end
+    return nil
+end
+
+local function reset()
+    stop()
+    driver.reset()
+    shown = nil
+    provisional = nil
+    served = {}
+end
+
+local function is_published()
+    return published_base ~= nil
+end
+
+function register()
+    wd_hands_left.register_source(SOURCE_ID, get_left_visual, SOURCE_PRIORITY, is_published, is_building)
+    wd_core.register({
+        id = SOURCE_ID,
+        callbacks = {
+            actor_on_update = { update_build, { update, interval = UPDATE_MS } },
+        },
+        on_start = reset,
+    })
+end

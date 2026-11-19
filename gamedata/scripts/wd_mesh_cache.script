@@ -1,0 +1,321 @@
+BUILD_VERSION = 1
+DIR = "wd_hands_cache\\"
+INDEX = "index.ltx"
+MAX_ENTRIES = 64
+SESSION_MESHES_MAX = 3
+
+local MESHES = "$game_meshes$"
+local SOURCE_TEMP = "source.tmp"
+local VISUAL_KEY = "visual"
+local NAME_FORMAT = "%s%s_%s_%s_%d"
+
+local entries
+
+local function read_file(path)
+    local file = io.open(path, "rb")
+    if not file then
+        return nil
+    end
+    local data = file:read("*a")
+    file:close()
+    return data
+end
+
+local function write_file(path, data)
+    local file = io.open(path, "wb")
+    if not file then
+        return false
+    end
+    local written = file:write(data) ~= nil
+    local closed = file:close()
+    return written and closed ~= nil
+end
+
+local function is_written(path, data)
+    return read_file(path) == data
+end
+
+local function write_verified(path, data)
+    return wd_build_probe.run("write", write_file, path, data) and wd_build_probe.run("verify", is_written, path, data)
+end
+
+local function is_owned_visual(visual)
+    return visual:lower():sub(1, #DIR) == DIR:lower() and not visual:find("..", 1, true)
+end
+
+local function get_stem(visual)
+    local name = visual:match("([^\\/]+)$") or visual
+    return (name:gsub("%.ogf$", "")):lower()
+end
+
+local function get_entry_id(kind, key)
+    return kind .. "|" .. key
+end
+
+local function get_position(kind, key)
+    for position, entry in ipairs(entries) do
+        if entry.kind == kind and entry.key == key then
+            return position
+        end
+    end
+end
+
+local function parse_index(text)
+    local parsed = {}
+    local entry
+    for line in text:gmatch("[^\r\n]+") do
+        local id = line:match("^%[(.+)%]$")
+        if id then
+            local kind, key = id:match("^([^|]*)|(.+)$")
+            entry = kind and { kind = kind, key = key, fields = {} }
+        elseif entry then
+            local name, value = line:match("^(%S+)%s*=%s*(.-)%s*$")
+            if name == VISUAL_KEY then
+                if is_owned_visual(value) then
+                    entry.visual = value
+                    parsed[#parsed + 1] = entry
+                else
+                    entry = nil
+                end
+            elseif name and tonumber(value) then
+                entry.fields[name] = tonumber(value)
+            end
+        end
+    end
+    return parsed
+end
+
+local function serialize_index()
+    local lines = {}
+    for _, entry in ipairs(entries) do
+        lines[#lines + 1] = "[" .. get_entry_id(entry.kind, entry.key) .. "]"
+        lines[#lines + 1] = VISUAL_KEY .. " = " .. entry.visual
+        local names = {}
+        for name in pairs(entry.fields) do
+            names[#names + 1] = name
+        end
+        table.sort(names)
+        for _, name in ipairs(names) do
+            lines[#lines + 1] = string.format("%s = %.17g", name, entry.fields[name])
+        end
+        lines[#lines + 1] = ""
+    end
+    return table.concat(lines, "\n")
+end
+
+local function get_index_path()
+    return getFS():update_path(MESHES, DIR .. INDEX)
+end
+
+local function get_mesh_path(visual)
+    return getFS():update_path(MESHES, visual .. ".ogf")
+end
+
+local function has_file(visual)
+    return getFS():exist(MESHES, visual .. ".ogf")
+end
+
+local function read_index()
+    local text = read_file(get_index_path())
+    return text and parse_index(text) or {}
+end
+
+local function load_index()
+    if entries then
+        return
+    end
+    entries = wd_build_probe.run("index_load", read_index)
+end
+
+local function write_index()
+    write_file(get_index_path(), serialize_index())
+end
+
+local function save_index()
+    wd_build_probe.run("index_save", write_index)
+end
+
+local function is_referenced(visual)
+    for _, entry in ipairs(entries) do
+        if entry.visual == visual then
+            return true
+        end
+    end
+    return false
+end
+
+local function delete_unshared_files(visual)
+    if is_referenced(visual) then
+        return
+    end
+    local fs = getFS()
+    for _, extension in ipairs({ ".ogf", ".ltx" }) do
+        if fs:exist(MESHES, visual .. extension) then
+            fs:file_delete(fs:update_path(MESHES, visual .. extension))
+        end
+    end
+end
+
+local function drop_visual(visual)
+    local dropped = false
+    for position = #entries, 1, -1 do
+        if entries[position].visual == visual then
+            table.remove(entries, position)
+            dropped = true
+        end
+    end
+    delete_unshared_files(visual)
+    if dropped then
+        save_index()
+    end
+end
+
+local function has_intact_file(visual, length)
+    return is_referenced(visual) and getFS():file_length(get_mesh_path(visual)) == length
+end
+
+local function write_mesh(source_path, visual, data)
+    local cached_path = get_mesh_path(visual)
+    wd_build_probe.enter("copy")
+    getFS():file_copy(source_path, cached_path)
+    wd_build_probe.leave("copy")
+    return has_file(visual) and write_verified(cached_path, data)
+end
+
+local function copy_sidecar(source_visual, visual)
+    local fs = getFS()
+    if fs:exist(MESHES, source_visual .. ".ltx") then
+        fs:file_copy(fs:update_path(MESHES, source_visual .. ".ltx"), fs:update_path(MESHES, visual .. ".ltx"))
+    end
+end
+
+function get_source_key(visual)
+    if not has_file(visual) then
+        return nil
+    end
+    local fs = getFS()
+    local path = get_mesh_path(visual)
+    return string.format("%s|%d|%d", visual, fs:file_length(path), fs:get_file_age(path))
+end
+
+function get_source_length(visual)
+    if not has_file(visual) then
+        return nil
+    end
+    return getFS():file_length(get_mesh_path(visual))
+end
+
+local function read_meshes_file(file_name)
+    local fs = getFS()
+    if not fs:exist(MESHES, file_name) then
+        return nil
+    end
+    local temp_path = fs:update_path(MESHES, DIR .. SOURCE_TEMP)
+    wd_build_probe.enter("copy")
+    fs:file_copy(fs:update_path(MESHES, file_name), temp_path)
+    wd_build_probe.leave("copy")
+    local data = wd_build_probe.run("read", read_file, temp_path)
+    wd_build_probe.enter("delete")
+    fs:file_delete(temp_path)
+    wd_build_probe.leave("delete")
+    return data
+end
+
+function read_source(visual)
+    return read_meshes_file(visual .. ".ogf")
+end
+
+function read_bytes(file_name)
+    return read_meshes_file(file_name)
+end
+
+local session_meshes = {}
+
+local function find_session_mesh(visual, key)
+    for slot, entry in ipairs(session_meshes) do
+        if entry.visual == visual then
+            table.remove(session_meshes, slot)
+            if entry.key ~= key then
+                return nil
+            end
+            session_meshes[#session_meshes + 1] = entry
+            return entry.mesh
+        end
+    end
+    return nil
+end
+
+local function keep_session_mesh(visual, key, mesh)
+    session_meshes[#session_meshes + 1] = { visual = visual, key = key, mesh = mesh }
+    while #session_meshes > SESSION_MESHES_MAX do
+        table.remove(session_meshes, 1)
+    end
+end
+
+function read_mesh(visual)
+    local key = get_source_key(visual)
+    local cached = key and find_session_mesh(visual, key)
+    if cached then
+        return cached
+    end
+    local data = wd_build_probe.run("read", read_source, visual)
+    if not data then
+        return nil, "cannot read " .. visual
+    end
+    local mesh, reason = wd_build_probe.run("parse", wd_ogf.parse, data)
+    if mesh and key then
+        keep_session_mesh(visual, key, mesh)
+    end
+    return mesh, reason
+end
+
+function find(kind, key)
+    load_index()
+    local position = get_position(kind, key)
+    if not position then
+        return nil
+    end
+    local entry = table.remove(entries, position)
+    if not wd_build_probe.run("exist", has_file, entry.visual) then
+        delete_unshared_files(entry.visual)
+        save_index()
+        return nil
+    end
+    entries[#entries + 1] = entry
+    if position <= #entries / 2 then
+        save_index()
+    end
+    return entry
+end
+
+function store(kind, key, source_visual, data, fields, identity)
+    local source_path = get_mesh_path(source_visual)
+    if #data ~= getFS():file_length(source_path) then
+        return nil
+    end
+    local hash = wd_build_probe.run("hash", wd_ogf.get_content_hash, identity)
+    local visual = string.format(NAME_FORMAT, DIR, get_stem(source_visual), kind, hash, #data)
+    load_index()
+    if not wd_build_probe.run("check", has_intact_file, visual, #data) then
+        if not wd_build_probe.run("mesh", write_mesh, source_path, visual, data) then
+            drop_visual(visual)
+            return nil
+        end
+        wd_build_probe.run("sidecar", copy_sidecar, source_visual, visual)
+    end
+    local replaced_position = get_position(kind, key)
+    local replaced = replaced_position and table.remove(entries, replaced_position)
+    local entry = { kind = kind, key = key, visual = visual, fields = {} }
+    for name, value in pairs(fields) do
+        entry.fields[name] = value
+    end
+    entries[#entries + 1] = entry
+    if replaced then
+        delete_unshared_files(replaced.visual)
+    end
+    while #entries > MAX_ENTRIES do
+        delete_unshared_files(table.remove(entries, 1).visual)
+    end
+    save_index()
+    return entry
+end

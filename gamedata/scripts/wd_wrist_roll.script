@@ -14,7 +14,16 @@ WINDOWS = {
     },
 }
 
+ROOM = {
+    forearm = { lo = math.rad(-99), hi = math.rad(99) },
+    side = { lo = math.rad(-63), hi = math.rad(197) },
+}
+
+BRACER_ROLL_RANGE = { -20, 86 }
+SLIDE_RANGE = { -0.04, 0.015 }
+
 local KEEP_VISIBLE_LABEL = "Keep watch always visible"
+local ROLL_LABEL = "Roll"
 local TWIST_BONE = "l_forearm_twist"
 local PROXY_NAME = "wd_wrist_roll_proxy"
 local IDLE_ANM = "anm_idle"
@@ -32,10 +41,15 @@ local Z_AXIS = wd_frame.new_vec(0, 0, 1)
 local TUBE_AXIS = Z_AXIS
 local STORE_SECTION = "wd_wrist_roll"
 local ENABLED_KEY = "keep_visible"
+local ROLL_KEY = "roll"
+local SLIDE_KEY = "slide"
+local SETTING_DEFAULTS = { [ROLL_KEY] = 0, [SLIDE_KEY] = 0 }
 local TWIST_PART = 1
 local TWIST_UNIT = math.rad(10)
+local FULL_TURN = 2 * math.pi
+local HALF_TURN_RANGE = { -180, 180 }
 
-local function new_mount_frame()
+function new_mount_frame()
     local bind = d_bracer_config.MOUNT_BIND
     local frame = wd_frame.new_xyzi_frame(bind.rot[1], bind.rot[2], bind.rot[3])
     frame.c = wd_frame.new_vec(bind.pos[1], bind.pos[2], bind.pos[3])
@@ -44,8 +58,27 @@ end
 
 local mount_frame = new_mount_frame()
 local mount_inverse = wd_frame.invert_frame(mount_frame)
+
+function get_mount_frame()
+    return mount_frame
+end
+
+function get_tube_in_mount()
+    return mount_inverse.k
+end
 local enabled = true
-local twisted = false
+local gui_fields = nil
+
+local function copy_settings(target, source)
+    for key in pairs(SETTING_DEFAULTS) do
+        target[key] = source[key]
+    end
+    return target
+end
+
+local settings = copy_settings({}, SETTING_DEFAULTS)
+local saved = copy_settings({}, SETTING_DEFAULTS)
+local twisted_pose = nil
 local layers_primed = false
 local twist_supported = false
 local applied_twist = 0
@@ -54,12 +87,15 @@ local active_source_id = nil
 local seen_clip = nil
 local movement = nil
 local next_tick_at = 0
+local next_room_at = 0
 local target_roll = 0
+local room_lo = nil
+local room_hi = nil
 local applied_roll = 0
 local posed_roll = 0
 local rolled_memo = nil
-local cleared = false
-local solved = { face_pos = {}, face_rot = {}, bracer_pos = {}, bracer_rot = {}, roll = 0 }
+local cleared = true
+local solved = { roll = 0 }
 
 local function is_enabled()
     return enabled
@@ -69,24 +105,38 @@ local function save_settings()
     wd_store.update({
         [STORE_SECTION] = {
             [ENABLED_KEY] = tostring(enabled),
+            [ROLL_KEY] = tostring(saved[ROLL_KEY]),
+            [SLIDE_KEY] = tostring(saved[SLIDE_KEY]),
         },
     })
+end
+
+local function save_gui_settings()
+    copy_settings(saved, settings)
+    save_settings()
 end
 
 function set_enabled(on)
     enabled = on and true or false
     next_tick_at = 0
+    next_room_at = 0
     save_settings()
 end
 
-function add_gui_check(fields, rows)
-    fields[ENABLED_KEY] = wd_gui.new_check(is_enabled, set_enabled)
-    rows[#rows + 1] = { ENABLED_KEY, nil, 1, KEEP_VISIBLE_LABEL }
+function get_slide()
+    return settings[SLIDE_KEY]
+end
+
+local function read_setting(section, key, range)
+    return clamp(tonumber(section[key]) or SETTING_DEFAULTS[key], range[1], range[2])
 end
 
 local function load_settings()
     local section = wd_store.read()[STORE_SECTION] or {}
     enabled = section[ENABLED_KEY] ~= "false"
+    saved[ROLL_KEY] = read_setting(section, ROLL_KEY, HALF_TURN_RANGE)
+    saved[SLIDE_KEY] = read_setting(section, SLIDE_KEY, SLIDE_RANGE)
+    copy_settings(settings, saved)
 end
 
 function get_rolled_pose(pos, rot, roll)
@@ -96,9 +146,7 @@ function get_rolled_pose(pos, rot, roll)
     return { rolled.c.x, rolled.c.y, rolled.c.z }, { math.deg(yaw), math.deg(pitch), math.deg(bank) }
 end
 
-local function has_same_axes(lhs, rhs)
-    return lhs[1] == rhs[1] and lhs[2] == rhs[2] and lhs[3] == rhs[3]
-end
+local has_same_axes = wd_transforms.has_same_axes
 
 local function adjust_mount_pose(pos, rot)
     local memo = rolled_memo
@@ -128,17 +176,41 @@ local function apply_roll(roll)
     wd_attach.set_mount_pose(MOUNT, adjust_mount_pose)
 end
 
-local function get_face_frame(transforms)
+function get_face_frame(transforms)
     return wd_frame.compose_frames(mount_frame, wd_frame.new_pose_frame(transforms.model_pos, transforms.model_rot))
 end
 
-local function get_bracer_frame()
-    local transforms = d_bracer_config.transforms
+local function get_bracer_transforms()
+    return wd_bare_wrist.get_bracer_transforms() or d_bracer.get_transforms() or d_bracer_config.transforms
+end
+
+local function get_banked_transforms()
+    return wd_bare_wrist.get_bracer_transforms() or d_bracer_config.transforms
+end
+
+function get_rest_roll_for(bracer_roll)
+    return math.rad(bracer_roll - d_bracer_config.CLIP_ROLL)
+end
+
+function get_rest_roll()
+    return get_rest_roll_for(get_banked_transforms().model_rot[3])
+end
+
+function get_idle_roll_for(bracer_roll)
+    return get_rest_roll_for(bracer_roll) + math.rad(d_bracer_config.WATCH_TWIST)
+end
+
+local function get_clip_roll_offset()
+    return -get_rest_roll()
+end
+
+local function new_bracer_frame(transforms)
     return wd_frame.new_pose_frame(transforms.model_pos, transforms.model_rot, transforms.model_scale)
 end
 
-function solve_roll(twist_camera, face_frame)
-    local bracer_camera = wd_frame.compose_frames(twist_camera, get_bracer_frame())
+function solve_roll(twist_camera, face_frame, bracer_frame)
+    local bracer_camera =
+        wd_frame.compose_frames(twist_camera, bracer_frame or new_bracer_frame(get_bracer_transforms()))
     local eye = wd_frame.invert_frame(bracer_camera).c
     local roll = 0
     for _ = 1, SOLVE_ITERATIONS do
@@ -204,7 +276,7 @@ local function predict_twist(source_key)
     return wd_frame.compose_frames(get_base_offset(source_key.hud_section, source_key.suffix), hands_twist)
 end
 
-local function get_cached_twist(source_key)
+function get_cached_twist(source_key)
     local cached = twist_cache[source_key.key]
     if cached == nil then
         cached = predict_twist(source_key) or false
@@ -220,13 +292,13 @@ local function get_idle_anm(source)
     return source:weapon_in_grenade_mode() and GRENADE_IDLE_ANM or LAUNCHER_IDLE_ANM
 end
 
-local function resolve_source_key(source)
+function get_source_key(section, idle_anm)
     local visual = get_hands_visual()
-    local hud_section = visual and ini_sys:r_string_ex(source:section(), "hud")
+    local hud_section = visual and ini_sys:r_string_ex(section, "hud")
     if not hud_section then
         return nil
     end
-    local idle_anm = get_idle_anm(source)
+    idle_anm = idle_anm or IDLE_ANM
     local suffix = utils_xml.is_widescreen() and WIDE_SUFFIX or ""
     return {
         key = hud_section .. "|" .. visual .. "|" .. suffix .. "|" .. idle_anm,
@@ -235,6 +307,10 @@ local function resolve_source_key(source)
         suffix = suffix,
         idle_anm = idle_anm,
     }
+end
+
+local function get_idle_roll()
+    return get_idle_roll_for(get_banked_transforms().model_rot[3])
 end
 
 local function get_source()
@@ -250,43 +326,122 @@ local function get_source()
     return item
 end
 
-local function copy_axes(target, source)
-    target[1], target[2], target[3] = source[1], source[2], source[3]
-end
-
 local function is_solved_for(twist, face, face_transforms, bracer_transforms)
     return solved.twist == twist
         and solved.face == face
-        and has_same_axes(solved.face_pos, face_transforms.model_pos)
-        and has_same_axes(solved.face_rot, face_transforms.model_rot)
-        and has_same_axes(solved.bracer_pos, bracer_transforms.model_pos)
-        and has_same_axes(solved.bracer_rot, bracer_transforms.model_rot)
-        and solved.bracer_scale == bracer_transforms.model_scale
+        and wd_transforms.is_same_pose(solved.face_pose, face_transforms)
+        and wd_transforms.is_same_pose(solved.bracer_pose, bracer_transforms)
 end
 
 local function get_solved_roll(twist, face)
     local face_transforms = face.get_transforms()
-    local bracer_transforms = d_bracer_config.transforms
+    local bracer_transforms = get_bracer_transforms()
     if not is_solved_for(twist, face, face_transforms, bracer_transforms) then
-        solved.roll = solve_roll(twist, get_face_frame(face_transforms))
+        solved.roll = solve_roll(twist, get_face_frame(face_transforms), new_bracer_frame(bracer_transforms))
         solved.twist = twist
         solved.face = face
-        copy_axes(solved.face_pos, face_transforms.model_pos)
-        copy_axes(solved.face_rot, face_transforms.model_rot)
-        copy_axes(solved.bracer_pos, bracer_transforms.model_pos)
-        copy_axes(solved.bracer_rot, bracer_transforms.model_rot)
-        solved.bracer_scale = bracer_transforms.model_scale
+        solved.face_pose = wd_transforms.copy_pose(face_transforms)
+        solved.bracer_pose = wd_transforms.copy_pose(bracer_transforms)
     end
     return solved.roll
 end
 
-local function refresh_target(face, source)
-    target_roll = 0
-    local source_key = source and resolve_source_key(source)
-    local twist = source_key and get_cached_twist(source_key)
-    if twist then
-        target_roll = get_solved_roll(twist, face)
+local function get_room()
+    local lo, hi = nil, nil
+    for slot, room in pairs(ROOM) do
+        if wd_slots.get_mounted(slot) then
+            lo = math.max(lo or room.lo, room.lo)
+            hi = math.min(hi or room.hi, room.hi)
+        end
     end
+    return lo, hi
+end
+
+local function unwrap_into_room(roll)
+    return room_lo + (roll - room_lo) % FULL_TURN
+end
+
+local function fit_room(roll)
+    local unwrapped = unwrap_into_room(roll)
+    if unwrapped <= room_hi then
+        return wd_compass.normalize_angle(unwrapped)
+    end
+    if unwrapped - room_hi < room_lo + FULL_TURN - unwrapped then
+        return wd_compass.normalize_angle(room_hi)
+    end
+    return room_lo
+end
+
+local function get_roll_limits()
+    if wd_slots.is_bracer_worn() then
+        return BRACER_ROLL_RANGE[1], BRACER_ROLL_RANGE[2]
+    end
+    local idle = get_idle_roll_for(d_bracer_config.DEFAULTS.model_rot[3])
+    local swept_lo, swept_hi = wd_bare_wrist.get_roll_range()
+    return math.deg(swept_lo - idle), math.deg(swept_hi - idle)
+end
+
+local function get_rest_goal()
+    local roll = get_idle_roll()
+    if settings[ROLL_KEY] == 0 then
+        return roll
+    end
+    roll = roll + math.rad(clamp(settings[ROLL_KEY], get_roll_limits()))
+    if room_lo then
+        return fit_room(roll)
+    end
+    return wd_compass.normalize_angle(roll)
+end
+
+local function get_roll_bounds()
+    local low, high = get_roll_limits()
+    local room_low, room_high = get_room()
+    if room_low then
+        local idle = room_low + (get_idle_roll() - room_low) % FULL_TURN
+        low, high = math.max(low, math.deg(room_low - idle)), math.min(high, math.deg(room_high - idle))
+    end
+    return low, math.max(low, high)
+end
+
+local function get_roll_turn(from, goal)
+    if room_lo then
+        local start, finish = unwrap_into_room(from), unwrap_into_room(goal)
+        if start <= room_hi and finish <= room_hi then
+            return finish - start
+        end
+    end
+    return wd_compass.normalize_angle(goal - from)
+end
+
+local function refresh_target(face, source)
+    target_roll = get_idle_roll()
+    room_lo, room_hi = get_room()
+    local source_key = source and get_source_key(source:section(), get_idle_anm(source))
+    local twist = source_key and get_cached_twist(source_key)
+    if not twist then
+        return
+    end
+    target_roll = get_solved_roll(twist, face)
+    if room_lo then
+        target_roll = fit_room(target_roll)
+    end
+end
+
+local function track_source(face, inspecting, now)
+    local source = get_source()
+    local source_id = source and source:id() or false
+    local snap = enabled and source_id ~= active_source_id and not inspecting
+    active_source_id = source_id
+    if enabled and not inspecting then
+        if snap or now >= next_tick_at then
+            next_tick_at = now + REFRESH_INTERVAL_MS
+            refresh_target(face, source)
+        end
+    elseif now >= next_room_at then
+        next_room_at = now + REFRESH_INTERVAL_MS
+        room_lo, room_hi = get_room()
+    end
+    return snap
 end
 
 local function get_window(clip)
@@ -295,7 +450,7 @@ end
 
 local function track_clip(inspecting)
     if not inspecting then
-        twisted = false
+        twisted_pose = nil
     end
     local clip = wd_inspect.get_hand_clip()
     if clip == seen_clip then
@@ -305,22 +460,22 @@ local function track_clip(inspecting)
     if not (inspecting and clip and clip.pose) then
         return nil
     end
-    twisted = clip.pose == wd_inspect.POSE_WATCH and clip.kind ~= wd_inspect.CLIP_HOLSTER
+    twisted_pose = clip.kind ~= wd_inspect.CLIP_HOLSTER and clip.pose or nil
     return clip
 end
 
-local function get_bracer_roll_offset()
-    return math.rad(d_bracer_config.DEFAULTS.model_rot[3] - d_bracer_config.transforms.model_rot[3])
-end
-
-local function get_goals()
-    if not enabled then
-        return 0, 0
+local function get_goals(face)
+    local roll = enabled and target_roll or get_rest_goal()
+    if twisted_pose == wd_inspect.POSE_WATCH then
+        if not face then
+            return roll, math.rad(d_bracer_config.WATCH_TWIST)
+        end
+        return roll, wd_compass.normalize_angle(roll + get_clip_roll_offset())
     end
-    if not twisted then
-        return target_roll, 0
+    if twisted_pose == wd_inspect.POSE_PROMIN and wd_slots.is_bracer_worn() then
+        return roll, wd_compass.normalize_angle(get_clip_roll_offset())
     end
-    return target_roll, wd_compass.normalize_angle(target_roll + get_bracer_roll_offset())
+    return roll, 0
 end
 
 local function is_near(lhs, rhs)
@@ -338,7 +493,7 @@ end
 local function start_movement(roll_goal, twist_goal, started, length, window)
     movement = {
         roll_from = applied_roll,
-        roll_turn = wd_compass.normalize_angle(roll_goal - applied_roll),
+        roll_turn = get_roll_turn(applied_roll, roll_goal),
         twist_from = applied_twist,
         twist_turn = twist_goal - applied_twist,
         roll_goal = roll_goal,
@@ -352,7 +507,7 @@ end
 local function advance_movement(now)
     local phase = clamp((now - movement.started) / movement.length, 0, 1)
     local window = movement.window
-    local eased = wd_hands_offset.ease_smooth((phase - window[1]) / (window[2] - window[1]))
+    local eased = wd_frame.get_smoothstep((phase - window[1]) / (window[2] - window[1]))
     applied_roll = wd_compass.normalize_angle(movement.roll_from + movement.roll_turn * eased)
     applied_twist = movement.twist_from + movement.twist_turn * eased
     if phase >= 1 then
@@ -384,7 +539,7 @@ end
 local function clear_roll()
     active_source_id = nil
     seen_clip = nil
-    twisted = false
+    twisted_pose = nil
     movement = nil
     target_roll = 0
     applied_roll = 0
@@ -410,26 +565,26 @@ function update()
     if not layers_primed then
         prime_layers()
     end
-    local face = not wd_exo.is_exo() and wd_slots.get_mounted(MOUNT)
-    if not face then
-        if not cleared then
+    local exo = wd_exo.is_exo()
+    local face = not exo and wd_slots.get_mounted(MOUNT)
+    local attached = face and cleared
+    if attached then
+        target_roll = get_idle_roll()
+        cleared = false
+    elseif not (face or cleared) then
+        clear_roll()
+    end
+    local inspecting = wd_inspect.is_pose_up()
+    if not (face or not exo and (inspecting or wd_slots.is_bracer_worn())) then
+        if applied_twist ~= 0 or movement then
             clear_roll()
         end
         return
     end
-    cleared = false
-    local source = get_source()
-    local source_id = source and source:id() or false
-    local inspecting = wd_inspect.is_pose_up()
     local now = time_global()
-    local snap = enabled and source_id ~= active_source_id and not inspecting
-    active_source_id = source_id
-    if enabled and not inspecting and (snap or now >= next_tick_at) then
-        next_tick_at = now + REFRESH_INTERVAL_MS
-        refresh_target(face, source)
-    end
+    local snap = face and track_source(face, inspecting, now) or attached
     local clip = track_clip(inspecting)
-    local roll_goal, twist_goal = get_goals()
+    local roll_goal, twist_goal = get_goals(face)
     if snap then
         movement = nil
         applied_roll, applied_twist = roll_goal, twist_goal
@@ -445,6 +600,60 @@ function update()
     end
     apply_roll(applied_roll)
     apply_twist(applied_twist)
+end
+
+local function is_roll_shown()
+    return not enabled
+end
+
+local function is_slide_shown()
+    return wd_bare_wrist.is_active()
+end
+
+local function get_roll_text(value)
+    return string.format("%+.0f deg", value)
+end
+
+local function restore_settings(source_name)
+    copy_settings(settings, source_name == "default" and SETTING_DEFAULTS or saved)
+end
+
+local function bind_setting(slider, key)
+    slider.no_apply = true
+    slider.get = function()
+        return settings[key]
+    end
+    slider.set = function(value)
+        settings[key] = value
+    end
+    slider.save = save_gui_settings
+    slider.restore = restore_settings
+    return slider
+end
+
+local function new_gui_fields()
+    local roll = bind_setting(wd_gui.new_ranged_slider(get_roll_bounds), ROLL_KEY)
+    roll.text = get_roll_text
+    roll.is_shown = is_roll_shown
+    local slide = bind_setting(wd_gui.new_slider(SLIDE_RANGE[1], SLIDE_RANGE[2]), SLIDE_KEY)
+    slide.text = wd_gui.get_mm_text
+    slide.is_shown = is_slide_shown
+    slide.on_change = wd_bare_wrist.update
+    return {
+        [ENABLED_KEY] = wd_gui.new_check(is_enabled, set_enabled),
+        [ROLL_KEY] = roll,
+        [SLIDE_KEY] = slide,
+    }
+end
+
+function add_gui_rows(fields, rows)
+    gui_fields = gui_fields or new_gui_fields()
+    for key, field in pairs(gui_fields) do
+        fields[key] = field
+    end
+    rows[#rows + 1] = { SLIDE_KEY, nil, 0.001, wd_gui.FOREARM_POSITION_LABEL }
+    rows[#rows + 1] = { ENABLED_KEY, nil, 1, KEEP_VISIBLE_LABEL }
+    rows[#rows + 1] = { ROLL_KEY, nil, 1, ROLL_LABEL }
 end
 
 function register()

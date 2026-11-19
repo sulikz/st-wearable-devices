@@ -14,6 +14,8 @@ local function get_sidhud_module()
     return rawget(_G, "ui_sidhud_mcm")
 end
 
+local FIRE_WIDGETS = { "m_fire_mode" }
+
 local AMMO_WIDGETS = {
     "m_ui_weapon_cur_ammo",
     "m_ui_weapon_fmj_ammo",
@@ -169,8 +171,15 @@ function apply(wnd, hide)
     end
 end
 
-local function park(wnd, name)
-    apply(wnd, is_hidden(name))
+local function park(hud_states, fields, name)
+    local hide = is_hidden(name)
+    if not hide and prev[name] == false then
+        return
+    end
+    for _, field in ipairs(fields) do
+        apply(hud_states[field], hide)
+    end
+    prev[name] = hide
 end
 
 local function apply_module(mod, name)
@@ -286,10 +295,8 @@ function actor_on_update()
         elseif forced_psy then
             st.m_ui_psy_bar_show = true
         end
-        park(st.m_fire_mode, "hud_fire")
-        for _, field in ipairs(AMMO_WIDGETS) do
-            park(st[field], "hud_ammo")
-        end
+        park(st, FIRE_WIDGETS, "hud_fire")
+        park(st, AMMO_WIDGETS, "hud_ammo")
     end
     apply_radio()
     apply_module(actor_status, "hud_status")

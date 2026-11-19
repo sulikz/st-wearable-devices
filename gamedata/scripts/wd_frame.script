@@ -80,6 +80,23 @@ function transform_point(frame, vec)
     return add_vec(transform_dir(frame, vec), frame.c)
 end
 
+function get_smoothstep(blend)
+    if blend <= 0 then
+        return 0
+    end
+    if blend >= 1 then
+        return 1
+    end
+    return blend * blend * (3 - 2 * blend)
+end
+
+function transform_xyz(frame, x, y, z)
+    local axis_i, axis_j, axis_k, origin = frame.i, frame.j, frame.k, frame.c
+    return x * axis_i.x + y * axis_j.x + z * axis_k.x + origin.x,
+        x * axis_i.y + y * axis_j.y + z * axis_k.y + origin.y,
+        x * axis_i.z + y * axis_j.z + z * axis_k.z + origin.z
+end
+
 function compose_frames(parent, child)
     return {
         i = transform_dir(parent, child.i),
@@ -130,6 +147,11 @@ function get_hpb(frame)
         return -math.atan2(row_k.x, row_k.z), -math.atan2(-row_k.y, cos_pitch), -math.atan2(row_i.y, row_j.y)
     end
     return -math.atan2(-row_i.z, row_i.x), -math.atan2(-row_k.y, cos_pitch), 0
+end
+
+function get_pose(frame)
+    local yaw, pitch, roll = get_hpb(frame)
+    return { frame.c.x, frame.c.y, frame.c.z }, { math.deg(yaw), math.deg(pitch), math.deg(roll) }, get_length(frame.i)
 end
 
 function get_signed_angle(from, to, axis)

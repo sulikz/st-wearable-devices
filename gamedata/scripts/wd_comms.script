@@ -1,5 +1,5 @@
 local SAVE_KEY = "wd_comms"
-local CAP = 100
+CAP = 100
 local COMMUNITIES = {
     "stalker",
     "dolg",

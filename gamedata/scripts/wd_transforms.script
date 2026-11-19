@@ -1,5 +1,30 @@
+local POSE_FORMAT = "%.6g,%.6g,%.6g;%.6g,%.6g,%.6g;%.6g"
+
 function copy_axes(values)
     return { values and values[1] or 0, values and values[2] or 0, values and values[3] or 0 }
+end
+
+function has_same_axes(lhs, rhs)
+    return lhs[1] == rhs[1] and lhs[2] == rhs[2] and lhs[3] == rhs[3]
+end
+
+function copy_pose(pose)
+    return {
+        model_pos = copy_axes(pose.model_pos),
+        model_rot = copy_axes(pose.model_rot),
+        model_scale = pose.model_scale,
+    }
+end
+
+function is_same_pose(lhs, rhs)
+    return lhs.model_scale == rhs.model_scale
+        and has_same_axes(lhs.model_pos, rhs.model_pos)
+        and has_same_axes(lhs.model_rot, rhs.model_rot)
+end
+
+function format_pose(pose)
+    local pos, rot = pose.model_pos, pose.model_rot
+    return string.format(POSE_FORMAT, pos[1], pos[2], pos[3], rot[1], rot[2], rot[3], pose.model_scale)
 end
 
 function parse_axes(text)

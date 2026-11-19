@@ -1,8 +1,8 @@
 local SECTION = d_watch_config.SECTION
 
 local owner = wd_worn.new({
-    attach_label = "st_attach_metro_watch",
-    detach_label = "st_detach_metro_watch",
+    attach_label = "st_wear_metro_watch",
+    detach_label = "st_take_off_metro_watch",
     save_key = "metro_watch_worn",
     item_section = SECTION,
     wear_group = "watch",
@@ -108,6 +108,21 @@ local glow = wd_attach.new_glow({
     end,
 })
 
+local function get_base_model()
+    return d_watch_config.get_skin_model()
+end
+
+local bare = { id = SECTION, get_base_model = get_base_model, defaults = d_watch_config.DEFAULTS }
+
+local function get_model_transforms()
+    local transforms = d_watch_config.transforms
+    return {
+        model_pos = transforms.model_pos,
+        model_rot = transforms.model_rot,
+        model_scale = transforms.model_scale,
+    }
+end
+
 function sync_attachment()
     glow.sync()
     rad_led.sync()
@@ -118,17 +133,11 @@ function sync_attachment()
         wd_attach.detach(LED_ANOMALY_NAME)
         return nil
     end
-    local transforms = d_watch_config.transforms
-    local model = d_watch_config.get_skin_model()
-    local model_transforms = {
-        model_pos = transforms.model_pos,
-        model_rot = transforms.model_rot,
-        model_scale = transforms.model_scale,
-    }
+    local model = wd_bare_wrist.get_watch_model(bare)
+    local model_transforms = get_model_transforms()
     local attachment = wd_attach.attach({
         name = SECTION,
         model = model,
-        parent = d_bracer_config.SECTION,
         mount = wd_wrist_roll.MOUNT,
         transforms = model_transforms,
     })
@@ -142,7 +151,6 @@ function sync_attachment()
         wd_attach.attach({
             name = led_name,
             model = model,
-            parent = d_bracer_config.SECTION,
             mount = wd_wrist_roll.MOUNT,
             transforms = model_transforms,
             bone_visible = { wpn_body = false },
@@ -228,7 +236,7 @@ local function register_gui()
         appearance_rows[#appearance_rows + 1] = { "clock", nil, 1, "Clock" }
     end
     wd_clock.add_gui_rows(fields, appearance_rows, d_watch_config, d_watch_tubes.update)
-    wd_wrist_roll.add_gui_check(fields, appearance_rows)
+    wd_wrist_roll.add_gui_rows(fields, appearance_rows)
 
     wd_gui.register_device({
         id = "watch",
@@ -283,6 +291,7 @@ function register()
     wd_slots.register_device({
         id = "watch",
         slot = "wrist",
+        bare = bare,
         matches_section = function(section)
             return section == SECTION
         end,

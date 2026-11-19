@@ -1,4 +1,4 @@
-local ROW_COUNT = 7
+local ROW_COUNT = 8
 local PICK_SLOTS = 6
 local GLOBAL_SLOTS = 12
 local BUTTON_ROWS = 3
@@ -107,15 +107,22 @@ local function resolve(value)
     return value
 end
 
+local function add_step(current, delta)
+    return current + delta
+end
+
+FOREARM_POSITION_LABEL = "Position along forearm"
+
+function get_mm_text(metres)
+    return string.format("%+.1f mm", metres * 1000)
+end
+
 function new_slider(min, max)
-    return {
-        widget = "slider",
-        apply = function(current, delta)
-            return clamp(current + delta, min or -math.huge, max or math.huge)
-        end,
-        min = min,
-        max = max,
-    }
+    return { widget = "slider", apply = add_step, min = min, max = max }
+end
+
+function new_ranged_slider(get_range)
+    return { widget = "slider", apply = add_step, get_range = get_range }
 end
 
 function new_percent_slider()
@@ -411,6 +418,10 @@ function get_field(name, comp)
     if not device then
         return nil
     end
+    local definition = device.fields[name]
+    if definition and definition.get then
+        return definition.get()
+    end
     local store = resolve(device.store)
     local value = store[name]
     if comp then
@@ -422,6 +433,11 @@ end
 local function set_value(name, comp, value)
     local device = get_active_device()
     if not device then
+        return
+    end
+    local definition = device.fields[name]
+    if definition and definition.set then
+        definition.set(value)
         return
     end
     local store = resolve(device.store)
@@ -452,6 +468,18 @@ local function run_field_callbacks(definition)
     end
 end
 
+local function get_range(definition)
+    if definition.get_range then
+        return definition.get_range()
+    end
+    return definition.min, definition.max
+end
+
+local function clamp_to_range(definition, value)
+    local low, high = get_range(definition)
+    return clamp(value, low or -math.huge, high or math.huge)
+end
+
 function nudge_field(name, comp, delta)
     local definition = get_field_desc(name)
     if not definition then
@@ -462,7 +490,7 @@ function nudge_field(name, comp, delta)
         new_value = definition.cycle(get_field(name, nil), delta)
         set_value(name, nil, new_value)
     else
-        new_value = definition.apply(get_field(name, comp), delta)
+        new_value = clamp_to_range(definition, definition.apply(get_field(name, comp), delta))
         set_value(name, comp, new_value)
     end
     run_field_callbacks(definition)
@@ -495,7 +523,7 @@ function get_field_range(name)
     if not definition then
         return nil
     end
-    return definition.min, definition.max
+    return get_range(definition)
 end
 
 function set_field(name, comp, value)
@@ -503,23 +531,10 @@ function set_field(name, comp, value)
     if not definition then
         return
     end
-    value = clamp(value, definition.min or -math.huge, definition.max or math.huge)
+    value = clamp_to_range(definition, value)
     set_value(name, comp, value)
     run_field_callbacks(definition)
     return value
-end
-
-function set_field_vector(name, values)
-    local definition = get_field_desc(name)
-    if not definition then
-        return
-    end
-    local low = definition.min or -math.huge
-    local high = definition.max or math.huge
-    for comp = 1, #values do
-        set_value(name, comp, clamp(values[comp], low, high))
-    end
-    run_field_callbacks(definition)
 end
 
 function select_field(name, item_index)
@@ -533,15 +548,27 @@ function select_field(name, item_index)
     return value
 end
 
+local function get_row_hooks(device, rows, key)
+    local hooks, seen = {}, {}
+    for _, row in ipairs(rows) do
+        local definition = device.fields[row[1]]
+        local hook = definition and definition[key]
+        if hook and not seen[hook] then
+            seen[hook] = true
+            hooks[#hooks + 1] = hook
+        end
+    end
+    return hooks
+end
+
 function restore_tab(tab_id, source_name)
     active_tab = tab_id
     local tab_spec = tabs[tab_id]
     local device = devices[tab_spec.device]
     local source = (source_name == "default") and resolve(device.defaults) or resolve(device.saved)
     local store = resolve(device.store)
-    local seen = {}
-    local changes = {}
-    for _, row in ipairs(get_restore_rows(tab_id)) do
+    local rows = get_restore_rows(tab_id)
+    for _, row in ipairs(rows) do
         local name, comp = row[1], row[2]
         local value = source[name]
         if value ~= nil then
@@ -554,16 +581,14 @@ function restore_tab(tab_id, source_name)
                 store[name] = value
             end
         end
-        local definition = device.fields[name]
-        if definition and definition.on_change and not seen[definition.on_change] then
-            seen[definition.on_change] = true
-            changes[#changes + 1] = definition.on_change
-        end
+    end
+    for _, restore in ipairs(get_row_hooks(device, rows, "restore")) do
+        restore(source_name)
     end
     if device.on_apply then
         device.on_apply()
     end
-    for _, on_change in ipairs(changes) do
+    for _, on_change in ipairs(get_row_hooks(device, rows, "on_change")) do
         on_change()
     end
     if GUI then
@@ -932,11 +957,6 @@ function UIWdGui:on_section(index)
     self:set_tab(tab_id)
 end
 
-function UIWdGui:get_tab_device()
-    local tab_spec = tabs[self.tab]
-    return tab_spec and devices[tab_spec.device]
-end
-
 function UIWdGui:get_picks()
     if self:is_globals_tab() then
         return EMPTY_ROWS
@@ -1083,8 +1103,9 @@ function UIWdGui:layout_footer()
     self.back:SetWndSize(vector2():set(layout.width, content_bottom + 14))
 end
 
-function UIWdGui:on_save()
-    local device = self:get_tab_device()
+function save_tab(tab_id)
+    local tab_spec = tabs[tab_id]
+    local device = tab_spec and devices[tab_spec.device]
     if not device then
         return
     end
@@ -1093,6 +1114,13 @@ function UIWdGui:on_save()
     elseif device.save then
         device.save()
     end
+    for _, save in ipairs(get_row_hooks(device, get_restore_rows(tab_id), "save")) do
+        save()
+    end
+end
+
+function UIWdGui:on_save()
+    save_tab(self.tab)
 end
 
 function UIWdGui:restore_tab_view(source_name)
@@ -1104,14 +1132,8 @@ function UIWdGui:on_close()
     if self:IsShown() then
         self:HideDialog()
     end
-    wd_gizmo.reset()
     GUI = nil
     Unregister_UI("UIWdGui")
-end
-
-function UIWdGui:Update()
-    CUIScriptWnd.Update(self)
-    wd_gizmo.update(self)
 end
 
 function UIWdGui:OnKeyboard(dik, action)
@@ -1119,8 +1141,6 @@ function UIWdGui:OnKeyboard(dik, action)
     if action == ui_events.WINDOW_KEY_PRESSED then
         if dik == DIK_keys.DIK_ESCAPE then
             self:on_close()
-            return true
-        elseif dik == DIK_keys.MOUSE_1 and wd_gizmo.on_mouse_press() then
             return true
         elseif dik == DIK_keys.DIK_K and wd_mcm.is_mod_held("alt") then
             self:set_dev_mode(not dev_mode)
@@ -1139,6 +1159,10 @@ end
 
 function is_open()
     return GUI ~= nil and GUI:IsShown()
+end
+
+function is_dragging()
+    return is_open() and key_state(DIK_keys.MOUSE_1) ~= 0
 end
 
 function show_tab(tab_id)
@@ -1183,8 +1207,7 @@ local function new_speed_slider(entry)
     local slider = new_slider(entry.min, entry.max)
     slider.apply = function(current, delta)
         local stepped = current + delta
-        stepped = (delta < 0) and math.floor(stepped) or math.ceil(stepped)
-        return clamp(stepped, entry.min, entry.max)
+        return (delta < 0) and math.floor(stepped) or math.ceil(stepped)
     end
     slider.text = function(percent)
         return string.format("%+d%%", percent)

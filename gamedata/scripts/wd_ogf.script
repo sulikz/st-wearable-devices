@@ -1,0 +1,830 @@
+jit.off(true, true)
+
+FVF_BASE = 302455168
+
+local CHUNK_TEXTURE = 2
+local CHUNK_VERTICES = 3
+local CHUNK_INDICES = 4
+local CHUNK_CHILDREN = 9
+local CHUNK_BONE_NAMES = 13
+local CHUNK_IKDATA = 16
+local COMPRESS_FLAG = 2147483648
+local CHUNK_HEADER_SIZE = 8
+local OBB_SIZE = 60
+local SHAPE_SIZE = 112
+local IK_LIMITS_SIZE = 4 + 3 * 16 + 5 * 4
+local IK_POSE_SIZE = 24
+local IK_TAIL_SIZE = 4 + 12
+local VERTEX_HEADER_SIZE = 8
+local INDEX_COUNT_SIZE = 4
+local INDEX_SIZE = 2
+local NORMAL_SHIFT = 12
+local NORMAL_FRAME_MAX = 2
+local MAX_BONE_ID_SINGLE = 4294967295
+local MAX_BONE_ID_MULTI = 65535
+local HASH_BLOCK = 65536
+
+local LINKS_BY_FORMAT = { [1] = 1, [2] = 2, [3] = 3, [4] = 4 }
+LINKS_BY_FORMAT[FVF_BASE] = 1
+LINKS_BY_FORMAT[FVF_BASE * 2] = 2
+LINKS_BY_FORMAT[FVF_BASE * 4] = 3
+LINKS_BY_FORMAT[FVF_BASE * 5] = 4
+local STRIDE_BY_LINKS = { 60, 64, 70, 76 }
+local POSITION_SHIFT_BY_LINKS = { 0, 4, 6, 8 }
+local SINGLE_BONE_OFFSET = 56
+local WEIGHT_OFFSET_BY_LINKS = { 0, 52, 54, 56 }
+
+local byte = string.byte
+local char = string.char
+local floor = math.floor
+local frexp = math.frexp
+local ldexp = math.ldexp
+local huge = math.huge
+
+local F32_HIDDEN_BIT = 8388608
+local F32_HALF_MAX = 127
+
+local EVEN_SCALE, EVEN_BIAS, ODD_SCALE = {}, {}, {}
+for high_byte = 0, 255 do
+    local sign = high_byte >= 128 and -1 or 1
+    local half = high_byte % 128
+    EVEN_SCALE[high_byte] = sign * ldexp(1, half == 0 and -149 or half * 2 - 150)
+    EVEN_BIAS[high_byte] = half == 0 and 0 or F32_HIDDEN_BIT
+    ODD_SCALE[high_byte] = half == F32_HALF_MAX and 0 or sign * ldexp(1, half * 2 - 149)
+end
+
+local function read_u32(data, position)
+    local first, second, third, fourth = byte(data, position, position + 3)
+    return first + second * 256 + third * 65536 + fourth * 16777216
+end
+
+local function decode_f32(first, second, third, fourth)
+    if third >= 128 then
+        if fourth % 128 == F32_HALF_MAX then
+            return nil
+        end
+        return ODD_SCALE[fourth] * (third * 65536 + second * 256 + first)
+    end
+    return EVEN_SCALE[fourth] * (EVEN_BIAS[fourth] + third * 65536 + second * 256 + first)
+end
+
+local function read_u16(data, position)
+    local low, high = byte(data, position, position + 1)
+    return low + high * 256
+end
+
+local function encode_u32(value)
+    return char(value % 256, floor(value / 256) % 256, floor(value / 65536) % 256, floor(value / 16777216))
+end
+
+local function get_f32_bytes(value)
+    local sign = 0
+    if value < 0 or (value == 0 and 1 / value < 0) then
+        sign = 128
+        value = -value
+    end
+    if value == 0 then
+        return 0, 0, 0, sign
+    end
+    local fraction, power = frexp(value)
+    local exponent = power + 126
+    local mantissa
+    if exponent <= 0 then
+        mantissa = floor(ldexp(value, 149) + 0.5)
+        exponent = 0
+    else
+        mantissa = floor((fraction * 2 - 1) * 8388608 + 0.5)
+        if mantissa == 8388608 then
+            mantissa = 0
+            exponent = exponent + 1
+        end
+    end
+    local low = mantissa % 256
+    local low_word = mantissa % 65536
+    local odd = exponent % 2
+    return low, (low_word - low) / 256, (mantissa - low_word) / 65536 + odd * 128, (exponent - odd) / 2 + sign
+end
+
+function is_finite_number(value)
+    return type(value) == "number" and value == value and value ~= huge and value ~= -huge
+end
+
+local function read_f32_or_zero(data, position)
+    return decode_f32(byte(data, position, position + 3)) or 0
+end
+
+local function read_vec(data, position)
+    return {
+        x = read_f32_or_zero(data, position),
+        y = read_f32_or_zero(data, position + 4),
+        z = read_f32_or_zero(data, position + 8),
+    }
+end
+
+local function read_stringz(data, position, limit)
+    local finish = data:find("\0", position, true)
+    if not finish or finish >= limit then
+        return nil
+    end
+    return data:sub(position, finish - 1), finish + 1
+end
+
+local function get_chunks(data, start, finish)
+    local chunks = {}
+    local position = start
+    while position < finish do
+        if position + CHUNK_HEADER_SIZE > finish then
+            return nil, string.format("truncated chunk header at %d", position)
+        end
+        local raw_id = read_u32(data, position)
+        local size = read_u32(data, position + 4)
+        local body = position + CHUNK_HEADER_SIZE
+        if body + size > finish then
+            return nil, string.format("chunk %d overruns at %d", raw_id % COMPRESS_FLAG, position)
+        end
+        chunks[#chunks + 1] = {
+            id = raw_id % COMPRESS_FLAG,
+            compressed = raw_id >= COMPRESS_FLAG,
+            body = body,
+            size = size,
+        }
+        position = body + size
+    end
+    return chunks
+end
+
+local function find_chunk(chunks, wanted)
+    for _, chunk in ipairs(chunks) do
+        if chunk.id == wanted then
+            return chunk
+        end
+    end
+end
+
+local function find_plain_chunk(chunks, wanted, label)
+    local chunk = find_chunk(chunks, wanted)
+    if not chunk then
+        return nil, "no " .. label .. " chunk"
+    end
+    if chunk.compressed then
+        return nil, label .. " chunk is compressed"
+    end
+    return chunk
+end
+
+local function read_bones(data, chunk)
+    if chunk.size < 4 then
+        return nil, "bone names chunk too small"
+    end
+    local limit = chunk.body + chunk.size
+    local count = read_u32(data, chunk.body)
+    local position = chunk.body + 4
+    local bones = { count = count, names = {}, ids = {}, parents = {} }
+    for bone_id = 0, count - 1 do
+        local name, parent
+        name, position = read_stringz(data, position, limit)
+        if not name then
+            return nil, "bone names chunk is cut short"
+        end
+        parent, position = read_stringz(data, position, limit)
+        if not parent then
+            return nil, "bone names chunk is cut short"
+        end
+        position = position + OBB_SIZE
+        name = name:lower()
+        bones.names[bone_id] = name
+        bones.ids[name] = bone_id
+        bones.parents[bone_id] = parent:lower()
+    end
+    if position ~= limit then
+        return nil, "bone names chunk size mismatch"
+    end
+    return bones
+end
+
+local function read_binds(data, chunk, count)
+    local limit = chunk.body + chunk.size
+    local position = chunk.body
+    local binds = {}
+    for bone_id = 0, count - 1 do
+        if position + 4 > limit then
+            return nil, "IKDATA chunk is cut short"
+        end
+        local version = read_u32(data, position)
+        position = position + 4
+        local material
+        material, position = read_stringz(data, position, limit)
+        if not material then
+            return nil, "IKDATA chunk is cut short"
+        end
+        position = position + SHAPE_SIZE + IK_LIMITS_SIZE
+        if version > 0 then
+            position = position + 4
+        end
+        if position + IK_POSE_SIZE + IK_TAIL_SIZE > limit then
+            return nil, "IKDATA chunk is cut short"
+        end
+        binds[bone_id] = { rot = read_vec(data, position), pos = read_vec(data, position + 12) }
+        position = position + IK_POSE_SIZE + IK_TAIL_SIZE
+    end
+    if position ~= limit then
+        return nil, "IKDATA size mismatch"
+    end
+    return binds
+end
+
+local function read_vertex_block(data, chunk)
+    if chunk.compressed then
+        return nil, "vertex chunk is compressed"
+    end
+    if chunk.size < VERTEX_HEADER_SIZE then
+        return nil, "vertex chunk too small"
+    end
+    local format = read_u32(data, chunk.body)
+    local count = read_u32(data, chunk.body + 4)
+    local links = LINKS_BY_FORMAT[format]
+    if not links then
+        return nil, string.format("unknown vertex format %d", format)
+    end
+    local stride = STRIDE_BY_LINKS[links]
+    if VERTEX_HEADER_SIZE + count * stride ~= chunk.size then
+        return nil, "vertex chunk size mismatch"
+    end
+    return { body = chunk.body, count = count, links = links, stride = stride }
+end
+
+local function read_child(data, chunk, ordinal)
+    if chunk.compressed then
+        return nil, string.format("child %d is compressed", ordinal)
+    end
+    local sub_chunks, sub_error = get_chunks(data, chunk.body, chunk.body + chunk.size)
+    if not sub_chunks then
+        return nil, sub_error
+    end
+    local child = { texture = "", shader = "" }
+    local texture_chunk = find_chunk(sub_chunks, CHUNK_TEXTURE)
+    if texture_chunk then
+        local limit = texture_chunk.body + texture_chunk.size
+        local texture, after_texture = read_stringz(data, texture_chunk.body, limit)
+        local shader = texture and read_stringz(data, after_texture, limit)
+        if not (texture and shader) then
+            return nil, string.format("child %d texture chunk is cut short", ordinal)
+        end
+        child.texture = texture
+        child.shader = shader
+    end
+    local vertex_chunk = find_chunk(sub_chunks, CHUNK_VERTICES)
+    if vertex_chunk then
+        local vertices, vertices_error = read_vertex_block(data, vertex_chunk)
+        if not vertices then
+            return nil, string.format("child %d: %s", ordinal, vertices_error)
+        end
+        child.vertices = vertices
+    end
+    return child
+end
+
+function parse(data)
+    if type(data) ~= "string" then
+        return nil, "not a string"
+    end
+    local top_chunks, top_error = get_chunks(data, 1, #data + 1)
+    if not top_chunks then
+        return nil, top_error
+    end
+    local names_chunk, names_error = find_plain_chunk(top_chunks, CHUNK_BONE_NAMES, "bone names")
+    if not names_chunk then
+        return nil, names_error
+    end
+    local bones, bones_error = read_bones(data, names_chunk)
+    if not bones then
+        return nil, bones_error
+    end
+    local ik_chunk, ik_error = find_plain_chunk(top_chunks, CHUNK_IKDATA, "IKDATA")
+    if not ik_chunk then
+        return nil, ik_error
+    end
+    local binds, binds_error = read_binds(data, ik_chunk, bones.count)
+    if not binds then
+        return nil, binds_error
+    end
+    local children_chunk, children_error = find_plain_chunk(top_chunks, CHUNK_CHILDREN, "children")
+    if not children_chunk then
+        return nil, children_error
+    end
+    local child_chunks, child_chunks_error =
+        get_chunks(data, children_chunk.body, children_chunk.body + children_chunk.size)
+    if not child_chunks then
+        return nil, child_chunks_error
+    end
+    local children = {}
+    for ordinal, child_chunk in ipairs(child_chunks) do
+        local child, child_error = read_child(data, child_chunk, ordinal)
+        if not child then
+            return nil, child_error
+        end
+        children[ordinal] = child
+    end
+    return {
+        data = data,
+        bone_count = bones.count,
+        bone_names = bones.names,
+        bone_ids = bones.ids,
+        bone_parents = bones.parents,
+        binds = binds,
+        children = children,
+    }
+end
+
+function read_slots_into(mesh, vertices, index, bones, weights)
+    local data = mesh.data
+    local links = vertices.links
+    local offset = vertices.body + VERTEX_HEADER_SIZE + (index - 1) * vertices.stride
+    if links == 1 then
+        bones[1], weights[1] = read_u32(data, offset + SINGLE_BONE_OFFSET), 1
+        return 1
+    end
+    local weight_at = offset + WEIGHT_OFFSET_BY_LINKS[links]
+    if links == 2 then
+        local low1, high1, low2, high2 = byte(data, offset, offset + 3)
+        bones[1], bones[2] = low1 + high1 * 256, low2 + high2 * 256
+        local second = decode_f32(byte(data, weight_at, weight_at + 3)) or 0
+        weights[1], weights[2] = 1 - second, second
+        return 2
+    end
+    if links == 3 then
+        local low1, high1, low2, high2, low3, high3 = byte(data, offset, offset + 5)
+        bones[1], bones[2], bones[3] = low1 + high1 * 256, low2 + high2 * 256, low3 + high3 * 256
+        local a1, a2, a3, a4, b1, b2, b3, b4 = byte(data, weight_at, weight_at + 7)
+        local first, second = decode_f32(a1, a2, a3, a4) or 0, decode_f32(b1, b2, b3, b4) or 0
+        weights[1], weights[2], weights[3] = first, second, 1 - (first + second)
+        return 3
+    end
+    local low1, high1, low2, high2, low3, high3, low4, high4 = byte(data, offset, offset + 7)
+    bones[1], bones[2], bones[3], bones[4] =
+        low1 + high1 * 256, low2 + high2 * 256, low3 + high3 * 256, low4 + high4 * 256
+    local a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4 = byte(data, weight_at, weight_at + 11)
+    local first, second, third =
+        decode_f32(a1, a2, a3, a4) or 0, decode_f32(b1, b2, b3, b4) or 0, decode_f32(c1, c2, c3, c4) or 0
+    weights[1], weights[2], weights[3], weights[4] = first, second, third, 1 - (first + second + third)
+    return 4
+end
+
+function new_skin(vertices, index, bones, weights)
+    local links = vertices.links
+    local offset = get_record_offset(vertices, index)
+    if links == 1 then
+        return { bones[1], weights[1], offset = offset, links = links }
+    end
+    if links == 2 then
+        return { bones[1], bones[2], weights[1], weights[2], offset = offset, links = links }
+    end
+    if links == 3 then
+        return { bones[1], bones[2], bones[3], weights[1], weights[2], weights[3], offset = offset, links = links }
+    end
+    return {
+        bones[1],
+        bones[2],
+        bones[3],
+        bones[4],
+        weights[1],
+        weights[2],
+        weights[3],
+        weights[4],
+        offset = offset,
+        links = links,
+    }
+end
+
+function read_vertex(mesh, vertices, index)
+    if index < 1 or index > vertices.count then
+        return nil, "vertex index out of range"
+    end
+    local data = mesh.data
+    local links = vertices.links
+    local offset = get_record_offset(vertices, index)
+    local position_at = offset + POSITION_SHIFT_BY_LINKS[links]
+    local bones, weights = {}, {}
+    read_slots_into(mesh, vertices, index, bones, weights)
+    return {
+        offset = offset,
+        links = links,
+        position = read_vec(data, position_at),
+        normal = read_vec(data, position_at + NORMAL_SHIFT),
+        bones = bones,
+        weights = weights,
+    }
+end
+
+function get_record_offset(vertices, index)
+    return vertices.body + VERTEX_HEADER_SIZE + (index - 1) * vertices.stride
+end
+
+function read_normal_frame(mesh, vertices, index)
+    local normal_at = vertices.body
+        + VERTEX_HEADER_SIZE
+        + (index - 1) * vertices.stride
+        + POSITION_SHIFT_BY_LINKS[vertices.links]
+        + NORMAL_SHIFT
+    local a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4, d1, d2, d3, d4, e1, e2, e3, e4, f1, f2, f3, f4, g1, g2, g3, g4, h1, h2, h3, h4, i1, i2, i3, i4 =
+        byte(mesh.data, normal_at, normal_at + 35)
+    return decode_f32(a1, a2, a3, a4),
+        decode_f32(b1, b2, b3, b4),
+        decode_f32(c1, c2, c3, c4),
+        decode_f32(d1, d2, d3, d4),
+        decode_f32(e1, e2, e3, e4),
+        decode_f32(f1, f2, f3, f4),
+        decode_f32(g1, g2, g3, g4),
+        decode_f32(h1, h2, h3, h4),
+        decode_f32(i1, i2, i3, i4)
+end
+
+function read_normal(mesh, vertices, index)
+    local normal_at = vertices.body
+        + VERTEX_HEADER_SIZE
+        + (index - 1) * vertices.stride
+        + POSITION_SHIFT_BY_LINKS[vertices.links]
+        + NORMAL_SHIFT
+    local a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4 = byte(mesh.data, normal_at, normal_at + 11)
+    return decode_f32(a1, a2, a3, a4), decode_f32(b1, b2, b3, b4), decode_f32(c1, c2, c3, c4)
+end
+
+function read_position(mesh, vertices, index)
+    local data = mesh.data
+    local position_at = vertices.body
+        + VERTEX_HEADER_SIZE
+        + (index - 1) * vertices.stride
+        + POSITION_SHIFT_BY_LINKS[vertices.links]
+    local a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4 = byte(data, position_at, position_at + 11)
+    return decode_f32(a1, a2, a3, a4) or 0, decode_f32(b1, b2, b3, b4) or 0, decode_f32(c1, c2, c3, c4) or 0
+end
+
+function read_positions(mesh, vertices)
+    local positions = vertices.positions
+    if positions then
+        return positions
+    end
+    local xs, ys, zs = {}, {}, {}
+    local data = mesh.data
+    local position_at = vertices.body + VERTEX_HEADER_SIZE + POSITION_SHIFT_BY_LINKS[vertices.links]
+    local stride = vertices.stride
+    local check_stride = wd_build_slice.STRIDE
+    local even_scale, even_bias, odd_scale = EVEN_SCALE, EVEN_BIAS, ODD_SCALE
+    for index = 1, vertices.count do
+        if index % check_stride == 0 then
+            wd_build_slice.check()
+        end
+        local a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4 = byte(data, position_at, position_at + 11)
+        local coord_x, coord_y, coord_z
+        if a3 >= 128 then
+            coord_x = odd_scale[a4] * (a3 * 65536 + a2 * 256 + a1)
+        else
+            coord_x = even_scale[a4] * (even_bias[a4] + a3 * 65536 + a2 * 256 + a1)
+        end
+        if b3 >= 128 then
+            coord_y = odd_scale[b4] * (b3 * 65536 + b2 * 256 + b1)
+        else
+            coord_y = even_scale[b4] * (even_bias[b4] + b3 * 65536 + b2 * 256 + b1)
+        end
+        if c3 >= 128 then
+            coord_z = odd_scale[c4] * (c3 * 65536 + c2 * 256 + c1)
+        else
+            coord_z = even_scale[c4] * (even_bias[c4] + c3 * 65536 + c2 * 256 + c1)
+        end
+        xs[index], ys[index], zs[index] = coord_x, coord_y, coord_z
+        position_at = position_at + stride
+    end
+    positions = { x = xs, y = ys, z = zs }
+    vertices.positions = positions
+    return positions
+end
+
+local function get_index_header(vertices)
+    return vertices.body + VERTEX_HEADER_SIZE + vertices.count * vertices.stride
+end
+
+local function load_indices(mesh, vertices)
+    local data = mesh.data
+    local header = get_index_header(vertices)
+    local body = header + CHUNK_HEADER_SIZE
+    if body + INDEX_COUNT_SIZE > #data + 1 or read_u32(data, header) ~= CHUNK_INDICES then
+        return nil
+    end
+    local count = read_u32(data, body)
+    if INDEX_COUNT_SIZE + count * INDEX_SIZE ~= read_u32(data, header + 4) then
+        return nil
+    end
+    local first = body + INDEX_COUNT_SIZE
+    local indices = {}
+    local stride = wd_build_slice.STRIDE * 4
+    local slot = 1
+    while slot + 7 <= count do
+        if slot % stride < 8 then
+            wd_build_slice.check()
+        end
+        local at = first + (slot - 1) * INDEX_SIZE
+        local a1, a2, b1, b2, c1, c2, d1, d2, e1, e2, f1, f2, g1, g2, h1, h2 = byte(data, at, at + 15)
+        indices[slot], indices[slot + 1], indices[slot + 2], indices[slot + 3] =
+            a1 + a2 * 256, b1 + b2 * 256, c1 + c2 * 256, d1 + d2 * 256
+        indices[slot + 4], indices[slot + 5], indices[slot + 6], indices[slot + 7] =
+            e1 + e2 * 256, f1 + f2 * 256, g1 + g2 * 256, h1 + h2 * 256
+        slot = slot + 8
+    end
+    for tail = slot, count do
+        indices[tail] = read_u16(data, first + (tail - 1) * INDEX_SIZE)
+    end
+    return indices
+end
+
+function read_indices(mesh, vertices)
+    local indices = vertices.indices
+    if indices == nil then
+        indices = load_indices(mesh, vertices) or false
+        vertices.indices = indices
+    end
+    return indices or nil
+end
+
+function get_bind_frame(mesh, bone_name)
+    local bone_id = mesh.bone_ids[bone_name]
+    if not bone_id then
+        return nil
+    end
+    local chain = {}
+    local cursor = bone_id
+    while cursor and #chain < mesh.bone_count do
+        chain[#chain + 1] = cursor
+        cursor = mesh.bone_ids[mesh.bone_parents[cursor]]
+    end
+    if cursor then
+        return nil
+    end
+    local frame
+    for step = #chain, 1, -1 do
+        local bind = mesh.binds[chain[step]]
+        local local_frame = wd_frame.new_xyzi_frame(bind.rot.x, bind.rot.y, bind.rot.z)
+        local_frame.c = wd_frame.new_vec(bind.pos.x, bind.pos.y, bind.pos.z)
+        frame = frame and wd_frame.compose_frames(frame, local_frame) or local_frame
+    end
+    return frame
+end
+
+local function write_weights(edits, record, bones, weights)
+    local links = record.links
+    if type(bones) ~= "table" or type(weights) ~= "table" or #bones ~= links or #weights ~= links then
+        return false, string.format("expected %d bones and weights", links)
+    end
+    local bone_limit = links == 1 and MAX_BONE_ID_SINGLE or MAX_BONE_ID_MULTI
+    for slot = 1, links do
+        local bone, weight = bones[slot], weights[slot]
+        if not (type(bone) == "number" and bone >= 0 and bone <= bone_limit and bone % 1 == 0) then
+            return false, string.format("bone %s is not an id", tostring(bone))
+        end
+        if not (type(weight) == "number" and weight - weight == 0) then
+            return false, string.format("weight %s is not finite", tostring(weight))
+        end
+    end
+    local offset = record.offset
+    if links == 1 then
+        edits[offset + SINGLE_BONE_OFFSET] = encode_u32(bones[1])
+        return true
+    end
+    local weight_at = offset + WEIGHT_OFFSET_BY_LINKS[links]
+    local first, second = bones[1], bones[2]
+    local first_low, second_low = first % 256, second % 256
+    if links == 2 then
+        edits[offset] = char(first_low, (first - first_low) / 256, second_low, (second - second_low) / 256)
+        edits[weight_at] = char(get_f32_bytes(weights[2]))
+        return true
+    end
+    local third = bones[3]
+    local third_low = third % 256
+    local a1, a2, a3, a4 = get_f32_bytes(weights[1])
+    local b1, b2, b3, b4 = get_f32_bytes(weights[2])
+    if links == 3 then
+        edits[offset] = char(
+            first_low,
+            (first - first_low) / 256,
+            second_low,
+            (second - second_low) / 256,
+            third_low,
+            (third - third_low) / 256
+        )
+        edits[weight_at] = char(a1, a2, a3, a4, b1, b2, b3, b4)
+        return true
+    end
+    local fourth = bones[4]
+    local fourth_low = fourth % 256
+    edits[offset] = char(
+        first_low,
+        (first - first_low) / 256,
+        second_low,
+        (second - second_low) / 256,
+        third_low,
+        (third - third_low) / 256,
+        fourth_low,
+        (fourth - fourth_low) / 256
+    )
+    edits[weight_at] = char(a1, a2, a3, a4, b1, b2, b3, b4, get_f32_bytes(weights[3]))
+    return true
+end
+
+function new_patch(mesh)
+    local data = mesh.data
+    local edits = {}
+    local patch = {}
+
+    function patch.set_position(record, coord_x, coord_y, coord_z)
+        if
+            not (
+                type(coord_x) == "number"
+                and type(coord_y) == "number"
+                and type(coord_z) == "number"
+                and coord_x - coord_x == 0
+                and coord_y - coord_y == 0
+                and coord_z - coord_z == 0
+            )
+        then
+            return false, "position is not finite"
+        end
+        local position_at = record.offset + POSITION_SHIFT_BY_LINKS[record.links]
+        local a1, a2, a3, a4 = get_f32_bytes(coord_x)
+        local b1, b2, b3, b4 = get_f32_bytes(coord_y)
+        local c1, c2, c3, c4 = get_f32_bytes(coord_z)
+        edits[position_at] = char(a1, a2, a3, a4, b1, b2, b3, b4, c1, c2, c3, c4)
+        return true
+    end
+
+    function patch.set_weights(record, bones, weights)
+        return write_weights(edits, record, bones, weights)
+    end
+
+    function patch.collapse_triangle(vertices, triangle)
+        local indices = read_indices(mesh, vertices)
+        if not (indices and triangle >= 1 and triangle * 3 <= #indices) then
+            return false, "no such triangle"
+        end
+        local corner = indices[triangle * 3 - 2]
+        local low, high = corner % 256, floor(corner / 256)
+        local first = get_index_header(vertices) + CHUNK_HEADER_SIZE + INDEX_COUNT_SIZE
+        edits[first + (triangle - 1) * 3 * INDEX_SIZE] = char(low, high, low, high, low, high)
+        return true
+    end
+
+    function patch.set_normal_frame(vertices, index, nx, ny, nz, tx, ty, tz, bx, by, bz)
+        local limit = NORMAL_FRAME_MAX
+        if
+            not (
+                type(nx) == "number"
+                and type(ny) == "number"
+                and type(nz) == "number"
+                and type(tx) == "number"
+                and type(ty) == "number"
+                and type(tz) == "number"
+                and type(bx) == "number"
+                and type(by) == "number"
+                and type(bz) == "number"
+                and nx <= limit
+                and nx >= -limit
+                and ny <= limit
+                and ny >= -limit
+                and nz <= limit
+                and nz >= -limit
+                and tx <= limit
+                and tx >= -limit
+                and ty <= limit
+                and ty >= -limit
+                and tz <= limit
+                and tz >= -limit
+                and bx <= limit
+                and bx >= -limit
+                and by <= limit
+                and by >= -limit
+                and bz <= limit
+                and bz >= -limit
+            )
+        then
+            return false, "normal frame is not a finite unit basis"
+        end
+        local a1, a2, a3, a4 = get_f32_bytes(nx)
+        local b1, b2, b3, b4 = get_f32_bytes(ny)
+        local c1, c2, c3, c4 = get_f32_bytes(nz)
+        local d1, d2, d3, d4 = get_f32_bytes(tx)
+        local e1, e2, e3, e4 = get_f32_bytes(ty)
+        local f1, f2, f3, f4 = get_f32_bytes(tz)
+        local g1, g2, g3, g4 = get_f32_bytes(bx)
+        local h1, h2, h3, h4 = get_f32_bytes(by)
+        local i1, i2, i3, i4 = get_f32_bytes(bz)
+        local normal_at = vertices.body
+            + VERTEX_HEADER_SIZE
+            + (index - 1) * vertices.stride
+            + POSITION_SHIFT_BY_LINKS[vertices.links]
+            + NORMAL_SHIFT
+        edits[normal_at] = char(
+            a1,
+            a2,
+            a3,
+            a4,
+            b1,
+            b2,
+            b3,
+            b4,
+            c1,
+            c2,
+            c3,
+            c4,
+            d1,
+            d2,
+            d3,
+            d4,
+            e1,
+            e2,
+            e3,
+            e4,
+            f1,
+            f2,
+            f3,
+            f4,
+            g1,
+            g2,
+            g3,
+            g4,
+            h1,
+            h2,
+            h3,
+            h4,
+            i1,
+            i2,
+            i3,
+            i4
+        )
+        return true
+    end
+
+    function patch.build()
+        local positions = {}
+        for position in pairs(edits) do
+            positions[#positions + 1] = position
+        end
+        table.sort(positions)
+        local pieces = {}
+        local cursor = 1
+        local stride = wd_build_slice.STRIDE
+        local djb2, sdbm = 5381, 0
+        local modulus = 4294967296
+        for slot, position in ipairs(positions) do
+            if slot % stride == 0 then
+                wd_build_slice.check()
+            end
+            local bytes = edits[position]
+            local length = #bytes
+            pieces[slot * 2 - 1] = data:sub(cursor, position - 1)
+            pieces[slot * 2] = bytes
+            local v1, v2, v3, v4 =
+                position % 256, floor(position / 256) % 256, floor(position / 65536) % 256, floor(position / 16777216)
+            local v5, v6 = length % 256, floor(length / 256)
+            djb2 = (((djb2 * 33 + v1) * 33 + v2) * 33 + v3) * 33 + v4
+            djb2 = ((djb2 % modulus * 33 + v5) * 33 + v6) % modulus
+            sdbm = (sdbm * 65599 + v1) % modulus
+            sdbm = (sdbm * 65599 + v2) % modulus
+            sdbm = (sdbm * 65599 + v3) % modulus
+            sdbm = (sdbm * 65599 + v4) % modulus
+            sdbm = (sdbm * 65599 + v5) % modulus
+            sdbm = (sdbm * 65599 + v6) % modulus
+            local index = 1
+            while index + 3 <= length do
+                local b1, b2, b3, b4 = byte(bytes, index, index + 3)
+                djb2 = ((((djb2 * 33 + b1) * 33 + b2) * 33 + b3) * 33 + b4) % modulus
+                sdbm = (sdbm * 65599 + b1) % modulus
+                sdbm = (sdbm * 65599 + b2) % modulus
+                sdbm = (sdbm * 65599 + b3) % modulus
+                sdbm = (sdbm * 65599 + b4) % modulus
+                index = index + 4
+            end
+            for tail = index, length do
+                local value = byte(bytes, tail)
+                djb2 = (djb2 * 33 + value) % modulus
+                sdbm = (sdbm * 65599 + value) % modulus
+            end
+            cursor = position + length
+        end
+        pieces[#pieces + 1] = data:sub(cursor)
+        return table.concat(pieces), string.format("%08x%08x", djb2, sdbm)
+    end
+
+    return patch
+end
+
+function get_content_hash(data)
+    local djb2, sdbm = 5381, 0
+    local length = #data
+    for block = 1, length, HASH_BLOCK do
+        for index = block, math.min(block + HASH_BLOCK - 1, length) do
+            local value = byte(data, index)
+            djb2 = (djb2 * 33 + value) % 4294967296
+            sdbm = (sdbm * 65599 + value) % 4294967296
+        end
+        wd_build_slice.check()
+    end
+    return string.format("%08x%08x", djb2, sdbm)
+end

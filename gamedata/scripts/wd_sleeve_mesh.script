@@ -1,0 +1,983 @@
+jit.off(true, true)
+
+RAMP = 0.006
+RAMP_MIN = 0.002
+OUTER_LAYER = 0.001
+LAYER_TOUCH = 0.00025
+FLOOR_LAYER_SHARE = 0.25
+INNER_GAP = 0.0005
+SECTORS = 64
+Z_BIN = 0.004
+ARM_WEIGHT_MIN = 0.2
+FINGER_WEIGHT_MAX = 0.5
+LEFT_WEIGHT_MIN = 0.5
+RADIUS_MAX = 0.12
+RIGID_RAMP = 0.07
+HAND_RAMP = 0.006
+MOVE_MIN = 1e-6
+RAY_EPSILON = 1e-12
+BARY_SLACK = 1e-9
+FACE_SLACK = 0.25
+
+local CENTER_STEPS_MAX = 10
+local CENTER_STEP_MIN = 0.0001
+local TWIST_BONE = "l_forearm_twist"
+FOREARM_BONE = "l_forearm"
+local HAND_BONE = "l_hand"
+local FINGER_MARK = "finger"
+local LEFT_PREFIXES = { "l_", "bip01_l_" }
+local SINGLE_LINK_SWITCH = 0.5
+
+local atan2 = math.atan2
+local floor = math.floor
+local sqrt = math.sqrt
+local max = math.max
+local min = math.min
+local pi = math.pi
+local full_turn = 2 * pi
+local get_unit_smoothstep = wd_frame.get_smoothstep
+local read_slots_into = wd_ogf.read_slots_into
+local read_positions = wd_ogf.read_positions
+local read_indices = wd_ogf.read_indices
+local get_record_offset = wd_ogf.get_record_offset
+
+local function new_sectors(count)
+    local sectors = { count = count, width = full_turn / count, cos = {}, sin = {} }
+    for sector = 1, count do
+        local angle = -pi + (sector - 0.5) * sectors.width
+        sectors.cos[sector] = math.cos(angle)
+        sectors.sin[sector] = math.sin(angle)
+    end
+    return sectors
+end
+
+local OUTER_SECTORS = new_sectors(SECTORS)
+local INNER_SECTORS = new_sectors(16)
+local INNER_SECTORS_MIN = 10
+local SECTOR_WIDTH = OUTER_SECTORS.width
+
+function get_clamped(value, low, high)
+    return min(max(value, low), high)
+end
+
+function get_smoothstep(edge0, edge1, value)
+    return get_unit_smoothstep((value - edge0) / (edge1 - edge0))
+end
+
+local function scale_xyz(vec, factor)
+    return wd_frame.new_vec(vec.x * factor, vec.y * factor, vec.z * factor)
+end
+
+local function new_scaled_frame(frame, axis_factor, origin_factor)
+    return {
+        i = scale_xyz(frame.i, axis_factor),
+        j = scale_xyz(frame.j, axis_factor),
+        k = scale_xyz(frame.k, axis_factor),
+        c = scale_xyz(frame.c, origin_factor),
+    }
+end
+
+local transform_xyz = wd_frame.transform_xyz
+local fill_circular = wd_polar_grid.fill_circular
+
+local function is_left_bone(name)
+    for _, prefix in ipairs(LEFT_PREFIXES) do
+        if name:sub(1, #prefix) == prefix then
+            return true
+        end
+    end
+    return false
+end
+
+function get_bone_roles(mesh)
+    local twist = mesh.bone_ids[TWIST_BONE]
+    if not twist then
+        return nil, "no " .. TWIST_BONE .. " bone"
+    end
+    local fingers, left = {}, {}
+    for bone_id = 0, mesh.bone_count - 1 do
+        local name = mesh.bone_names[bone_id]
+        left[bone_id] = is_left_bone(name)
+        fingers[bone_id] = left[bone_id] and name:find(FINGER_MARK, 1, true) ~= nil
+    end
+    return {
+        twist = twist,
+        forearm = mesh.bone_ids[FOREARM_BONE],
+        hand = mesh.bone_ids[HAND_BONE],
+        fingers = fingers,
+        left = left,
+    }
+end
+
+function get_slot_weights(roles, links, bones, weights)
+    local arm, finger, left = 0, 0, 0
+    for slot = 1, links do
+        local bone, weight = bones[slot], weights[slot]
+        if bone == roles.twist or bone == roles.forearm then
+            arm = arm + weight
+        elseif roles.fingers[bone] then
+            finger = finger + weight
+        end
+        if roles.left[bone] then
+            left = left + weight
+        end
+    end
+    return arm, finger, left
+end
+
+local scratch_bones, scratch_weights = {}, {}
+
+function collect_sleeve(mesh, roles, to_sleeve, floor_z, ceiling_z, cover_z, keeps_surface, finger_max)
+    local verts, layers, surface_layers = {}, {}, {}
+    finger_max = finger_max or FINGER_WEIGHT_MAX
+    local radius_limit = RADIUS_MAX * RADIUS_MAX
+    local arm_min, left_min = ARM_WEIGHT_MIN, LEFT_WEIGHT_MIN
+    local stride = wd_build_slice.STRIDE
+    local check = wd_build_slice.check
+    local axis_i, axis_j, axis_k, origin = to_sleeve.i, to_sleeve.j, to_sleeve.k, to_sleeve.c
+    local i_x, i_y, i_z = axis_i.x, axis_i.y, axis_i.z
+    local j_x, j_y, j_z = axis_j.x, axis_j.y, axis_j.z
+    local k_x, k_y, k_z = axis_k.x, axis_k.y, axis_k.z
+    local origin_x, origin_y, origin_z = origin.x, origin.y, origin.z
+    local twist, forearm, fingers, lefts = roles.twist, roles.forearm, roles.fingers, roles.left
+    local bones, weights = scratch_bones, scratch_weights
+    local vert_count = 0
+    for _, child in ipairs(mesh.children) do
+        local vertices = child.vertices
+        if vertices then
+            local points, point_list, surface_points = {}, {}, {}
+            local listed = 0
+            local layer = #layers + 1
+            local positions = read_positions(mesh, vertices)
+            local xs, ys, zs = positions.x, positions.y, positions.z
+            for index = 1, vertices.count do
+                if index % stride == 0 then
+                    check()
+                end
+                local source_x, source_y, source_z = xs[index], ys[index], zs[index]
+                local coord_z = source_x * i_z + source_y * j_z + source_z * k_z + origin_z
+                local is_covered = coord_z >= floor_z and coord_z <= cover_z
+                local is_spanned = coord_z >= floor_z and coord_z <= ceiling_z
+                if is_covered or is_spanned or keeps_surface then
+                    local coord_x = source_x * i_x + source_y * j_x + source_z * k_x + origin_x
+                    local coord_y = source_x * i_y + source_y * j_y + source_z * k_y + origin_y
+                    if coord_x * coord_x + coord_y * coord_y < radius_limit then
+                        local links = read_slots_into(mesh, vertices, index, bones, weights)
+                        local arm, finger, left = 0, 0, 0
+                        for slot = 1, links do
+                            local bone, weight = bones[slot], weights[slot]
+                            if bone == twist or bone == forearm then
+                                arm = arm + weight
+                            elseif fingers[bone] then
+                                finger = finger + weight
+                            end
+                            if lefts[bone] then
+                                left = left + weight
+                            end
+                        end
+                        local is_left = left >= left_min
+                        local is_vert = is_spanned and (arm >= arm_min or is_left) and finger < finger_max
+                        if is_vert or is_left then
+                            local point = { x = coord_x, y = coord_y, z = coord_z, layer = layer }
+                            if is_vert then
+                                point.record = wd_ogf.new_skin(vertices, index, bones, weights)
+                                point.arm, point.finger = arm, finger
+                                vert_count = vert_count + 1
+                                verts[vert_count] = point
+                            elseif is_covered then
+                                point.layer_record =
+                                    { offset = get_record_offset(vertices, index), links = vertices.links }
+                            end
+                            if is_left then
+                                if keeps_surface then
+                                    surface_points[index] = point
+                                end
+                                if is_covered then
+                                    points[index] = point
+                                    listed = listed + 1
+                                    point_list[listed] = point
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            local source = { vertices = vertices }
+            layers[#layers + 1] = { source = source, points = points, point_list = point_list }
+            surface_layers[#surface_layers + 1] = { source = source, points = surface_points }
+        end
+    end
+    return verts, layers, surface_layers
+end
+
+function get_sector(angle)
+    return floor((angle + pi) / SECTOR_WIDTH) % SECTORS + 1
+end
+
+local function get_sector_radii(points, center_x, center_y, sectors, keeps_least)
+    local width, count = sectors.width, sectors.count
+    local squares = {}
+    if keeps_least then
+        for index = 1, #points do
+            local point = points[index]
+            local dx, dy = point.x - center_x, point.y - center_y
+            local turn = (atan2(dy, dx) + pi) / width
+            local sector = (turn - turn % 1) % count + 1
+            local square = dx * dx + dy * dy
+            local known = squares[sector]
+            if not known or square < known then
+                squares[sector] = square
+            end
+        end
+    else
+        for index = 1, #points do
+            local point = points[index]
+            local dx, dy = point.x - center_x, point.y - center_y
+            local turn = (atan2(dy, dx) + pi) / width
+            local sector = (turn - turn % 1) % count + 1
+            local square = dx * dx + dy * dy
+            local known = squares[sector]
+            if not known or square > known then
+                squares[sector] = square
+            end
+        end
+    end
+    for sector, square in pairs(squares) do
+        squares[sector] = sqrt(square)
+    end
+    return squares
+end
+
+function get_outer_ring(points, center_x, center_y)
+    local ring = get_sector_radii(points, center_x, center_y, OUTER_SECTORS, false)
+    return fill_circular(ring, 0, SECTORS) and ring or nil
+end
+
+local function get_inner_ring(points, center_x, center_y)
+    local ring = get_sector_radii(points, center_x, center_y, INNER_SECTORS, true)
+    local filled = 0
+    for sector = 1, INNER_SECTORS.count do
+        if ring[sector] then
+            filled = filled + 1
+        end
+    end
+    if filled < INNER_SECTORS_MIN then
+        return nil
+    end
+    fill_circular(ring, 0, INNER_SECTORS.count)
+    return ring
+end
+
+local function fit_center(points, sectors, get_sector_ring, center_x, center_y)
+    local count, sector_cos, sector_sin = sectors.count, sectors.cos, sectors.sin
+    for step = 1, CENTER_STEPS_MAX do
+        local ring = get_sector_ring(points, center_x, center_y)
+        if not ring then
+            if step == 1 then
+                return nil
+            end
+            break
+        end
+        local step_x, step_y = 0, 0
+        for sector = 1, count do
+            local radius = ring[sector]
+            step_x = step_x + radius * sector_cos[sector]
+            step_y = step_y + radius * sector_sin[sector]
+        end
+        step_x, step_y = step_x / count, step_y / count
+        center_x, center_y = center_x + step_x, center_y + step_y
+        if step_x * step_x + step_y * step_y < CENTER_STEP_MIN * CENTER_STEP_MIN then
+            break
+        end
+    end
+    return center_x, center_y
+end
+
+function fit_outer_center(points)
+    return fit_center(points, OUTER_SECTORS, get_outer_ring, 0, 0)
+end
+
+function fit_inner_center(points)
+    if #points == 0 then
+        return nil
+    end
+    local center_x, center_y = 0, 0
+    for _, point in ipairs(points) do
+        center_x, center_y = center_x + point.x, center_y + point.y
+    end
+    return fit_center(points, INNER_SECTORS, get_inner_ring, center_x / #points, center_y / #points)
+end
+
+local Z_SLACK = 1e-6
+local ANGLE_SLACK = 1e-6
+
+local function new_triangles()
+    return {
+        count = 0,
+        ax = {},
+        ay = {},
+        az = {},
+        bx = {},
+        by = {},
+        bz = {},
+        cx = {},
+        cy = {},
+        cz = {},
+        reach = {},
+        z_min = {},
+        z_max = {},
+        angle_lo = {},
+        angle_span = {},
+        layer = {},
+        first = {},
+        second = {},
+        third = {},
+    }
+end
+
+function new_cover(center_x, center_y, lo, row_count)
+    local cover = new_triangles()
+    cover.center_x, cover.center_y = center_x, center_y
+    cover.lo, cover.row_count = lo, row_count
+    cover.cells = {}
+    return cover
+end
+
+function get_cover_row(cover, coord_z)
+    return floor((coord_z - cover.lo) / Z_BIN)
+end
+
+function get_relative_angle(angle, reference)
+    return (angle - reference + pi) % full_turn - pi
+end
+
+function get_angle_span(ax, ay, bx, by, cx, cy)
+    local reference = atan2(ay, ax)
+    local second_angle = get_relative_angle(atan2(by, bx), reference)
+    local third_angle = get_relative_angle(atan2(cy, cx), reference)
+    local low, high = min(0, second_angle, third_angle), max(0, second_angle, third_angle)
+    if high - low >= pi then
+        return nil
+    end
+    return reference + low, reference + high
+end
+
+local function set_layer_span(cover, vert)
+    local dx, dy = vert.x - cover.center_x, vert.y - cover.center_y
+    local radius = sqrt(dx * dx + dy * dy)
+    local coord_z = vert.z
+    local row = get_cover_row(cover, coord_z)
+    local angle = radius > 0 and atan2(dy, dx)
+    local cell = radius > 0 and cover.cells[row * SECTORS + get_sector(angle) - 1]
+    if not cell then
+        return
+    end
+    local angle_lo, angle_span = cover.angle_lo, cover.angle_span
+    local z_min, z_max, layers, reach = cover.z_min, cover.z_max, cover.layer, cover.reach
+    local axs, ays, azs = cover.ax, cover.ay, cover.az
+    local bxs, bys, bzs = cover.bx, cover.by, cover.bz
+    local cxs, cys, czs = cover.cx, cover.cy, cover.cz
+    local ray_epsilon, bary_min, bary_max = RAY_EPSILON, -BARY_SLACK, 1 + BARY_SLACK
+    local layer = vert.layer
+    local dir_x, dir_y = dx / radius, dy / radius
+    local firsts, seconds, thirds = cover.first, cover.second, cover.third
+    local top, has_floor = radius + OUTER_LAYER, vert.record ~= nil
+    local floor_limit = radius - LAYER_TOUCH
+    local floor_hit, self_hit = nil, nil
+    local is_under = vert.under
+    for slot = 1, #cell do
+        local triangle = cell[slot]
+        if
+            coord_z >= z_min[triangle]
+            and coord_z <= z_max[triangle]
+            and (angle - angle_lo[triangle]) % full_turn <= angle_span[triangle]
+        then
+            local is_above = reach[triangle] > top
+            local is_same = layers[triangle] == layer
+            local is_cast
+            if is_same then
+                is_cast = is_above
+                    and firsts[triangle] ~= vert
+                    and seconds[triangle] ~= vert
+                    and thirds[triangle] ~= vert
+            else
+                is_cast = not is_under and (is_above or has_floor)
+            end
+            if is_cast then
+                local ax, ay, az = axs[triangle], ays[triangle], azs[triangle]
+                local edge1_x, edge1_y, edge1_z = bxs[triangle] - ax, bys[triangle] - ay, bzs[triangle] - az
+                local edge2_x, edge2_y, edge2_z = cxs[triangle] - ax, cys[triangle] - ay, czs[triangle] - az
+                local p_x, p_y, p_z = dir_y * edge2_z, -dir_x * edge2_z, dir_x * edge2_y - dir_y * edge2_x
+                local det = edge1_x * p_x + edge1_y * p_y + edge1_z * p_z
+                local distance = nil
+                if not (det > -ray_epsilon and det < ray_epsilon) then
+                    local inverse = 1 / det
+                    local t_x, t_y, t_z = -ax, -ay, coord_z - az
+                    local bary_u = (t_x * p_x + t_y * p_y + t_z * p_z) * inverse
+                    if not (bary_u < bary_min or bary_u > bary_max) then
+                        local q_x = t_y * edge1_z - t_z * edge1_y
+                        local q_y = t_z * edge1_x - t_x * edge1_z
+                        local q_z = t_x * edge1_y - t_y * edge1_x
+                        local bary_v = (dir_x * q_x + dir_y * q_y) * inverse
+                        if not (bary_v < bary_min or bary_u + bary_v > bary_max) then
+                            distance = (edge2_x * q_x + edge2_y * q_y + edge2_z * q_z) * inverse
+                        end
+                    end
+                end
+                if distance then
+                    if is_same then
+                        if distance > top and (not self_hit or distance < self_hit) then
+                            self_hit = distance
+                            vert.self_cover_face = triangle
+                        end
+                    elseif distance > top then
+                        is_under = true
+                        vert.under = true
+                        vert.cover_face = triangle
+                    elseif has_floor and distance < floor_limit and (not floor_hit or distance > floor_hit) then
+                        floor_hit = distance
+                    end
+                end
+            end
+        end
+    end
+    vert.floor = not is_under and floor_hit and radius - floor_hit or nil
+end
+
+function set_layer_spans(cover, layers)
+    local stride = wd_build_slice.STRIDE
+    local floor_layers, visited = {}, 0
+    for slot, layer in ipairs(layers) do
+        local point_list, under = layer.point_list, 0
+        for _, point in ipairs(point_list) do
+            visited = visited + 1
+            if visited % stride == 0 then
+                wd_build_slice.check()
+            end
+            set_layer_span(cover, point)
+            if point.under then
+                under = under + 1
+            end
+        end
+        if under > 0 and under >= #point_list * FLOOR_LAYER_SHARE then
+            floor_layers[slot] = true
+        end
+    end
+    return floor_layers
+end
+
+function get_moved_face_hit(cover, triangle, center_x, center_y, coord_z, dir_x, dir_y)
+    local first, second, third = cover.first[triangle], cover.second[triangle], cover.third[triangle]
+    local ax, ay, az = first.x - center_x, first.y - center_y, first.z
+    local edge1_x, edge1_y, edge1_z = second.x - center_x - ax, second.y - center_y - ay, second.z - az
+    local edge2_x, edge2_y, edge2_z = third.x - center_x - ax, third.y - center_y - ay, third.z - az
+    local p_x, p_y, p_z = dir_y * edge2_z, -dir_x * edge2_z, dir_x * edge2_y - dir_y * edge2_x
+    local det = edge1_x * p_x + edge1_y * p_y + edge1_z * p_z
+    if det > -RAY_EPSILON and det < RAY_EPSILON then
+        return nil
+    end
+    local inverse = 1 / det
+    local t_x, t_y, t_z = -ax, -ay, coord_z - az
+    local bary_u = (t_x * p_x + t_y * p_y + t_z * p_z) * inverse
+    local q_x = t_y * edge1_z - t_z * edge1_y
+    local q_y = t_z * edge1_x - t_x * edge1_z
+    local q_z = t_x * edge1_y - t_y * edge1_x
+    local bary_v = (dir_x * q_x + dir_y * q_y) * inverse
+    if bary_u < -FACE_SLACK or bary_v < -FACE_SLACK or bary_u + bary_v > 1 + FACE_SLACK then
+        return nil
+    end
+    return (edge2_x * q_x + edge2_y * q_y + edge2_z * q_z) * inverse,
+        first,
+        second,
+        third,
+        1 - bary_u - bary_v,
+        bary_u,
+        bary_v
+end
+
+function add_faces(cover, faces)
+    local stride = wd_build_slice.STRIDE * 3
+    local check = wd_build_slice.check
+    local lo, row_count, z_bin = cover.lo, cover.row_count, Z_BIN
+    local center_x, center_y = cover.center_x, cover.center_y
+    local cells, row_reach = cover.cells, cover.row_reach
+    local sectors, sector_width = SECTORS, SECTOR_WIDTH
+    local axs, ays, azs = cover.ax, cover.ay, cover.az
+    local bxs, bys, bzs = cover.bx, cover.by, cover.bz
+    local cxs, cys, czs = cover.cx, cover.cy, cover.cz
+    local reaches, z_mins, z_maxs = cover.reach, cover.z_min, cover.z_max
+    local angle_los, angle_spans, layers = cover.angle_lo, cover.angle_span, cover.layer
+    local firsts, seconds, thirds = cover.first, cover.second, cover.third
+    local triangle = cover.count
+    for base = 1, #faces - 2, 3 do
+        if base % stride == 1 then
+            check()
+        end
+        local first, second, third = faces[base], faces[base + 1], faces[base + 2]
+        local first_z, second_z, third_z = first.z, second.z, third.z
+        local z_low, z_high = first_z, first_z
+        if second_z < z_low then
+            z_low = second_z
+        elseif second_z > z_high then
+            z_high = second_z
+        end
+        if third_z < z_low then
+            z_low = third_z
+        elseif third_z > z_high then
+            z_high = third_z
+        end
+        if z_high >= lo and (z_low - lo) / z_bin < row_count then
+            local ax, ay = first.x - center_x, first.y - center_y
+            local bx, by = second.x - center_x, second.y - center_y
+            local cx, cy = third.x - center_x, third.y - center_y
+            local reference = atan2(ay, ax)
+            local second_angle = (atan2(by, bx) - reference + pi) % full_turn - pi
+            local third_angle = (atan2(cy, cx) - reference + pi) % full_turn - pi
+            local low, high = 0, 0
+            if second_angle < low then
+                low = second_angle
+            elseif second_angle > high then
+                high = second_angle
+            end
+            if third_angle < low then
+                low = third_angle
+            elseif third_angle > high then
+                high = third_angle
+            end
+            if high - low < pi then
+                local angle_low, angle_high = reference + low, reference + high
+                triangle = triangle + 1
+                axs[triangle], ays[triangle], azs[triangle] = ax, ay, first_z
+                bxs[triangle], bys[triangle], bzs[triangle] = bx, by, second_z
+                cxs[triangle], cys[triangle], czs[triangle] = cx, cy, third_z
+                local square = ax * ax + ay * ay
+                local other = bx * bx + by * by
+                if other > square then
+                    square = other
+                end
+                other = cx * cx + cy * cy
+                if other > square then
+                    square = other
+                end
+                local reach = sqrt(square)
+                reaches[triangle] = reach
+                z_mins[triangle] = z_low - Z_SLACK
+                z_maxs[triangle] = z_high + Z_SLACK
+                angle_los[triangle] = angle_low - ANGLE_SLACK
+                angle_spans[triangle] = angle_high - angle_low + 2 * ANGLE_SLACK
+                layers[triangle] = first.layer
+                firsts[triangle], seconds[triangle], thirds[triangle] = first, second, third
+                local row_first, row_last = floor((z_low - lo) / z_bin), floor((z_high - lo) / z_bin)
+                if row_first < 0 then
+                    row_first = 0
+                end
+                if row_last > row_count - 1 then
+                    row_last = row_count - 1
+                end
+                local sector_lo = floor((angle_low + pi) / sector_width)
+                local sector_hi = floor((angle_high + pi) / sector_width)
+                for row = row_first, row_last do
+                    if row_reach and reach > (row_reach[row] or 0) then
+                        row_reach[row] = reach
+                    end
+                    local row_base = row * sectors
+                    for step = sector_lo, sector_hi do
+                        local key = row_base + step % sectors
+                        local cell = cells[key]
+                        if cell then
+                            cell[#cell + 1] = triangle
+                        else
+                            cells[key] = { triangle }
+                        end
+                    end
+                end
+            end
+        end
+    end
+    cover.count = triangle
+end
+
+local function add_face(faces, count, first, second, third)
+    faces[count + 1], faces[count + 2], faces[count + 3] = first, second, third
+    return count + 3
+end
+
+function get_layer_faces(mesh, layers, surface_layers)
+    local cover_faces, edge_faces, surface_faces = {}, {}, {}
+    local cover_count, edge_count, surface_count = 0, 0, 0
+    local stride = wd_build_slice.STRIDE * 3
+    local check = wd_build_slice.check
+    for slot, layer in ipairs(layers) do
+        local indices = read_indices(mesh, layer.source.vertices)
+        if indices then
+            local points, surface_points = layer.points, surface_layers and surface_layers[slot].points
+            local span, seen = layer.source.vertices.count, {}
+            if surface_points then
+                for base = 1, #indices - 2, 3 do
+                    if base % stride == 1 then
+                        check()
+                    end
+                    local first_index, second_index, third_index =
+                        indices[base] + 1, indices[base + 1] + 1, indices[base + 2] + 1
+                    local surface_first, surface_second, surface_third =
+                        surface_points[first_index], surface_points[second_index], surface_points[third_index]
+                    local first, second, third = points[first_index], points[second_index], points[third_index]
+                    if surface_first or surface_second or surface_third or first or second or third then
+                        local is_cover = first and second and third
+                        local is_edge = (first and 1 or 0) + (second and 1 or 0) + (third and 1 or 0) >= 2
+                        local is_surface = surface_first and surface_second and surface_third
+                        if is_edge or is_cover or is_surface then
+                            local key = (first_index * span + second_index) * span + third_index
+                            if not seen[key] then
+                                seen[key] = true
+                                if is_cover then
+                                    cover_count = add_face(cover_faces, cover_count, first, second, third)
+                                end
+                                if is_edge then
+                                    edge_count = add_face(
+                                        edge_faces,
+                                        edge_count,
+                                        first or false,
+                                        second or false,
+                                        third or false
+                                    )
+                                end
+                                if is_surface then
+                                    surface_count = add_face(
+                                        surface_faces,
+                                        surface_count,
+                                        surface_first,
+                                        surface_second,
+                                        surface_third
+                                    )
+                                end
+                            end
+                        end
+                    end
+                end
+            else
+                for base = 1, #indices - 2, 3 do
+                    if base % stride == 1 then
+                        check()
+                    end
+                    local first_index = indices[base] + 1
+                    local first = points[first_index]
+                    if first then
+                        local second_index, third_index = indices[base + 1] + 1, indices[base + 2] + 1
+                        local second, third = points[second_index], points[third_index]
+                        if second and third then
+                            local key = (first_index * span + second_index) * span + third_index
+                            if not seen[key] then
+                                seen[key] = true
+                                cover_count = add_face(cover_faces, cover_count, first, second, third)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if surface_layers then
+        surface_layers.faces = surface_faces
+    end
+    return cover_faces, edge_faces
+end
+
+function set_depths(cover, verts, lo)
+    local stride = wd_build_slice.STRIDE
+    local check = wd_build_slice.check
+    local center_x, center_y, cover_lo, cells = cover.center_x, cover.center_y, cover.lo, cover.cells
+    local z_bin, sectors, sector_width, outer_layer = Z_BIN, SECTORS, SECTOR_WIDTH, OUTER_LAYER
+    local angle_lo, angle_span = cover.angle_lo, cover.angle_span
+    local reach, z_min, z_max = cover.reach, cover.z_min, cover.z_max
+    local axs, ays, azs = cover.ax, cover.ay, cover.az
+    local bxs, bys, bzs = cover.bx, cover.by, cover.bz
+    local cxs, cys, czs = cover.cx, cover.cy, cover.cz
+    local ray_epsilon, bary_min, bary_max = RAY_EPSILON, -BARY_SLACK, 1 + BARY_SLACK
+    for position = 1, #verts do
+        if position % stride == 0 then
+            check()
+        end
+        local vert = verts[position]
+        local coord_z = vert.z
+        if coord_z >= lo then
+            local dx, dy = vert.x - center_x, vert.y - center_y
+            local radius = sqrt(dx * dx + dy * dy)
+            local depth = 0
+            local angle = radius > 0 and atan2(dy, dx)
+            local cell = radius > 0
+                and cells[floor((coord_z - cover_lo) / z_bin) * sectors + floor((angle + pi) / sector_width) % sectors]
+            if cell then
+                local top = radius
+                local top_limit = radius + outer_layer
+                local dir_x, dir_y = dx / radius, dy / radius
+                for slot = 1, #cell do
+                    local triangle = cell[slot]
+                    if
+                        reach[triangle] > top
+                        and coord_z >= z_min[triangle]
+                        and coord_z <= z_max[triangle]
+                        and (angle - angle_lo[triangle]) % full_turn <= angle_span[triangle]
+                    then
+                        local ax, ay, az = axs[triangle], ays[triangle], azs[triangle]
+                        local edge1_x, edge1_y, edge1_z = bxs[triangle] - ax, bys[triangle] - ay, bzs[triangle] - az
+                        local edge2_x, edge2_y, edge2_z = cxs[triangle] - ax, cys[triangle] - ay, czs[triangle] - az
+                        local p_x, p_y, p_z = dir_y * edge2_z, -dir_x * edge2_z, dir_x * edge2_y - dir_y * edge2_x
+                        local det = edge1_x * p_x + edge1_y * p_y + edge1_z * p_z
+                        if not (det > -ray_epsilon and det < ray_epsilon) then
+                            local inverse = 1 / det
+                            local t_x, t_y, t_z = -ax, -ay, coord_z - az
+                            local bary_u = (t_x * p_x + t_y * p_y + t_z * p_z) * inverse
+                            if not (bary_u < bary_min or bary_u > bary_max) then
+                                local q_x = t_y * edge1_z - t_z * edge1_y
+                                local q_y = t_z * edge1_x - t_x * edge1_z
+                                local q_z = t_x * edge1_y - t_y * edge1_x
+                                local bary_v = (dir_x * q_x + dir_y * q_y) * inverse
+                                if not (bary_v < bary_min or bary_u + bary_v > bary_max) then
+                                    local distance = (edge2_x * q_x + edge2_y * q_y + edge2_z * q_z) * inverse
+                                    if distance > top then
+                                        top = distance
+                                        if top > top_limit then
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                depth = top - radius
+            end
+            vert.depth = depth
+            vert.outer = depth <= outer_layer
+        end
+    end
+end
+
+function classify_verts(verts, center_x, center_y, lo, hi, add_triangles, ...)
+    local cover = new_cover(center_x, center_y, lo, floor((hi - lo) / Z_BIN) + 1)
+    wd_build_probe.run("triangles", add_triangles, cover, ...)
+    wd_build_probe.run("depth", set_depths, cover, verts, lo)
+end
+
+function new_layer_cover(center_x, center_y, lo, hi, faces)
+    local cover = new_cover(center_x, center_y, lo, floor((hi - lo) / Z_BIN) + 1)
+    add_faces(cover, faces)
+    return cover
+end
+
+function get_hand_weight(coord_z, hand_end)
+    return 1 - get_smoothstep(hand_end - HAND_RAMP, hand_end, coord_z)
+end
+
+local slot_bones, slot_weights = {}, {}
+local single_bones, single_weights = {}, { 1 }
+
+local function get_rigid_slots(record, twist, share, movable, shares)
+    local links = record.links
+    if links == 1 then
+        local bone = record[1]
+        if (shares[bone] or share) >= SINGLE_LINK_SWITCH and movable[bone] then
+            single_bones[1] = twist
+            return single_bones, single_weights
+        end
+        return nil
+    end
+    local bones, weights = slot_bones, slot_weights
+    local count = 0
+    local shifted = 0
+    for slot = 1, links + 1 do
+        local bone, weight
+        if slot <= links then
+            bone, weight = record[slot], record[links + slot]
+            if movable[bone] then
+                local bone_share = shares[bone] or share
+                shifted = shifted + weight * bone_share
+                weight = weight - weight * bone_share
+            end
+        else
+            bone, weight = twist, shifted
+        end
+        local found = false
+        for kept = 1, count do
+            if bones[kept] == bone then
+                weights[kept] = weights[kept] + weight
+                found = true
+                break
+            end
+        end
+        if not found then
+            count = count + 1
+            bones[count], weights[count] = bone, weight
+        end
+    end
+    if count > links then
+        local lightest = 1
+        for kept = 2, count do
+            local weight, least = weights[kept], weights[lightest]
+            if weight < least or (weight == least and bones[kept] > bones[lightest]) then
+                lightest = kept
+            end
+        end
+        if lightest == count then
+            return nil
+        end
+        weights[count] = weights[count] + weights[lightest]
+        bones[lightest], weights[lightest] = bones[count], weights[count]
+        bones[count], weights[count] = nil, nil
+        count = count - 1
+    end
+    for slot = 2, count do
+        local bone, weight = bones[slot], weights[slot]
+        local position = slot
+        while position > 1 do
+            local other_weight = weights[position - 1]
+            if other_weight > weight or (other_weight == weight and bones[position - 1] < bone) then
+                break
+            end
+            bones[position], weights[position] = bones[position - 1], other_weight
+            position = position - 1
+        end
+        bones[position], weights[position] = bone, weight
+    end
+    local kept = links < count and links or count
+    local total = 0
+    for slot = 1, kept do
+        total = total + weights[slot]
+    end
+    for slot = 1, kept do
+        weights[slot] = weights[slot] / total
+    end
+    for slot = kept + 1, links do
+        bones[slot], weights[slot] = twist, 0
+    end
+    for slot = links + 1, #bones do
+        bones[slot], weights[slot] = nil, nil
+    end
+    return bones, weights
+end
+
+function rigidify(patch, verts, roles, is_movable, get_share, zone, hand_end)
+    local rigidified = 0
+    local shares, movable = {}, {}
+    for bone in pairs(roles.left) do
+        movable[bone] = is_movable(roles, bone)
+    end
+    local stride = wd_build_slice.STRIDE
+    local check = wd_build_slice.check
+    local set_weights = patch.set_weights
+    for position = 1, #verts do
+        if position % stride == 0 then
+            check()
+        end
+        local vert = verts[position]
+        local record = vert.record
+        local share = get_share(vert.z, zone, hand_end, shares)
+        local shifted = 0
+        local links = record.links
+        for slot = 1, links do
+            local bone = record[slot]
+            if movable[bone] then
+                shifted = shifted + record[links + slot] * (shares[bone] or share)
+            end
+        end
+        if shifted > 0 then
+            local rigid_bones, rigid_weights = get_rigid_slots(record, roles.twist, share, movable, shares)
+            if rigid_bones then
+                local ok, reason = set_weights(record, rigid_bones, rigid_weights)
+                if not ok then
+                    return nil, reason
+                end
+                rigidified = rigidified + 1
+            end
+        end
+    end
+    return rigidified
+end
+
+function get_twins(verts)
+    local twins = verts.twins
+    if twins then
+        return twins
+    end
+    local firsts = {}
+    twins = {}
+    local stride = wd_build_slice.STRIDE
+    for position, vert in ipairs(verts) do
+        if position % stride == 0 then
+            wd_build_slice.check()
+        end
+        local by_y = firsts[vert.x] or {}
+        firsts[vert.x] = by_y
+        local by_z = by_y[vert.y] or {}
+        by_y[vert.y] = by_z
+        local known = by_z[vert.z]
+        if known then
+            local group = twins[known]
+            if not group then
+                group = { known }
+                twins[known] = group
+            end
+            group[#group + 1] = vert
+            twins[vert] = group
+        else
+            by_z[vert.z] = vert
+        end
+    end
+    verts.twins = twins
+    return twins
+end
+
+function weld_twins(verts, field)
+    for vert, group in pairs(get_twins(verts)) do
+        local value = vert[field]
+        if value then
+            for _, twin in ipairs(group) do
+                local twin_value = twin[field]
+                if not twin_value or twin_value < value then
+                    twin[field] = value
+                end
+            end
+        end
+    end
+end
+
+function get_axis_length(axis)
+    return sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z)
+end
+
+function new_sleeve_frame(mesh, bracer)
+    local twist = wd_ogf.get_bind_frame(mesh, TWIST_BONE)
+    if not twist then
+        return nil
+    end
+    return wd_frame.compose_frames(
+        twist,
+        wd_frame.new_pose_frame(bracer.model_pos, bracer.model_rot, bracer.model_scale)
+    )
+end
+
+function new_sleeve_space(mesh, frame)
+    local hand = wd_ogf.get_bind_frame(mesh, HAND_BONE)
+    if not hand then
+        return nil, "no " .. HAND_BONE .. " bone"
+    end
+    local scale = get_axis_length(frame.i)
+    local to_sleeve = new_scaled_frame(wd_frame.invert_frame(frame), scale, scale)
+    local _, _, wrist_z = transform_xyz(to_sleeve, hand.c.x, hand.c.y, hand.c.z)
+    return {
+        mesh = mesh,
+        frame = frame,
+        to_sleeve = to_sleeve,
+        to_model = new_scaled_frame(frame, 1 / scale, 1),
+        wrist_z = wrist_z,
+    }
+end
+
+function new_bracer_space(mesh, bracer)
+    local frame = new_sleeve_frame(mesh, bracer)
+    if not frame then
+        return nil, "no sleeve frame"
+    end
+    return new_sleeve_space(mesh, frame)
+end

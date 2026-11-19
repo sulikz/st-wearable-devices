@@ -1,0 +1,95 @@
+SLICE_MS = 4
+STRIDE = 256
+HANDS_MOTION = "hand_idle_doun"
+
+local timer = nil
+
+local function get_elapsed_ms()
+    timer:stop()
+    local elapsed = timer:time()
+    timer:start()
+    return elapsed / 1000
+end
+
+function check()
+    if timer and get_elapsed_ms() >= SLICE_MS then
+        wd_build_probe.suspend()
+        coroutine.yield()
+        wd_build_probe.resume()
+    end
+end
+
+function new_task(step, ...)
+    local count = select("#", ...)
+    local args = { ... }
+    return {
+        slices = 0,
+        thread = coroutine.create(function()
+            return step(unpack(args, 1, count))
+        end),
+    }
+end
+
+local function finish(task, ok, ...)
+    timer = nil
+    if coroutine.status(task.thread) ~= "dead" then
+        return false
+    end
+    if not ok then
+        return true, nil, (...)
+    end
+    return true, ...
+end
+
+function resume(task)
+    task.slices = task.slices + 1
+    if profile_timer then
+        timer = profile_timer()
+        timer:start()
+    end
+    return finish(task, coroutine.resume(task.thread))
+end
+
+local function prefetch_hands(visual)
+    game.motion_exists(visual, HANDS_MOTION)
+end
+
+local function add_prefetches(prefetches, run, visuals)
+    if not run then
+        return
+    end
+    for index = 1, #visuals do
+        prefetches[#prefetches + 1] = { run = run, visual = visuals[index] }
+    end
+end
+
+local function get_prefetches(get_prefetch_visuals, result)
+    local visuals, hands_visuals = get_prefetch_visuals(result)
+    local prefetches = {}
+    add_prefetches(prefetches, game.prefetch_model, visuals)
+    add_prefetches(prefetches, game.motion_exists and prefetch_hands, hands_visuals)
+    return prefetches
+end
+
+function advance(job, get_prefetch_visuals)
+    job.sliced_at = time_global()
+    local task = job.task
+    if task then
+        local done, result, reason = wd_build_probe.run("slice", resume, task)
+        if not done then
+            return false
+        end
+        job.task, job.result, job.reason = nil, result, reason
+        if not result or task.slices == 1 then
+            return true
+        end
+        job.prefetch = get_prefetches(get_prefetch_visuals, result)
+        return #job.prefetch == 0
+    end
+    local prefetch = table.remove(job.prefetch, 1)
+    if prefetch then
+        wd_build_probe.run("prefetch", prefetch.run, prefetch.visual)
+        return false
+    end
+    return true
+end

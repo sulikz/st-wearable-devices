@@ -188,11 +188,11 @@
 		%c[d_cyan] • %c[pda_white] Anomaly &amp; artifact detection\n
 		</text>
 	</string>
-	<string id="st_attach_vektor">
-		<text>attach to bracer</text>
+	<string id="st_wear_vektor">
+		<text>wear</text>
 	</string>
-	<string id="st_detach_vektor">
-		<text>detach from bracer</text>
+	<string id="st_take_off_vektor">
+		<text>take off</text>
 	</string>
 
 	<!-- Ulman's Watch -->
@@ -208,11 +208,11 @@
 		%c[d_cyan] • %c[pda_white] Respirator time\n
 		</text>
 	</string>
-	<string id="st_attach_metro_watch">
-		<text>attach to bracer</text>
+	<string id="st_wear_metro_watch">
+		<text>wear</text>
 	</string>
-	<string id="st_detach_metro_watch">
-		<text>detach from bracer</text>
+	<string id="st_take_off_metro_watch">
+		<text>take off</text>
 	</string>
 
 	<!-- Glowstick -->
@@ -246,6 +246,9 @@
 	</string>
 	<string id="st_wd_customize_not_registered">
 		<text>Device not registered</text>
+	</string>
+	<string id="st_wd_customize_no_promin">
+		<text>Mount the Promin first</text>
 	</string>
 	<string id="st_wd_customize_module_locked">
 		<text>This tablet does not support that module</text>
