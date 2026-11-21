@@ -114,13 +114,10 @@ end
 
 local bare = { id = SECTION, get_base_model = get_base_model, defaults = d_watch_config.DEFAULTS }
 
+local worn_transforms = {}
+
 local function get_model_transforms()
-    local transforms = d_watch_config.transforms
-    return {
-        model_pos = transforms.model_pos,
-        model_rot = transforms.model_rot,
-        model_scale = transforms.model_scale,
-    }
+    return wd_bare_wrist.fill_worn_transforms(worn_transforms, d_watch_config.transforms)
 end
 
 function sync_attachment()
@@ -163,9 +160,10 @@ function sync_attachment()
 end
 
 function reapply_transforms()
-    wd_attach.reapply_transforms(LED_RAD_NAME, d_watch_config.transforms)
-    wd_attach.reapply_transforms(LED_ANOMALY_NAME, d_watch_config.transforms)
-    return wd_attach.reapply_transforms(SECTION, d_watch_config.transforms)
+    local transforms = get_model_transforms()
+    wd_attach.reapply_transforms(LED_RAD_NAME, transforms)
+    wd_attach.reapply_transforms(LED_ANOMALY_NAME, transforms)
+    return wd_attach.reapply_transforms(SECTION, transforms)
 end
 
 function reapply_skin()
@@ -236,6 +234,7 @@ local function register_gui()
         appearance_rows[#appearance_rows + 1] = { "clock", nil, 1, "Clock" }
     end
     wd_clock.add_gui_rows(fields, appearance_rows, d_watch_config, d_watch_tubes.update)
+    wd_bare_wrist.add_gui_rows(fields, appearance_rows, d_watch_config)
     wd_wrist_roll.add_gui_rows(fields, appearance_rows)
 
     wd_gui.register_device({
@@ -277,7 +276,7 @@ local function register_gui()
             { "model_rot", 1, 0.05, "Yaw (Y)" },
             { "model_rot", 2, 0.05, "Pitch (X)" },
             { "model_rot", 3, 0.05, "Roll (Z)" },
-            { "model_scale", nil, 0.001, "Scale" },
+            { "model_scale", nil, 0.001, "Bracer scale" },
         },
     })
 end
@@ -298,9 +297,7 @@ function register()
         owner = owner,
         is_present = is_attachment_present,
         resync = sync_attachment,
-        get_transforms = function()
-            return d_watch_config.transforms
-        end,
+        get_transforms = get_model_transforms,
     })
     wd_exo.register_device({
         id = "watch",

@@ -4,28 +4,12 @@ local SAVE_KEY_IDS = "wd_world_spawned_ids"
 
 local SPAWNS = {
     {
-        key = "promin_map_escape_02",
-        section = "wd_promin_module_map",
-        level = "l01_escape",
-        x = -140.46,
-        y = -28.66,
-        z = -352.52,
-    },
-    {
         key = "vektor_pole_02",
         section = "wd_vektor",
         level = "y04_pole",
         x = 63.91,
         y = 9.70,
         z = 166.99,
-    },
-    {
-        key = "promin_map_trucks_01",
-        section = "wd_promin_module_map",
-        level = "k02_trucks_cemetery",
-        x = 102.54,
-        y = 10.34,
-        z = 131.87,
     },
 }
 

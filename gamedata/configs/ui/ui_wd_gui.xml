@@ -226,6 +226,25 @@
 		<text align="l" font="letterica16"></text>
 	</cyc_r8>
 
+	<cap_r9 x="144" y="444" width="84" height="22">
+		<text align="l" font="letterica16"></text>
+	</cap_r9>
+	<btn_r9_lt x="230" y="440" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r9_lt>
+	<track_r9 x="260" y="444" width="112" height="18" stretch="1"/>
+	<btn_r9_gt x="376" y="440" width="26" height="26" stretch="1">
+		<text align="c" font="letterica16"></text>
+		<texture>ui_button_ordinary</texture>
+	</btn_r9_gt>
+	<val_r9 x="408" y="444" width="58" height="22">
+		<text align="l" font="letterica16"></text>
+	</val_r9>
+	<cyc_r9 x="260" y="444" width="112" height="22">
+		<text align="l" font="letterica16"></text>
+	</cyc_r9>
+
 	<chk_global1 x="144" y="104" width="26" height="24" stretch="1">
 		<texture>ui_inGame2_checkbox</texture>
 	</chk_global1>

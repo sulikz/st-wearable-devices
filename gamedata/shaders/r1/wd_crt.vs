@@ -24,9 +24,25 @@ struct	ui_vert_out
 
 #define WD_HUD_NEAR			0.005
 #define WD_HUD_DEPTH_MAX	0.02
+#define WD_HUD_NEAR_LIMIT	0.05
+#define WD_CULLED			float4( 0.0, 0.0, -1.0, 1.0 )
 
-#if defined(SHADER_BUS) && SHADER_BUS >= 4
+#if defined(SHADER_BUS) && SHADER_BUS >= 7
 uniform float4	bus_cvar_hud_fov;
+uniform float4	bus_wd_r1_ui_deferred;
+
+float4 wd_place_deferred( float4 P )
+{
+	if ( bus_cvar_hud_fov.x > 0.0 )
+		P.xy	*= 1.0 / ( tan( radians( bus_cvar_hud_fov.x * 83.0 ) * 0.5 ) * m_P._22 );
+	P.z			= WD_HUD_DEPTH_MAX * max( P.w - WD_HUD_NEAR, 0.0 );
+	return bus_wd_r1_ui_deferred.x > 0.0 ? P : WD_CULLED;
+}
+#else
+float4 wd_place_deferred( float4 P )
+{
+	return WD_CULLED;
+}
 #endif
 
 ui_vert_out main (ui_vert_in v)
@@ -40,11 +56,8 @@ ui_vert_out main (ui_vert_in v)
 	O.P			= v.P;
 	O.P.w		= 1;
 	O.P			= mul( m_WVP, O.P );
-#if defined(SHADER_BUS) && SHADER_BUS >= 4
-	if ( bus_cvar_hud_fov.x > 0.0 )
-		O.P.xy	*= 1.0 / ( tan( radians( bus_cvar_hud_fov.x * 83.0 ) * 0.5 ) * m_P._22 );
-#endif
-	O.P.z		= WD_HUD_DEPTH_MAX * max( O.P.w - WD_HUD_NEAR, 0.0 );
+	if ( -m_P._34 >= WD_HUD_NEAR_LIMIT * m_P._33 )
+		O.P		= wd_place_deferred( O.P );
 	O.cpos		= O.P;
 	return 		O;
 }

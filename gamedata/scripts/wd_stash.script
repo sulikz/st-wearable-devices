@@ -5,14 +5,6 @@ local TIER_SAVE_KEY = "wd_stash_tiers"
 local CYCLE_SAVE_KEY = "wd_stash_cycle"
 
 DROPS = {
-    {
-        section = "wd_promin_module_map",
-        rare = 0.10,
-        guarantee = 20,
-        is_installed = function()
-            return d_promin.is_module_installed("map")
-        end,
-    },
     { section = "wd_promin_upgrade_kit", common = 0.075, rare = 0.25 },
     {
         sections = { "wd_504th_patch", "wd_8bitcat_patch", "wd_happysteam_patch", "wd_zero_patch" },

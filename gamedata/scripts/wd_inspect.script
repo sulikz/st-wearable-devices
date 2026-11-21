@@ -97,9 +97,6 @@ function register(spec)
     spec.teardown_response = spec.teardown_response or "hard"
     spec.yields_now = spec.yields_now or FALSE
     spec.on_wheel = spec.on_wheel or FALSE
-    spec.is_pose_worn = spec.is_pose_worn or function()
-        return true
-    end
     registered = spec
     return true
 end
@@ -811,9 +808,6 @@ local function set_raise_anchor(wpn, detector)
 end
 
 local function show(now, ui_open)
-    if not (is_editor_gui_open() or active.is_pose_worn(POSE_BY_VARIANT[raise_variant])) then
-        return
-    end
     if now < yield_until then
         pending_show_until = math.max(pending_show_until, yield_until + MS.PENDING_SHOW)
         return
@@ -1004,9 +998,6 @@ end
 local function apply_variant_transition(now)
     local wanted = get_raise_variant(watch_hold)
     if wanted == raise_variant then
-        return false
-    end
-    if not (is_editor_gui_open() or active.is_pose_worn(POSE_BY_VARIANT[wanted])) then
         return false
     end
     local trans_base = wanted == VARIANT_WATCH and ANM_TO_WATCH or ANM_FROM_WATCH

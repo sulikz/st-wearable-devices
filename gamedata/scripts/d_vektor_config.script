@@ -60,6 +60,7 @@ local FAMILY_FIELDS = {
     { "time_source", false },
     { "time_format", false },
     { "face_id", false },
+    { "bare_scale", false },
 }
 
 local USER_FIELDS = {
@@ -68,6 +69,7 @@ local USER_FIELDS = {
     "time_source",
     "time_format",
     "face_id",
+    "bare_scale",
 }
 
 DEFAULTS = {
@@ -82,6 +84,11 @@ DEFAULTS = {
     time_source = "game",
     time_format = "24h",
     face_id = 2,
+    bare_scale = 1.5600000314713,
+}
+
+LIMITS = {
+    bare_scale = { 1.25, 1.6 },
 }
 
 local cfg = wd_config.new({
@@ -91,6 +98,7 @@ local cfg = wd_config.new({
     family_fields = FAMILY_FIELDS,
     user_fields = USER_FIELDS,
     defaults = DEFAULTS,
+    limits = LIMITS,
 })
 
 transforms = cfg.transforms

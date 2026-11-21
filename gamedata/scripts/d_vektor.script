@@ -43,9 +43,16 @@ local bulbs = wd_attach.new_bulb_set({
     order = d_vektor_config.BULBS,
 })
 
+local body_transforms = {}
+
+local function get_body_transforms()
+    return wd_bare_wrist.fill_worn_transforms(body_transforms, d_vektor_config.transforms)
+end
+
 local host = wd_face_host.new({
     id = "vektor",
     config = d_vektor_config,
+    get_transforms = get_body_transforms,
     is_worn = function()
         return is_worn()
     end,
@@ -127,18 +134,6 @@ local rad_sensor = wd_sensor_radiation.new({
     end,
 })
 
-local function get_body_transforms()
-    local transforms = d_vektor_config.transforms
-    return {
-        model_pos = transforms.model_pos,
-        model_rot = transforms.model_rot,
-        model_scale = transforms.model_scale,
-        ui_pos = transforms.ui_pos,
-        ui_rot = transforms.ui_rot,
-        ui_scale = transforms.ui_scale,
-    }
-end
-
 local function get_base_model()
     return d_vektor_config.get_model()
 end
@@ -197,7 +192,7 @@ function reapply_transforms()
         wd_attach.reapply_transforms(name, transforms)
     end
     host.reapply_transforms()
-    return wd_attach.reapply_transforms(ATT_NAME, d_vektor_config.transforms)
+    return wd_attach.reapply_transforms(ATT_NAME, transforms)
 end
 
 function reapply_brightness()
@@ -270,6 +265,7 @@ local function register_gui()
         { "status_bar", nil, 1, "Gauge" },
     }
     wd_clock.add_gui_rows(fields, screen_rows, d_vektor_config)
+    wd_bare_wrist.add_gui_rows(fields, screen_rows, d_vektor_config)
     wd_wrist_roll.add_gui_rows(fields, screen_rows)
 
     wd_gui.register_device({
@@ -312,7 +308,7 @@ local function register_gui()
             { "model_rot", 1, 0.05, "Yaw (Y)" },
             { "model_rot", 2, 0.05, "Pitch (X)" },
             { "model_rot", 3, 0.05, "Roll (Z)" },
-            { "model_scale", nil, 0.001, "Scale" },
+            { "model_scale", nil, 0.001, "Bracer scale" },
         },
     })
     wd_gui.register_tab({
@@ -398,9 +394,7 @@ function register()
         owner = owner,
         is_present = is_attachment_present,
         resync = sync_attachment,
-        get_transforms = function()
-            return d_vektor_config.transforms
-        end,
+        get_transforms = get_body_transforms,
     })
     wd_exo.register_device({
         id = "vektor",

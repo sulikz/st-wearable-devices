@@ -19,6 +19,9 @@ local BIND_FORMAT = "%.6g,%.6g,%.6g;%.6g,%.6g,%.6g"
 local STRAP_KEY_FORMAT = "%s|%.6f|%.6f|%.6f|%.6f|%.6g|%.6g|%d"
 local AXIS_TILT_FORMAT = "the watch band is turned more than %g degrees off the tube axis"
 local NO_FIT = { x = 0, y = 0, slide = 0 }
+local SCALE_KEY = "bare_scale"
+local SCALE_LABEL = "Scale"
+local SCALE_STEP = 0.001
 
 local floor = math.floor
 local min = math.min
@@ -56,6 +59,31 @@ end
 
 function is_active()
     return get_bare_mount() ~= nil
+end
+
+local function get_worn_scale(transforms)
+    if is_active() then
+        return transforms.bare_scale
+    end
+    return transforms.model_scale
+end
+
+function fill_worn_transforms(out, transforms)
+    out.model_pos = transforms.model_pos
+    out.model_rot = transforms.model_rot
+    out.model_scale = get_worn_scale(transforms)
+    out.ui_pos = transforms.ui_pos
+    out.ui_rot = transforms.ui_rot
+    out.ui_scale = transforms.ui_scale
+    return out
+end
+
+function add_gui_rows(fields, rows, config)
+    local limits = config.LIMITS[SCALE_KEY]
+    local scale = wd_gui.new_slider(limits[1], limits[2])
+    scale.is_shown = is_active
+    fields[SCALE_KEY] = scale
+    rows[#rows + 1] = { SCALE_KEY, nil, SCALE_STEP, SCALE_LABEL }
 end
 
 local function get_slid_pose(transforms, position)
@@ -534,13 +562,17 @@ local function fail_job(job)
     return job
 end
 
+local function new_default_pose(defaults, transforms)
+    return { model_pos = defaults.model_pos, model_rot = defaults.model_rot, model_scale = transforms.model_scale }
+end
+
 local function new_job(transforms, watch, hands_section, base_model)
     local job = {
         watch = watch,
         hands_section = hands_section,
         base_model = base_model,
         transforms = transforms,
-        defaults = watch.bare.defaults,
+        defaults = new_default_pose(watch.bare.defaults, transforms),
     }
     if not hands_section then
         return fail_job(job)
