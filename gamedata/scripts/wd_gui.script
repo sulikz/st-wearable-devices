@@ -1,4 +1,4 @@
-local ROW_COUNT = 8
+ROW_COUNT = 9
 local PICK_SLOTS = 6
 local GLOBAL_SLOTS = 12
 local BUTTON_ROWS = 3

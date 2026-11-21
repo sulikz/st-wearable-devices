@@ -25,6 +25,7 @@ function on_game_start()
     wd_comms.register()
     wd_qaw_preview.register()
     wd_screen_fx.register()
+    wd_screen_r1.register()
     wd_arc_field.register()
     local devices = {
         d_bracer,

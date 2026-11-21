@@ -9,6 +9,7 @@ BLEED_TIERS = { 0.35, 0.7 }
 BLEED_MIN = 0.00001
 SATIETY_FLOOR = 0.1
 SATIETY_SPAN = 1.123
+EAT_NEED_MUL = 1000
 LEGS = { "leftleg", "rightleg" }
 
 BOOST = {
@@ -84,12 +85,12 @@ function get_psy()
     return psy or db.actor.psy_health or 0
 end
 
-function get_radiation()
-    return (db.actor.radiation or 0) / get_rad_full()
+local function get_msv(radiation)
+    return math.floor(radiation * RAD_MSV_PER_UNIT)
 end
 
 function get_radiation_msv()
-    return math.floor((db.actor.radiation or 0) * RAD_MSV_PER_UNIT)
+    return get_msv(db.actor.radiation or 0)
 end
 
 function get_conditions()
@@ -162,19 +163,80 @@ function get_mobility(conditions)
     return "ok"
 end
 
+local function get_hovered_wheel_section()
+    local wheel = rawget(_G, "haru_quick_action_wheel_mcm")
+    local gui = wheel and wheel.GUI
+    if not gui then
+        return nil
+    end
+    local is_shown = gui.IsShown
+    if is_shown and not is_shown(gui) then
+        return nil
+    end
+    local index = gui.hovered_idx
+    if not index or index <= 0 then
+        return nil
+    end
+    local options = gui.options
+    local option = options and options[index]
+    return option and option.section or nil
+end
+
 local DEPRIVATION_SCALE = 10000
 local THIRST = {
     get_last = "get_last_drink",
     get_blur_4 = "get_thirst_blur_4",
     get_deprivation = "get_water_deprivation",
     blur_4 = 5760,
+    eat_mul = "eat_thirstiness_mul",
 }
 local SLEEP = {
     get_last = "get_last_sleep",
     get_blur_4 = "get_sleep_blur_4",
     get_deprivation = "get_sleep_deprivation",
     blur_4 = 8750,
+    eat_mul = "eat_sleepiness_mul",
 }
+local EAT_KEYS = { "eat_satiety", "eat_thirstiness", "eat_sleepiness", "eat_radiation" }
+local NOTHING_EATEN = { radiation_boost = 0 }
+for _, key in ipairs(EAT_KEYS) do
+    NOTHING_EATEN[key] = 0
+end
+local eaten_by_section = {}
+
+local function get_eaten(section)
+    if not section then
+        return NOTHING_EATEN
+    end
+    local eaten = eaten_by_section[section]
+    if eaten then
+        return eaten
+    end
+    eaten = {}
+    for _, key in ipairs(EAT_KEYS) do
+        eaten[key] = ini_sys:r_float_ex(section, key) or 0
+    end
+    local restore = ini_sys:r_float_ex(section, "boost_radiation_restore") or 0
+    eaten.radiation_boost = restore * (ini_sys:r_float_ex(section, "boost_time") or 0)
+    eaten_by_section[section] = eaten
+    return eaten
+end
+
+local function get_radiation_cleared(eaten, conditions)
+    local boost = eaten.radiation_boost
+    if boost <= 0 then
+        return 0
+    end
+    local value, seconds = get_booster_value(conditions or get_conditions(), BOOST.radiation_restore)
+    return math.max(boost - value * seconds, 0) * level.get_time_factor()
+end
+
+function get_radiation(conditions)
+    local eaten = get_eaten(get_hovered_wheel_section())
+    local radiation = (db.actor.radiation or 0) + eaten.eat_radiation - get_radiation_cleared(eaten, conditions)
+    radiation = clamp(radiation, 0, 1)
+    return radiation / get_rad_full(), get_msv(radiation)
+end
 
 local function get_remaining(last, blur_4)
     if blur_4 <= 0 then
@@ -183,18 +245,19 @@ local function get_remaining(last, blur_4)
     return clamp((blur_4 - last) / blur_4, 0, 1)
 end
 
-local function get_deprivation(status, need)
+local function get_deprivation(status, need, eaten_amount)
     if not status then
         return nil
     end
+    local change = eaten_amount * (rawget(status, need.eat_mul) or EAT_NEED_MUL)
     local get_last = status[need.get_last]
     local get_blur_4 = status[need.get_blur_4]
     if get_last and get_blur_4 then
-        return get_remaining(get_last(), get_blur_4())
+        return get_remaining(get_last() + change, get_blur_4())
     end
     local get_need_deprivation = status[need.get_deprivation]
     if get_need_deprivation then
-        return get_remaining(get_need_deprivation() * DEPRIVATION_SCALE, need.blur_4)
+        return get_remaining(get_need_deprivation() * DEPRIVATION_SCALE + change, need.blur_4)
     end
     return nil
 end
@@ -218,8 +281,12 @@ function get_needs(conditions)
     if bars then
         return bars.get_satiety_val(), bars.get_thirst_val(), bars.get_sleep_val()
     end
-    local food = math.min(clamp(conditions:GetSatiety() - SATIETY_FLOOR, 0, 1) * SATIETY_SPAN, 1)
-    return food, get_deprivation(actor_status_thirst, THIRST), get_deprivation(actor_status_sleep, SLEEP)
+    local eaten = get_eaten(get_hovered_wheel_section())
+    local satiety = conditions:GetSatiety() + eaten.eat_satiety
+    local food = math.min(clamp(satiety - SATIETY_FLOOR, 0, 1) * SATIETY_SPAN, 1)
+    return food,
+        get_deprivation(actor_status_thirst, THIRST, eaten.eat_thirstiness),
+        get_deprivation(actor_status_sleep, SLEEP, eaten.eat_sleepiness)
 end
 
 local carry_bonus = 0
@@ -235,19 +302,19 @@ local function add_belt_bonus(_, item)
     carry_bonus = carry_bonus + bonus * item:condition()
 end
 
-local booster_value = 0
+local booster_value, booster_seconds = 0, 0
 local wanted_booster
 
-local function add_booster_value(booster_type, _, value)
+local function add_booster_value(booster_type, seconds, value)
     if booster_type == wanted_booster then
-        booster_value = booster_value + value
+        booster_value, booster_seconds = booster_value + value, seconds
     end
 end
 
 function get_booster_value(conditions, booster_type)
-    booster_value, wanted_booster = 0, booster_type
+    booster_value, booster_seconds, wanted_booster = 0, 0, booster_type
     conditions:BoosterForEach(add_booster_value)
-    return booster_value
+    return booster_value, booster_seconds
 end
 
 function get_carry_weight(conditions)
@@ -262,25 +329,6 @@ function get_carry_weight(conditions)
     actor:iterate_belt(add_belt_bonus)
     local booster = get_booster_value(conditions, BOOST.max_weight)
     return actor:get_total_weight(), actor:get_actor_max_weight() + carry_bonus + booster
-end
-
-local function get_hovered_wheel_section()
-    local wheel = haru_quick_action_wheel_mcm
-    local gui = wheel and wheel.GUI
-    if not gui then
-        return nil
-    end
-    local is_shown = gui.IsShown
-    if is_shown and not is_shown(gui) then
-        return nil
-    end
-    local index = gui.hovered_idx
-    if not index or index <= 0 then
-        return nil
-    end
-    local options = gui.options
-    local option = options and options[index]
-    return option and option.section or nil
 end
 
 local scratch_health, scratch_timed = {}, {}

@@ -1,0 +1,20 @@
+LANE = "wd_r1_ui_deferred"
+MIN_BUS_VERSION = 7
+
+local OWNER = "Wearable Devices"
+local DESCRIPTION = "1 when the exe draws HUD attachment UIs on R1 once, deferred under the world projection"
+
+function is_ui_deferred()
+    return shader_bus.set_attachment ~= nil
+end
+
+function register()
+    if not (shader_bus and shader_bus.version() >= MIN_BUS_VERSION) then
+        return
+    end
+    local token = shader_bus.register(LANE, OWNER, DESCRIPTION)
+    if not token then
+        return
+    end
+    shader_bus.set(token, is_ui_deferred() and 1 or 0, 0, 0, 0)
+end

@@ -395,12 +395,11 @@ local function show_unknown_row(row, text)
     show_text(row.value, text, "dim")
 end
 
-local function show_dose_row(kit, row, msv, readable)
+local function show_dose_row(kit, row, radiation, msv, readable)
     if not readable then
         show_unknown_row(row, NO_DOSE)
         return
     end
-    local radiation = wd_vitals.get_radiation()
     row.icon.set_role(row.status.icon_role)
     show_level_row(kit, row, radiation, d_promin_config.get_state_role(radiation, true), msv)
 end
@@ -417,8 +416,8 @@ local function show_vitals(page, conditions)
     local kit, rows = page.kit, page.status
     show_percent_row(kit, rows.health, wd_vitals.get_health())
     show_percent_row(kit, rows.psy, wd_vitals.get_psy())
-    local msv = wd_vitals.get_radiation_msv()
-    show_dose_row(kit, rows.radiation, msv, page.dose_readable)
+    local radiation, msv = wd_vitals.get_radiation(conditions)
+    show_dose_row(kit, rows.radiation, radiation, msv, page.dose_readable)
     show_percent_row(kit, rows.stamina, wd_vitals.get_stamina())
     place_stamina_cap(rows.stamina, wd_vitals.get_stamina_cap(conditions, msv), LEVEL_STEPS)
     show_bleeding(rows.bleeding)

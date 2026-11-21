@@ -377,12 +377,11 @@ local function show_vitals(page, conditions)
     show_percent_vital(kit, digits_kit, tiles.health, wd_vitals.get_health())
     show_percent_vital(kit, digits_kit, tiles.psy, wd_vitals.get_psy())
     show_percent_vital(kit, digits_kit, tiles.stamina, wd_vitals.get_stamina())
-    local msv = wd_vitals.get_radiation_msv()
+    local ratio, msv = wd_vitals.get_radiation(conditions)
     health.place_stamina_cap(tiles.stamina, wd_vitals.get_stamina_cap(conditions, msv), VITAL_STEPS)
     local radiation, readable = tiles.radiation, page.dose_readable
     set_dose_readable(kit, radiation, readable)
     if readable then
-        local ratio = wd_vitals.get_radiation()
         show_vital(kit, digits_kit, radiation, ratio, d_promin_config.get_state_role(ratio, true), msv)
     end
 end

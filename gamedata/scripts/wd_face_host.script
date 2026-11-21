@@ -115,8 +115,10 @@ end
 function new(spec)
     local provides = spec.provides or {}
     assert_wired_faces(spec, provides)
+    assert(spec.get_transforms, "wd_face_host: '" .. spec.id .. "' needs get_transforms")
     local host = {}
     local config = spec.config
+    local get_transforms = spec.get_transforms
     local anchor = spec.anchor
     local target_pos = nil
     local target_distance = nil
@@ -278,8 +280,7 @@ function new(spec)
         return screen_uis[get_shown_face_id()]
     end
 
-    local function get_layer_transforms(entry)
-        local transforms = config.transforms
+    local function get_layer_transforms(entry, transforms)
         local layer = entry.layer
         local pivot_x, pivot_y = entry.fit.get_point(layer.pivot[1], layer.pivot[2])
         local scale = transforms.ui_scale
@@ -359,9 +360,10 @@ function new(spec)
     end
 
     local function attach_layers(face_id)
+        local body_transforms = attached_model and get_transforms()
         for _, entry in ipairs(layers) do
             if attached_model and entry.face_id == face_id then
-                local transforms = get_layer_transforms(entry)
+                local transforms = get_layer_transforms(entry, body_transforms)
                 local angle = driven_angles[entry.layer.driver]
                 if angle then
                     transforms.ui_rot = { get_driven_rotation(entry.layer, angle) }
@@ -426,9 +428,10 @@ function new(spec)
             host.apply_face()
             return
         end
+        local body_transforms = get_transforms()
         for _, entry in ipairs(layers) do
             if entry.face_id == face_id then
-                wd_attach.reapply_transforms(entry.name, get_layer_transforms(entry))
+                wd_attach.reapply_transforms(entry.name, get_layer_transforms(entry, body_transforms))
             end
         end
     end

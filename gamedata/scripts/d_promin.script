@@ -338,19 +338,10 @@ function get_page()
     return preview_page or page
 end
 
-local function append_pages(pages, page_ids)
-    for _, page_id in ipairs(page_ids or {}) do
-        pages[#pages + 1] = page_id
-    end
-end
-
 function get_available_pages()
     local pages = {}
-    append_pages(pages, d_promin_config.get_pages())
-    for _, module in ipairs(d_promin_config.MODULES) do
-        if has_module(module.name) then
-            append_pages(pages, module.pages)
-        end
+    for index, page_id in ipairs(d_promin_config.get_pages()) do
+        pages[index] = page_id
     end
     return pages
 end
@@ -747,12 +738,6 @@ local function get_promin_spec()
         id = SECTION,
         eligible = function()
             return db.actor ~= nil
-        end,
-        is_pose_worn = function(pose)
-            if pose == wd_inspect.POSE_WATCH then
-                return d_watch.has_watch() or d_vektor.is_worn()
-            end
-            return is_worn()
         end,
         get_hand_section = function()
             return d_promin_config.get_hand_section()
